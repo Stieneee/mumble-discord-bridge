@@ -86,12 +86,8 @@ func main() {
 		log.Fatalln("missing discord cid")
 	}
 
-	// Shared Channels
-	// Shared channels pass PCM information in 10ms chunks [480]int16
-	var toMumble = make(chan gumble.AudioBuffer, 100)
-	var toDiscord = make(chan []int16, 100)
+	// MUMBLE Setup
 
-	// MUMBLE
 	config := gumble.NewConfig()
 	config.Username = *mumbleUsername
 	config.Password = *mumblePassword
@@ -105,14 +101,19 @@ func main() {
 		return
 	}
 
+	// Shared Channels
+	// Shared channels pass PCM information in 10ms chunks [480]int16
+	var toMumble = mumble.AudioOutgoing()
+	var toDiscord = make(chan []int16, 100)
+
 	go m.fromMumbleMixer(toDiscord)
-	go m.sendToMumble(mumble, toMumble)
 
 	config.AudioListeners.Attach(m)
 
 	log.Println("Mumble Connected")
 
-	// DISCORD
+	// DISCORD Setup
+
 	discord, err := discordgo.New("Bot " + *discordToken)
 	if err != nil {
 		log.Println(err)
@@ -134,7 +135,8 @@ func main() {
 		return
 	}
 
-	go discordReceivePCM(dgv, toMumble)
+	go discordReceivePCM(dgv)
+	go fromDiscordMixer(toMumble)
 	go discordSendPCM(dgv, toDiscord)
 
 	// Wait for Exit Signal

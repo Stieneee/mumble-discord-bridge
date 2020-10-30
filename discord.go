@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/bwmarrin/discordgo"
@@ -10,6 +11,16 @@ import (
 	"layeh.com/gumble/gumble"
 	_ "layeh.com/gumble/opus"
 )
+
+type fromDiscord struct {
+	decoder   *gopus.Decoder
+	pcm       chan []int16
+	streaming bool
+}
+
+var discordMutex sync.Mutex
+var discordMixerMutex sync.Mutex
+var fromDiscordMap = make(map[uint32]fromDiscord)
 
 // OnError gets called by dgvoice when an error is encountered.
 // By default logs to STDERR
@@ -77,9 +88,8 @@ func discordSendPCM(v *discordgo.VoiceConnection, pcm <-chan []int16) {
 
 // ReceivePCM will receive on the the Discordgo OpusRecv channel and decode
 // the opus audio into PCM then send it on the provided channel.
-func discordReceivePCM(v *discordgo.VoiceConnection, toMumble chan gumble.AudioBuffer) {
+func discordReceivePCM(v *discordgo.VoiceConnection) {
 	var err error
-	speakers := make(map[uint32]*gopus.Decoder)
 
 	for {
 		if v.Ready == false || v.OpusRecv == nil {
@@ -93,22 +103,82 @@ func discordReceivePCM(v *discordgo.VoiceConnection, toMumble chan gumble.AudioB
 			return
 		}
 
-		_, ok = speakers[p.SSRC]
+		discordMutex.Lock()
+		_, ok = fromDiscordMap[p.SSRC]
+		discordMutex.Unlock()
 		if !ok {
-			speakers[p.SSRC], err = gopus.NewDecoder(48000, 1)
+			newStream := fromDiscord{}
+			newStream.pcm = make(chan []int16, 100)
+			newStream.streaming = false
+			newStream.decoder, err = gopus.NewDecoder(48000, 1)
 			if err != nil {
 				OnError("error creating opus decoder", err)
 				continue
 			}
+			discordMutex.Lock()
+			fromDiscordMap[p.SSRC] = newStream
+			discordMutex.Unlock()
 		}
 
-		p.PCM, err = speakers[p.SSRC].Decode(p.Opus, 960, false)
+		discordMutex.Lock()
+		p.PCM, err = fromDiscordMap[p.SSRC].decoder.Decode(p.Opus, 960, false)
+		discordMutex.Unlock()
 		if err != nil {
 			OnError("Error decoding opus data", err)
 			continue
 		}
 
-		toMumble <- p.PCM[0:480]
-		toMumble <- p.PCM[480:960]
+		discordMutex.Lock()
+		fromDiscordMap[p.SSRC].pcm <- p.PCM[0:480]
+		fromDiscordMap[p.SSRC].pcm <- p.PCM[480:960]
+		discordMutex.Unlock()
+	}
+}
+
+func fromDiscordMixer(toMumble chan<- gumble.AudioBuffer) {
+	ticker := time.NewTicker(10 * time.Millisecond)
+	sendAudio := false
+
+	for {
+		<-ticker.C
+		discordMutex.Lock()
+
+		sendAudio = false
+		internalMixerArr := make([][]int16, 0)
+
+		// Work through each channel
+		for i := range fromDiscordMap {
+			if len(fromDiscordMap[i].pcm) > 0 {
+				sendAudio = true
+				if fromDiscordMap[i].streaming == false {
+					x := fromDiscordMap[i]
+					x.streaming = true
+					fromDiscordMap[i] = x
+				}
+
+				x1 := (<-fromDiscordMap[i].pcm)
+				internalMixerArr = append(internalMixerArr, x1)
+			} else {
+				if fromDiscordMap[i].streaming == true {
+					x := fromDiscordMap[i]
+					x.streaming = false
+					fromDiscordMap[i] = x
+				}
+			}
+		}
+
+		discordMutex.Unlock()
+
+		outBuf := make([]int16, 480)
+
+		for i := 0; i < len(outBuf); i++ {
+			for j := 0; j < len(internalMixerArr); j++ {
+				outBuf[i] += (internalMixerArr[j])[i]
+			}
+		}
+
+		if sendAudio {
+			toMumble <- outBuf
+		}
 	}
 }

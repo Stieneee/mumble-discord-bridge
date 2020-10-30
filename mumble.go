@@ -90,32 +90,3 @@ func (m MumbleDuplex) fromMumbleMixer(toDiscord chan []int16) {
 		}
 	}
 }
-
-func (m MumbleDuplex) sendToMumble(mumble *gumble.Client, toMumble chan gumble.AudioBuffer) {
-	streaming := false
-	ticker := time.NewTicker(10 * time.Millisecond)
-
-	send := mumble.AudioOutgoing()
-
-	for {
-		<-ticker.C
-
-		if len(toMumble) > 0 {
-			streaming = true
-
-			pcm := <-toMumble
-
-			// gain up
-			for i := range pcm {
-				pcm[i] = int16((float64(pcm[i]) * 8))
-			}
-
-			send <- pcm
-		} else {
-			if streaming {
-				streaming = false
-			}
-
-		}
-	}
-}

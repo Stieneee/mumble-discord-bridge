@@ -44,7 +44,7 @@ Individual Discord servers need to invite the bot before it can connect.
 Prebuilt binaries are available.
 
 ```bash
-curl ...
+curl -s https://api.github.com/repos/stieneee/mumble-discord-bridge/releases/latest | grep "mumble-discord-bridge" | grep "browser_download_url" | cut -d '"' -f 4 | wget -qi -
 ```
 
 ### Docker
@@ -81,6 +81,8 @@ go build *.go -o mumble-discord-bridge
 
 Currently there is an issue opening the discord voice channel.
 It is a known issue with a dependency of this project.
+
+Audio leveling from Discord needs to be improved.
 
 ## License
 
