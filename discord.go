@@ -2,7 +2,7 @@ package main
 
 import (
 	"fmt"
-	"os"
+	"log"
 	"sync"
 	"time"
 
@@ -28,9 +28,9 @@ var OnError = func(str string, err error) {
 	prefix := "dgVoice: " + str
 
 	if err != nil {
-		os.Stderr.WriteString(prefix + ": " + err.Error())
+		log.Println(prefix + ": " + err.Error())
 	} else {
-		os.Stderr.WriteString(prefix)
+		log.Println(prefix)
 	}
 }
 
@@ -47,7 +47,7 @@ func discordSendPCM(v *discordgo.VoiceConnection, pcm <-chan []int16) {
 	opusEncoder, err := gopus.NewEncoder(frameRate, channels, gopus.Audio)
 	if err != nil {
 		OnError("NewEncoder Error", err)
-		return
+		panic(err)
 	}
 
 	ticker := time.NewTicker(20 * time.Millisecond)
@@ -68,12 +68,12 @@ func discordSendPCM(v *discordgo.VoiceConnection, pcm <-chan []int16) {
 			opus, err := opusEncoder.Encode(append(r1, r2...), frameSize, maxBytes)
 			if err != nil {
 				OnError("Encoding Error", err)
-				return
+				continue
 			}
 
 			if v.Ready == false || v.OpusSend == nil {
 				OnError(fmt.Sprintf("Discordgo not ready for opus packets. %+v : %+v", v.Ready, v.OpusSend), nil)
-				return
+				continue
 			}
 
 			v.OpusSend <- opus
@@ -94,13 +94,13 @@ func discordReceivePCM(v *discordgo.VoiceConnection) {
 	for {
 		if v.Ready == false || v.OpusRecv == nil {
 			OnError(fmt.Sprintf("Discordgo not to receive opus packets. %+v : %+v", v.Ready, v.OpusSend), nil)
-			return
+			continue
 		}
 
 		p, ok := <-v.OpusRecv
 		if !ok {
-			fmt.Println("Opus not ok")
-			return
+			log.Println("Opus not ok")
+			continue
 		}
 
 		discordMutex.Lock()
@@ -178,7 +178,12 @@ func fromDiscordMixer(toMumble chan<- gumble.AudioBuffer) {
 		}
 
 		if sendAudio {
-			toMumble <- outBuf
+			select {
+			case toMumble <- outBuf:
+			default:
+				log.Println("toMumble buffer full. Dropping packet")
+			}
+
 		}
 	}
 }

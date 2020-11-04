@@ -4,7 +4,7 @@ mumble-discord-bridge: $(GOFILES)
 	go build -o $@ $(GOFILES)
 
 docker-latest:
-	docker build .
+	docker build -t stieneee/mumble-discord-bridge:latest .
 	docker push stieneee/mumble-bridge-latest
 
 clean:

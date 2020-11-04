@@ -86,6 +86,35 @@ func main() {
 		log.Fatalln("missing discord cid")
 	}
 
+	// DISCORD Setup
+
+	discord, err := discordgo.New("Bot " + *discordToken)
+	if err != nil {
+		log.Println(err)
+		return
+	}
+
+	// Open Websocket
+	discord.LogLevel = 2
+	err = discord.Open()
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	defer discord.Close()
+
+	log.Println("Discord Bot Connected")
+
+	dgv, err := discord.ChannelVoiceJoin(*discordGID, *discordCID, false, false)
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	defer dgv.Speaking(false)
+	defer dgv.Close()
+
+	discord.ShouldReconnectOnError = true
+
 	// MUMBLE Setup
 
 	config := gumble.NewConfig()
@@ -100,41 +129,21 @@ func main() {
 		log.Println(err)
 		return
 	}
+	defer mumble.Disconnect()
 
 	// Shared Channels
 	// Shared channels pass PCM information in 10ms chunks [480]int16
 	var toMumble = mumble.AudioOutgoing()
 	var toDiscord = make(chan []int16, 100)
-
-	go m.fromMumbleMixer(toDiscord)
-
-	config.AudioListeners.Attach(m)
+	var die = make(chan bool)
 
 	log.Println("Mumble Connected")
 
-	// DISCORD Setup
-
-	discord, err := discordgo.New("Bot " + *discordToken)
-	if err != nil {
-		log.Println(err)
-		return
-	}
-
-	// Open Websocket
-	err = discord.Open()
-	if err != nil {
-		log.Println(err)
-		return
-	}
-
-	log.Println("Discord Bot Connected")
-
-	dgv, err := discord.ChannelVoiceJoin(*discordGID, *discordCID, false, false)
-	if err != nil {
-		log.Println(err)
-		return
-	}
-
+	// Start Passing Between
+	// Mumble
+	go m.fromMumbleMixer(toDiscord)
+	config.AudioListeners.Attach(m)
+	//Discord
 	go discordReceivePCM(dgv)
 	go fromDiscordMixer(toMumble)
 	go discordSendPCM(dgv, toDiscord)
@@ -143,12 +152,21 @@ func main() {
 	c := make(chan os.Signal)
 	signal.Notify(c, os.Interrupt)
 
+	go func() {
+		ticker := time.NewTicker(500 * time.Millisecond)
+		for {
+			<-ticker.C
+			if mumble.State() != 2 {
+				log.Println("Lost mumble connection " + strconv.Itoa(int(mumble.State())))
+				die <- true
+			}
+		}
+	}()
+
 	select {
 	case sig := <-c:
-		log.Printf("\nGot %s signal. Ending Mumble-Bridge\n", sig)
-		mumble.Disconnect()
-		dgv.Speaking(false)
-		dgv.Close()
-		discord.Close()
+		log.Printf("\nGot %s signal. Terminating Mumble-Bridge\n", sig)
+	case <-die:
+		log.Println("\nGot internal die request. Terminating Mumble-Bridge")
 	}
 }

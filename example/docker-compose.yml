@@ -1,0 +1,13 @@
+version: "3"
+   
+services:
+  mumble-discord-bridge:
+    image: stieneee/mumble-discord-bridge
+    restart: unless-stopped
+    environment:
+      - MUMBLE_ADDRESS=example.com"
+      - MUMBLE_USERNAME=discord-bridge
+      - MUMBLE_PASSWORD=password
+      - DISCORD_TOKEN=token
+      - DISCORD_GID=gid
+      - DISCORD_CID=cid

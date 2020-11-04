@@ -86,7 +86,11 @@ func (m MumbleDuplex) fromMumbleMixer(toDiscord chan []int16) {
 		}
 
 		if sendAudio {
-			toDiscord <- outBuf
+			select {
+			case toDiscord <- outBuf:
+			default:
+				log.Println("toDiscord buffer full. Dropping packet")
+			}
 		}
 	}
 }
