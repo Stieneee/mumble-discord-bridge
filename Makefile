@@ -5,9 +5,9 @@ mumble-discord-bridge: $(GOFILES)
 
 docker-latest:
 	docker build -t stieneee/mumble-discord-bridge:latest .
-	docker push stieneee/mumble-bridge-latest
+	docker push stieneee/mumble-discord-bridge:latest
 
 clean:
-	rm mumble-discord-bridge
+	rm -f mumble-discord-bridge
 
 .PHONY: all push clean

@@ -67,6 +67,16 @@ docker docker run -e MUMBLE_ADDRESS=example.com -e MUMBLE_PASSWORD=optional -e D
 docker stop mumble-discord-bridge && docker rm mumble-discord-bridge
 ```
 
+### Mumbler Server Setting
+
+To ensure compatibility please edit your murmur configuration file with the following
+
+```bash
+opusthreshold=0
+```
+
+This ensures all packets are opus encoded and should not cause any compatibility issues if your users are using up to date clients.
+
 ## Building From Source
 
 This project requires Golang to build from source.
