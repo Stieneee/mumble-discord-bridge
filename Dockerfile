@@ -2,7 +2,7 @@
 
 # Stage 1
 
-FROM golang:latest as builder
+FROM golang:1.15 as builder
 WORKDIR /go/src/app 
 COPY . .
 
