@@ -36,7 +36,7 @@ var OnError = func(str string, err error) {
 
 // SendPCM will receive on the provied channel encode
 // received PCM data into Opus then send that to Discordgo
-func discordSendPCM(v *discordgo.VoiceConnection, pcm <-chan []int16) {
+func discordSendPCM(v *discordgo.VoiceConnection, pcm <-chan []int16, die chan bool) {
 	const channels int = 1
 	const frameRate int = 48000              // audio sampling rate
 	const frameSize int = 960                // uint16 size of each audio frame
@@ -51,6 +51,9 @@ func discordSendPCM(v *discordgo.VoiceConnection, pcm <-chan []int16) {
 	}
 
 	ticker := time.NewTicker(20 * time.Millisecond)
+
+	lastReady := true
+	var readyTimeout *time.Timer
 
 	for {
 		<-ticker.C
@@ -72,8 +75,18 @@ func discordSendPCM(v *discordgo.VoiceConnection, pcm <-chan []int16) {
 			}
 
 			if v.Ready == false || v.OpusSend == nil {
-				OnError(fmt.Sprintf("Discordgo not ready for opus packets. %+v : %+v", v.Ready, v.OpusSend), nil)
+				if lastReady == true {
+					OnError(fmt.Sprintf("Discordgo not ready for opus packets. %+v : %+v", v.Ready, v.OpusSend), nil)
+					readyTimeout = time.AfterFunc(30*time.Second, func() {
+						die <- true
+					})
+					lastReady = false
+				}
 				continue
+			} else if lastReady == false {
+				fmt.Println("Discordgo ready to send opus packets")
+				lastReady = true
+				readyTimeout.Stop()
 			}
 
 			v.OpusSend <- opus
@@ -88,13 +101,26 @@ func discordSendPCM(v *discordgo.VoiceConnection, pcm <-chan []int16) {
 
 // ReceivePCM will receive on the the Discordgo OpusRecv channel and decode
 // the opus audio into PCM then send it on the provided channel.
-func discordReceivePCM(v *discordgo.VoiceConnection) {
+func discordReceivePCM(v *discordgo.VoiceConnection, die chan bool) {
 	var err error
+
+	lastReady := true
+	var readyTimeout *time.Timer
 
 	for {
 		if v.Ready == false || v.OpusRecv == nil {
-			OnError(fmt.Sprintf("Discordgo not to receive opus packets. %+v : %+v", v.Ready, v.OpusSend), nil)
+			if lastReady == true {
+				OnError(fmt.Sprintf("Discordgo not to receive opus packets. %+v : %+v", v.Ready, v.OpusSend), nil)
+				readyTimeout = time.AfterFunc(30*time.Second, func() {
+					die <- true
+				})
+				lastReady = false
+			}
 			continue
+		} else if lastReady == false {
+			fmt.Println("Discordgo ready to receive packets")
+			lastReady = true
+			readyTimeout.Stop()
 		}
 
 		p, ok := <-v.OpusRecv

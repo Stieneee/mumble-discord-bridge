@@ -144,9 +144,9 @@ func main() {
 	go m.fromMumbleMixer(toDiscord)
 	config.AudioListeners.Attach(m)
 	//Discord
-	go discordReceivePCM(dgv)
+	go discordReceivePCM(dgv, die)
 	go fromDiscordMixer(toMumble)
-	go discordSendPCM(dgv, toDiscord)
+	go discordSendPCM(dgv, toDiscord, die)
 
 	// Wait for Exit Signal
 	c := make(chan os.Signal)
