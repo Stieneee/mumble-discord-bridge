@@ -1,9 +1,11 @@
 package main
 
 import (
+	"crypto/tls"
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"os/signal"
 	"strconv"
@@ -60,7 +62,7 @@ func main() {
 	mumblePort := flag.Int("mumble-port", lookupEnvOrInt("MUMBLE_PORT", 64738), "MUMBLE_PORT mumble port")
 	mumbleUsername := flag.String("mumble-username", lookupEnvOrString("MUMBLE_USERNAME", "discord-bridge"), "MUMBLE_USERNAME, mumble username")
 	mumblePassword := flag.String("mumble-password", lookupEnvOrString("MUMBLE_PASSWORD", ""), "MUMBLE_PASSWORD, mumble password, optional")
-	// mumbleInsecure := flag.Bool("mumble-insecure", lookupEnvOrBool("MUMBLE_INSECURE", false), "mumble insecure,  env alt MUMBLE_INSECURE")
+	mumbleInsecure := flag.Bool("mumble-insecure", lookupEnvOrBool("MUMBLE_INSECURE", false), "mumble insecure,  env alt MUMBLE_INSECURE")
 
 	discordToken := flag.String("discord-token", lookupEnvOrString("DISCORD_TOKEN", ""), "DISCORD_TOKEN, discord bot token")
 	discordGID := flag.String("discord-gid", lookupEnvOrString("DISCORD_GID", ""), "DISCORD_GID, discord gid")
@@ -124,7 +126,13 @@ func main() {
 
 	m := MumbleDuplex{}
 
-	mumble, err := gumble.Dial(*mumbleAddr+":"+strconv.Itoa(*mumblePort), config)
+	var tlsConfig tls.Config
+	if *mumbleInsecure {
+		tlsConfig.InsecureSkipVerify = true
+	}
+
+	mumble, err := gumble.DialWithDialer(new(net.Dialer),*mumbleAddr+":"+strconv.Itoa(*mumblePort),config, &tlsConfig)
+
 	if err != nil {
 		log.Println(err)
 		return
