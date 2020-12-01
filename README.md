@@ -26,6 +26,8 @@ Usage of mumble-discord-bridge:
         MUMBLE_PORT mumble port (default 64738)
   -mumble-username string
         MUMBLE_USERNAME, mumble username (default "discord-bridge")
+  -mumble-insecure bool
+        MUMBLE_INSECURE, allow connection to insecure (invalid TLS cert) mumble server
 ```
 
 ## Setup
@@ -84,7 +86,7 @@ A simple go build command is all that is needed.
 Ensure the opus library is installed.
 
 ```bash
-go build *.go -o mumble-discord-bridge
+go build -o mumble-discord-bridge *.go
 ```
 
 ## Known Issues
