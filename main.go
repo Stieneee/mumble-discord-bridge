@@ -144,6 +144,7 @@ func main() {
 	config.AudioInterval = time.Millisecond * 10
 
 	m := MumbleDuplex{}
+	ml := MumbleEventListener{}
 
 	var tlsConfig tls.Config
 	if *mumbleInsecure {
@@ -170,6 +171,7 @@ func main() {
 	// Mumble
 	go m.fromMumbleMixer(toDiscord)
 	config.AudioListeners.Attach(m)
+	config.Listeners.Attach(ml)
 	//Discord
 	go discordReceivePCM(dgv, die)
 	go fromDiscordMixer(toMumble)
@@ -196,4 +198,8 @@ func main() {
 	case <-die:
 		log.Println("\nGot internal die request. Terminating Mumble-Bridge")
 	}
+	time.AfterFunc(5*time.Second, func() {
+		log.Println("Graceful disconnect timeout, Forcing!")
+		os.Exit(9)
+	})
 }
