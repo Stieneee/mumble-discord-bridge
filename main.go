@@ -1,14 +1,12 @@
 package main
 
 import (
-	"crypto/tls"
 	"flag"
-	"fmt"
 	"log"
-	"net"
 	"os"
 	"os/signal"
 	"strconv"
+	"syscall"
 	"time"
 
 	"github.com/bwmarrin/discordgo"
@@ -17,43 +15,7 @@ import (
 	_ "layeh.com/gumble/opus"
 )
 
-func lookupEnvOrString(key string, defaultVal string) string {
-	if val, ok := os.LookupEnv(key); ok {
-		return val
-	}
-	return defaultVal
-}
-
-func lookupEnvOrInt(key string, defaultVal int) int {
-	if val, ok := os.LookupEnv(key); ok {
-		v, err := strconv.Atoi(val)
-		if err != nil {
-			log.Fatalf("LookupEnvOrInt[%s]: %v", key, err)
-		}
-		return v
-	}
-	return defaultVal
-}
-
-func lookupEnvOrBool(key string, defaultVal bool) bool {
-	if val, ok := os.LookupEnv(key); ok {
-		v, err := strconv.ParseBool(val)
-		if err != nil {
-			log.Fatalf("LookupEnvOrInt[%s]: %v", key, err)
-		}
-		return v
-	}
-	return defaultVal
-}
-
-func getConfig(fs *flag.FlagSet) []string {
-	cfg := make([]string, 0, 10)
-	fs.VisitAll(func(f *flag.Flag) {
-		cfg = append(cfg, fmt.Sprintf("%s:%q", f.Name, f.Value.String()))
-	})
-
-	return cfg
-}
+var YBConfig *YammerConfig
 
 func main() {
 	godotenv.Load()
@@ -98,6 +60,12 @@ func main() {
 
 	// Open Websocket
 	discord.LogLevel = 2
+	discord.StateEnabled = true
+	discord.Identify.Intents = discordgo.MakeIntent(discordgo.IntentsGuilds | discordgo.IntentsGuildMessages | discordgo.IntentsGuildVoiceStates)
+	// register handlers
+	discord.AddHandler(ready)
+	discord.AddHandler(messageCreate)
+	discord.AddHandler(guildCreate)
 	err = discord.Open()
 	if err != nil {
 		log.Println(err)
@@ -106,75 +74,22 @@ func main() {
 	defer discord.Close()
 
 	log.Println("Discord Bot Connected")
-
-	dgv, err := discord.ChannelVoiceJoin(*discordGID, *discordCID, false, false)
-	if err != nil {
-		log.Println(err)
-		return
-	}
-	defer dgv.Speaking(false)
-	defer dgv.Close()
-
-	discord.ShouldReconnectOnError = true
-
-	// MUMBLE Setup
-
 	config := gumble.NewConfig()
 	config.Username = *mumbleUsername
 	config.Password = *mumblePassword
 	config.AudioInterval = time.Millisecond * 10
 
-	m := MumbleDuplex{}
-
-	var tlsConfig tls.Config
-	if *mumbleInsecure {
-		tlsConfig.InsecureSkipVerify = true
+	YBConfig = &YammerConfig{
+		Config:         config,
+		MumbleAddr:     *mumbleAddr + ":" + strconv.Itoa(*mumblePort),
+		MumbleInsecure: *mumbleInsecure,
+		ActiveConns:    make(map[string]chan bool),
 	}
 
-	mumble, err := gumble.DialWithDialer(new(net.Dialer),*mumbleAddr+":"+strconv.Itoa(*mumblePort),config, &tlsConfig)
+	//go startBridge(discord, *discordGID, *discordCID, config, *mumbleAddr+":"+strconv.Itoa(*mumblePort), *mumbleInsecure, die)
 
-	if err != nil {
-		log.Println(err)
-		return
-	}
-	defer mumble.Disconnect()
-
-	// Shared Channels
-	// Shared channels pass PCM information in 10ms chunks [480]int16
-	var toMumble = mumble.AudioOutgoing()
-	var toDiscord = make(chan []int16, 100)
-	var die = make(chan bool)
-
-	log.Println("Mumble Connected")
-
-	// Start Passing Between
-	// Mumble
-	go m.fromMumbleMixer(toDiscord)
-	config.AudioListeners.Attach(m)
-	//Discord
-	go discordReceivePCM(dgv, die)
-	go fromDiscordMixer(toMumble)
-	go discordSendPCM(dgv, toDiscord, die)
-
-	// Wait for Exit Signal
-	c := make(chan os.Signal)
-	signal.Notify(c, os.Interrupt)
-
-	go func() {
-		ticker := time.NewTicker(500 * time.Millisecond)
-		for {
-			<-ticker.C
-			if mumble.State() != 2 {
-				log.Println("Lost mumble connection " + strconv.Itoa(int(mumble.State())))
-				die <- true
-			}
-		}
-	}()
-
-	select {
-	case sig := <-c:
-		log.Printf("\nGot %s signal. Terminating Mumble-Bridge\n", sig)
-	case <-die:
-		log.Println("\nGot internal die request. Terminating Mumble-Bridge")
-	}
+	sc := make(chan os.Signal, 1)
+	signal.Notify(sc, syscall.SIGINT, syscall.SIGTERM, os.Interrupt, os.Kill)
+	<-sc
+	log.Println("Bot shutting down")
 }
