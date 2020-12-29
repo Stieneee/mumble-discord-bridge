@@ -22,6 +22,10 @@ var discordMutex sync.Mutex
 var discordMixerMutex sync.Mutex
 var fromDiscordMap = make(map[uint32]fromDiscord)
 
+func DiscordReset() {
+	fromDiscordMap = make(map[uint32]fromDiscord)
+}
+
 // OnError gets called by dgvoice when an error is encountered.
 // By default logs to STDERR
 var OnError = func(str string, err error) {
@@ -56,9 +60,15 @@ func discordSendPCM(v *discordgo.VoiceConnection, pcm <-chan []int16, die chan b
 	var readyTimeout *time.Timer
 
 	for {
+		select {
+		case <-die:
+			log.Println("Killing discordSendPCM")
+			return
+		default:
+		}
 		<-ticker.C
-
 		if len(pcm) > 1 {
+			log.Println("looking for speech")
 			if !streaming {
 				v.Speaking(true)
 				streaming = true
@@ -88,7 +98,7 @@ func discordSendPCM(v *discordgo.VoiceConnection, pcm <-chan []int16, die chan b
 				lastReady = true
 				readyTimeout.Stop()
 			}
-
+			log.Println("sending packets to mumble")
 			v.OpusSend <- opus
 		} else {
 			if streaming {
@@ -108,10 +118,19 @@ func discordReceivePCM(v *discordgo.VoiceConnection, die chan bool) {
 	var readyTimeout *time.Timer
 
 	for {
+		log.Println("Start loop")
+		select {
+		case <-die:
+			log.Println("killing discord ReceivePCM")
+			return
+		default:
+		}
+		log.Println("checked for death")
 		if v.Ready == false || v.OpusRecv == nil {
 			if lastReady == true {
 				OnError(fmt.Sprintf("Discordgo not to receive opus packets. %+v : %+v", v.Ready, v.OpusSend), nil)
 				readyTimeout = time.AfterFunc(30*time.Second, func() {
+					log.Println("set ready timeout")
 					die <- true
 				})
 				lastReady = false
@@ -123,13 +142,16 @@ func discordReceivePCM(v *discordgo.VoiceConnection, die chan bool) {
 			readyTimeout.Stop()
 		}
 
+		log.Println("rec1")
 		p, ok := <-v.OpusRecv
+		log.Println("rec2")
 		if !ok {
 			log.Println("Opus not ok")
 			continue
 		}
 
 		discordMutex.Lock()
+		log.Println("got lock one")
 		_, ok = fromDiscordMap[p.SSRC]
 		discordMutex.Unlock()
 		if !ok {
@@ -147,6 +169,7 @@ func discordReceivePCM(v *discordgo.VoiceConnection, die chan bool) {
 		}
 
 		discordMutex.Lock()
+		log.Println("got lock 2")
 		p.PCM, err = fromDiscordMap[p.SSRC].decoder.Decode(p.Opus, 960, false)
 		discordMutex.Unlock()
 		if err != nil {
@@ -155,17 +178,25 @@ func discordReceivePCM(v *discordgo.VoiceConnection, die chan bool) {
 		}
 
 		discordMutex.Lock()
+		log.Println("got lock 3")
 		fromDiscordMap[p.SSRC].pcm <- p.PCM[0:480]
 		fromDiscordMap[p.SSRC].pcm <- p.PCM[480:960]
 		discordMutex.Unlock()
+		log.Println("finish loop")
 	}
 }
 
-func fromDiscordMixer(toMumble chan<- gumble.AudioBuffer) {
+func fromDiscordMixer(toMumble chan<- gumble.AudioBuffer, die chan bool) {
 	ticker := time.NewTicker(10 * time.Millisecond)
 	sendAudio := false
 
 	for {
+		select {
+		case <-die:
+			log.Println("killing fromDiscordMixer")
+			return
+		default:
+		}
 		<-ticker.C
 		discordMutex.Lock()
 
@@ -206,6 +237,7 @@ func fromDiscordMixer(toMumble chan<- gumble.AudioBuffer) {
 		if sendAudio {
 			select {
 			case toMumble <- outBuf:
+				log.Println("sending to mumble")
 			default:
 				log.Println("toMumble buffer full. Dropping packet")
 			}

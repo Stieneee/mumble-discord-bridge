@@ -61,7 +61,7 @@ func main() {
 	// Open Websocket
 	discord.LogLevel = 2
 	discord.StateEnabled = true
-	discord.Identify.Intents = discordgo.MakeIntent(discordgo.IntentsGuilds | discordgo.IntentsGuildMessages | discordgo.IntentsGuildVoiceStates)
+	discord.Identify.Intents = discordgo.MakeIntent(discordgo.IntentsAllWithoutPrivileged)
 	// register handlers
 	discord.AddHandler(ready)
 	discord.AddHandler(messageCreate)

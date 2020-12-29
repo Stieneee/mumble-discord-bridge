@@ -27,7 +27,9 @@ func startBridge(discord *discordgo.Session, discordGID string, discordCID strin
 
 	// MUMBLE Setup
 
-	m := MumbleDuplex{}
+	m := MumbleDuplex{
+		Close: make(chan bool),
+	}
 
 	var tlsConfig tls.Config
 	if mumbleInsecure {
@@ -51,11 +53,11 @@ func startBridge(discord *discordgo.Session, discordGID string, discordCID strin
 
 	// Start Passing Between
 	// Mumble
-	go m.fromMumbleMixer(toDiscord)
-	config.AudioListeners.Attach(m)
+	go m.fromMumbleMixer(toDiscord, die)
+	det := config.AudioListeners.Attach(m)
 	//Discord
 	go discordReceivePCM(dgv, die)
-	go fromDiscordMixer(toMumble)
+	go fromDiscordMixer(toMumble, die)
 	go discordSendPCM(dgv, toDiscord, die)
 	c := make(chan os.Signal)
 	signal.Notify(c, os.Interrupt)
@@ -67,6 +69,7 @@ func startBridge(discord *discordgo.Session, discordGID string, discordCID strin
 			if mumble.State() != 2 {
 				log.Println("Lost mumble connection " + strconv.Itoa(int(mumble.State())))
 				die <- true
+				m.Close <- true
 			}
 		}
 	}()
@@ -76,7 +79,10 @@ func startBridge(discord *discordgo.Session, discordGID string, discordCID strin
 		log.Printf("\nGot %s signal. Terminating Mumble-Bridge\n", sig)
 	case <-die:
 		log.Println("\nGot internal die request. Terminating Mumble-Bridge")
+		close(toMumble)
 		dgv.Disconnect()
+		log.Println("Closing mumble threads")
+		det.Detach()
 	}
 }
 

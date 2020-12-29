@@ -71,6 +71,8 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 				log.Printf("Trying to leave GID %v and VID %v\n", g.ID, vs.ChannelID)
 				YBConfig.ActiveConns[vs.ChannelID] <- true
 				YBConfig.ActiveConns[vs.ChannelID] = nil
+				MumbleReset()
+				DiscordReset()
 				return
 			}
 		}
@@ -97,7 +99,10 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 			if vs.UserID == m.Author.ID {
 				log.Printf("Trying to refresh GID %v and VID %v\n", g.ID, vs.ChannelID)
 				YBConfig.ActiveConns[vs.ChannelID] <- true
-				time.Sleep(2 * time.Second)
+				MumbleReset()
+				DiscordReset()
+				time.Sleep(5 * time.Second)
+				YBConfig.ActiveConns[vs.ChannelID] = make(chan bool)
 				go startBridge(s, g.ID, vs.ChannelID, YBConfig.Config, YBConfig.MumbleAddr, YBConfig.MumbleInsecure, YBConfig.ActiveConns[vs.ChannelID])
 				return
 			}
