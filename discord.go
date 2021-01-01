@@ -153,10 +153,22 @@ func discordReceivePCM(v *discordgo.VoiceConnection, die chan bool) {
 			OnError("Error decoding opus data", err)
 			continue
 		}
+		if len(p.PCM) != 960 {
+			log.Println("Opus size error")
+			continue
+		}
 
 		discordMutex.Lock()
-		fromDiscordMap[p.SSRC].pcm <- p.PCM[0:480]
-		fromDiscordMap[p.SSRC].pcm <- p.PCM[480:960]
+		select {
+		case fromDiscordMap[p.SSRC].pcm <- p.PCM[0:480]:
+		default:
+			log.Println("fromDiscordMap buffer full. Dropping packet")
+		}
+		select {
+		case fromDiscordMap[p.SSRC].pcm <- p.PCM[480:960]:
+		default:
+			log.Println("fromDiscordMap buffer full. Dropping packet")
+		}
 		discordMutex.Unlock()
 	}
 }
