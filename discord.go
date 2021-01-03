@@ -137,8 +137,14 @@ func discordReceivePCM(v *discordgo.VoiceConnection, die chan bool) {
 			lastReady = true
 			readyTimeout.Stop()
 		}
-
-		p, ok := <-v.OpusRecv
+		var ok bool
+		var p *discordgo.Packet
+		select {
+		case p, ok = <-v.OpusRecv:
+		case <-die:
+			log.Println("killing discord ReceivePCM")
+			return
+		}
 		if !ok {
 			log.Println("Opus not ok")
 			continue

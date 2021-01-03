@@ -68,8 +68,20 @@ func startBridge(discord *discordgo.Session, discordGID string, discordCID strin
 			<-ticker.C
 			if mumble.State() != 2 {
 				log.Println("Lost mumble connection " + strconv.Itoa(int(mumble.State())))
-				die <- true
-				m.Close <- true
+				select {
+				default:
+					close(die)
+				case <-die:
+					//die is already closed
+				}
+
+				select {
+				default:
+					close(m.Close)
+				case <-m.Close:
+					//m.Close is already closed
+				}
+				return
 			}
 		}
 	}()
@@ -81,6 +93,9 @@ func startBridge(discord *discordgo.Session, discordGID string, discordCID strin
 		log.Println("\nGot internal die request. Terminating Mumble-Bridge")
 		dgv.Disconnect()
 		det.Detach()
+		close(die)
+		close(m.Close)
+		close(toMumble)
 		Bridge.Connected = false
 	}
 }
