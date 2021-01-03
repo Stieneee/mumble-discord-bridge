@@ -5,7 +5,6 @@ import (
 	"log"
 	"os"
 	"os/signal"
-	"runtime"
 	"strconv"
 	"syscall"
 	"time"
@@ -102,13 +101,6 @@ func main() {
 	userCount := make(chan int)
 	go pingMumble(*mumbleAddr, strconv.Itoa(*mumblePort), userCount)
 	go discordStatusUpdate(discord, userCount)
-	go func() {
-		for {
-			time.Sleep(3 * time.Second)
-			log.Println(runtime.NumGoroutine())
-			//pprof.Lookup("goroutine").WriteTo(os.Stdout, 1)
-		}
-	}()
 	if *autoMode {
 		Bridge.AutoChan = make(chan bool)
 		go AutoBridge(discord)
