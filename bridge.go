@@ -22,7 +22,7 @@ func startBridge(discord *discordgo.Session, discordGID string, discordCID strin
 	}
 	defer dgv.Speaking(false)
 	defer dgv.Close()
-
+	Bridge.Connected = true
 	discord.ShouldReconnectOnError = true
 
 	// MUMBLE Setup
@@ -79,41 +79,37 @@ func startBridge(discord *discordgo.Session, discordGID string, discordCID strin
 		log.Printf("\nGot %s signal. Terminating Mumble-Bridge\n", sig)
 	case <-die:
 		log.Println("\nGot internal die request. Terminating Mumble-Bridge")
-		close(toMumble)
 		dgv.Disconnect()
-		log.Println("Closing mumble threads")
 		det.Detach()
+		Bridge.Connected = false
 	}
 }
 
 func pingMumble(host, port string, c chan int) {
 	m, _ := time.ParseDuration("30s")
 	curr := 0
-	log.Println("Started mumble ping loop")
 	for {
 		time.Sleep(3 * time.Second)
 		resp, err := gumble.Ping(host+":"+port, -1, m)
+		curr = resp.ConnectedUsers
 		if err != nil {
 			panic(err)
 		}
-		if resp.ConnectedUsers-1 != curr {
-			curr = resp.ConnectedUsers - 1
-			log.Printf("Now %v users in mumble\n", curr)
-			if curr > 0 {
-				c <- curr
-			}
+		if Bridge.Connected {
+			curr = curr - 1
+		}
+		if curr != Bridge.MumbleUserCount {
+			Bridge.MumbleUserCount = curr
+			c <- Bridge.MumbleUserCount
 		}
 	}
-	log.Println("Mumble ping loop broken")
 }
 
 func discordStatusUpdate(dg *discordgo.Session, c chan int) {
 	status := ""
 	curr := 0
-	log.Println("Started discord control loop")
 	for {
 		curr = <-c
-		log.Println("Updating discord status")
 		if curr == 0 {
 			status = ""
 		} else {
@@ -121,5 +117,28 @@ func discordStatusUpdate(dg *discordgo.Session, c chan int) {
 		}
 		dg.UpdateListeningStatus(status)
 	}
-	log.Println("Discord control loop broken")
+}
+
+func AutoBridge(s *discordgo.Session) {
+	log.Println("beginning auto mode")
+	for {
+		select {
+		default:
+		case <-Bridge.AutoChan:
+			log.Println("ending automode")
+			return
+		}
+		time.Sleep(3 * time.Second)
+		if !Bridge.Connected && Bridge.MumbleUserCount > 0 && Bridge.DiscordUserCount > 0 {
+			log.Println("users detected in mumble and discord, bridging")
+			die := make(chan bool)
+			Bridge.ActiveConn = die
+			go startBridge(s, BridgeConf.GID, BridgeConf.CID, BridgeConf.Config, BridgeConf.MumbleAddr, BridgeConf.MumbleInsecure, die)
+		}
+		log.Printf("DU: %v MU %v\n", Bridge.DiscordUserCount, Bridge.MumbleUserCount)
+		if Bridge.Connected && Bridge.MumbleUserCount == 0 && Bridge.DiscordUserCount <= 1 {
+			log.Println("no one online, killing bridge")
+			Bridge.ActiveConn <- true
+		}
+	}
 }

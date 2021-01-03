@@ -10,12 +10,22 @@ import (
 	"layeh.com/gumble/gumble"
 )
 
-type YammerConfig struct {
+type BridgeConfig struct {
 	Config         *gumble.Config
 	MumbleAddr     string
 	MumbleInsecure bool
-	Die            chan bool
-	ActiveConns    map[string]chan bool
+	Auto           bool
+	Command        string
+	GID            string
+	CID            string
+}
+
+type BridgeState struct {
+	ActiveConn       chan bool
+	Connected        bool
+	MumbleUserCount  int
+	DiscordUserCount int
+	AutoChan         chan bool
 }
 
 func lookupEnvOrString(key string, defaultVal string) string {

@@ -20,8 +20,8 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 	if m.Author.ID == s.State.User.ID {
 		return
 	}
-
-	if strings.HasPrefix(m.Content, "!yammer link") {
+	prefix := "!" + BridgeConf.Command
+	if strings.HasPrefix(m.Content, prefix+" link") {
 
 		// Find the channel that the message came from.
 		c, err := s.State.Channel(m.ChannelID)
@@ -42,14 +42,14 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 			if vs.UserID == m.Author.ID {
 				log.Printf("Trying to join GID %v and VID %v\n", g.ID, vs.ChannelID)
 				die := make(chan bool)
-				YBConfig.ActiveConns[vs.ChannelID] = die
-				go startBridge(s, g.ID, vs.ChannelID, YBConfig.Config, YBConfig.MumbleAddr, YBConfig.MumbleInsecure, die)
+				Bridge.ActiveConn = die
+				go startBridge(s, g.ID, vs.ChannelID, BridgeConf.Config, BridgeConf.MumbleAddr, BridgeConf.MumbleInsecure, die)
 				return
 			}
 		}
 	}
 
-	if strings.HasPrefix(m.Content, "!yammer unlink") {
+	if strings.HasPrefix(m.Content, prefix+" unlink") {
 
 		// Find the channel that the message came from.
 		c, err := s.State.Channel(m.ChannelID)
@@ -69,8 +69,8 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 		for _, vs := range g.VoiceStates {
 			if vs.UserID == m.Author.ID {
 				log.Printf("Trying to leave GID %v and VID %v\n", g.ID, vs.ChannelID)
-				YBConfig.ActiveConns[vs.ChannelID] <- true
-				YBConfig.ActiveConns[vs.ChannelID] = nil
+				Bridge.ActiveConn <- true
+				Bridge.ActiveConn = nil
 				MumbleReset()
 				DiscordReset()
 				return
@@ -78,7 +78,7 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 		}
 	}
 
-	if strings.HasPrefix(m.Content, "!yammer refresh") {
+	if strings.HasPrefix(m.Content, prefix+" refresh") {
 
 		// Find the channel that the message came from.
 		c, err := s.State.Channel(m.ChannelID)
@@ -98,14 +98,25 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 		for _, vs := range g.VoiceStates {
 			if vs.UserID == m.Author.ID {
 				log.Printf("Trying to refresh GID %v and VID %v\n", g.ID, vs.ChannelID)
-				YBConfig.ActiveConns[vs.ChannelID] <- true
+				Bridge.ActiveConn <- true
 				MumbleReset()
 				DiscordReset()
 				time.Sleep(5 * time.Second)
-				YBConfig.ActiveConns[vs.ChannelID] = make(chan bool)
-				go startBridge(s, g.ID, vs.ChannelID, YBConfig.Config, YBConfig.MumbleAddr, YBConfig.MumbleInsecure, YBConfig.ActiveConns[vs.ChannelID])
+				Bridge.ActiveConn = make(chan bool)
+				go startBridge(s, g.ID, vs.ChannelID, BridgeConf.Config, BridgeConf.MumbleAddr, BridgeConf.MumbleInsecure, Bridge.ActiveConn)
 				return
 			}
+		}
+	}
+
+	if strings.HasPrefix(m.Content, prefix+" auto") {
+		if BridgeConf.Auto == false {
+			BridgeConf.Auto = true
+			Bridge.AutoChan = make(chan bool)
+			go AutoBridge(s)
+		} else {
+			Bridge.AutoChan <- true
+			BridgeConf.Auto = false
 		}
 	}
 }
@@ -122,4 +133,36 @@ func guildCreate(s *discordgo.Session, event *discordgo.GuildCreate) {
 			return
 		}
 	}
+}
+
+func voiceUpdate(s *discordgo.Session, event *discordgo.VoiceStateUpdate) {
+	if event.GuildID == BridgeConf.GID {
+		if event.ChannelID == BridgeConf.CID {
+			log.Println("user joined watched discord channel")
+			Bridge.DiscordUserCount = Bridge.DiscordUserCount + 1
+		}
+		if event.ChannelID == "" {
+			//leave event, trigger recount of active users
+			//TODO when next version of discordgo comes out, switch to PreviousState
+			g, err := s.State.Guild(event.GuildID)
+			if err != nil {
+				// Could not find guild.
+				return
+			}
+
+			// Look for current voice states in watched channel
+			count := 0
+			for _, vs := range g.VoiceStates {
+				if vs.ChannelID == BridgeConf.CID {
+					count = count + 1
+				}
+			}
+			if Bridge.DiscordUserCount > count {
+				log.Println("user left watched discord channel")
+				Bridge.DiscordUserCount = count
+			}
+		}
+
+	}
+	return
 }

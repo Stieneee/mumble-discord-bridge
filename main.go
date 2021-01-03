@@ -15,7 +15,8 @@ import (
 	_ "layeh.com/gumble/opus"
 )
 
-var YBConfig *YammerConfig
+var BridgeConf *BridgeConfig
+var Bridge *BridgeState
 
 func main() {
 	godotenv.Load()
@@ -29,7 +30,7 @@ func main() {
 	discordToken := flag.String("discord-token", lookupEnvOrString("DISCORD_TOKEN", ""), "DISCORD_TOKEN, discord bot token")
 	discordGID := flag.String("discord-gid", lookupEnvOrString("DISCORD_GID", ""), "DISCORD_GID, discord gid")
 	discordCID := flag.String("discord-cid", lookupEnvOrString("DISCORD_CID", ""), "DISCORD_CID, discord cid")
-
+	discordCommand := flag.String("discord-command", lookupEnvOrString("DISCORD_COMMAND", "mumble-discord"), "Discord command string, env alt DISCORD_COMMAND, optional, defaults to mumble-discord")
 	flag.Parse()
 	log.Printf("app.config %v\n", getConfig(flag.CommandLine))
 
@@ -66,6 +67,7 @@ func main() {
 	discord.AddHandler(ready)
 	discord.AddHandler(messageCreate)
 	discord.AddHandler(guildCreate)
+	discord.AddHandler(voiceUpdate)
 	err = discord.Open()
 	if err != nil {
 		log.Println(err)
@@ -74,19 +76,30 @@ func main() {
 	defer discord.Close()
 
 	log.Println("Discord Bot Connected")
+	log.Printf("Discord bot looking for command !%v", *discordCommand)
 	config := gumble.NewConfig()
 	config.Username = *mumbleUsername
 	config.Password = *mumblePassword
 	config.AudioInterval = time.Millisecond * 10
 
-	YBConfig = &YammerConfig{
+	BridgeConf = &BridgeConfig{
 		Config:         config,
 		MumbleAddr:     *mumbleAddr + ":" + strconv.Itoa(*mumblePort),
 		MumbleInsecure: *mumbleInsecure,
-		ActiveConns:    make(map[string]chan bool),
+		Auto:           false,
+		Command:        *discordCommand,
+		GID:            *discordGID,
+		CID:            *discordCID,
 	}
-
-	//go startBridge(discord, *discordGID, *discordCID, config, *mumbleAddr+":"+strconv.Itoa(*mumblePort), *mumbleInsecure, die)
+	Bridge = &BridgeState{
+		ActiveConn:       make(chan bool),
+		Connected:        false,
+		MumbleUserCount:  0,
+		DiscordUserCount: 0,
+	}
+	userCount := make(chan int)
+	go pingMumble(*mumbleAddr, strconv.Itoa(*mumblePort), userCount)
+	go discordStatusUpdate(discord, userCount)
 
 	sc := make(chan os.Signal, 1)
 	signal.Notify(sc, syscall.SIGINT, syscall.SIGTERM, os.Interrupt, os.Kill)

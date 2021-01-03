@@ -98,7 +98,6 @@ func discordSendPCM(v *discordgo.VoiceConnection, pcm <-chan []int16, die chan b
 				lastReady = true
 				readyTimeout.Stop()
 			}
-			log.Println("sending packets to mumble")
 			v.OpusSend <- opus
 		} else {
 			if streaming {
@@ -118,14 +117,12 @@ func discordReceivePCM(v *discordgo.VoiceConnection, die chan bool) {
 	var readyTimeout *time.Timer
 
 	for {
-		log.Println("Start loop")
 		select {
 		case <-die:
 			log.Println("killing discord ReceivePCM")
 			return
 		default:
 		}
-		log.Println("checked for death")
 		if v.Ready == false || v.OpusRecv == nil {
 			if lastReady == true {
 				OnError(fmt.Sprintf("Discordgo not to receive opus packets. %+v : %+v", v.Ready, v.OpusSend), nil)
@@ -142,16 +139,13 @@ func discordReceivePCM(v *discordgo.VoiceConnection, die chan bool) {
 			readyTimeout.Stop()
 		}
 
-		log.Println("rec1")
 		p, ok := <-v.OpusRecv
-		log.Println("rec2")
 		if !ok {
 			log.Println("Opus not ok")
 			continue
 		}
 
 		discordMutex.Lock()
-		log.Println("got lock one")
 		_, ok = fromDiscordMap[p.SSRC]
 		discordMutex.Unlock()
 		if !ok {
@@ -169,20 +163,28 @@ func discordReceivePCM(v *discordgo.VoiceConnection, die chan bool) {
 		}
 
 		discordMutex.Lock()
-		log.Println("got lock 2")
 		p.PCM, err = fromDiscordMap[p.SSRC].decoder.Decode(p.Opus, 960, false)
 		discordMutex.Unlock()
 		if err != nil {
 			OnError("Error decoding opus data", err)
 			continue
 		}
-
+		if len(p.PCM) != 960 {
+			log.Println("Opus size error")
+			continue
+		}
 		discordMutex.Lock()
-		log.Println("got lock 3")
-		fromDiscordMap[p.SSRC].pcm <- p.PCM[0:480]
-		fromDiscordMap[p.SSRC].pcm <- p.PCM[480:960]
+		select {
+		case fromDiscordMap[p.SSRC].pcm <- p.PCM[0:480]:
+		default:
+			log.Println("fromDiscordMap buffer full. Dropping packet")
+		}
+		select {
+		case fromDiscordMap[p.SSRC].pcm <- p.PCM[480:960]:
+		default:
+			log.Println("fromDiscordMap buffer full. Dropping packet")
+		}
 		discordMutex.Unlock()
-		log.Println("finish loop")
 	}
 }
 
@@ -237,7 +239,6 @@ func fromDiscordMixer(toMumble chan<- gumble.AudioBuffer, die chan bool) {
 		if sendAudio {
 			select {
 			case toMumble <- outBuf:
-				log.Println("sending to mumble")
 			default:
 				log.Println("toMumble buffer full. Dropping packet")
 			}
