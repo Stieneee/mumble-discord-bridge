@@ -135,10 +135,11 @@ func AutoBridge(s *discordgo.Session) {
 			Bridge.ActiveConn = die
 			go startBridge(s, BridgeConf.GID, BridgeConf.CID, BridgeConf.Config, BridgeConf.MumbleAddr, BridgeConf.MumbleInsecure, die)
 		}
-		log.Printf("DU: %v MU %v\n", Bridge.DiscordUserCount, Bridge.MumbleUserCount)
 		if Bridge.Connected && Bridge.MumbleUserCount == 0 && Bridge.DiscordUserCount <= 1 {
 			log.Println("no one online, killing bridge")
 			Bridge.ActiveConn <- true
+			MumbleReset()
+			DiscordReset()
 		}
 	}
 }

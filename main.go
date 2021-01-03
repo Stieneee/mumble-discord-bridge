@@ -31,6 +31,7 @@ func main() {
 	discordGID := flag.String("discord-gid", lookupEnvOrString("DISCORD_GID", ""), "DISCORD_GID, discord gid")
 	discordCID := flag.String("discord-cid", lookupEnvOrString("DISCORD_CID", ""), "DISCORD_CID, discord cid")
 	discordCommand := flag.String("discord-command", lookupEnvOrString("DISCORD_COMMAND", "mumble-discord"), "Discord command string, env alt DISCORD_COMMAND, optional, defaults to mumble-discord")
+	autoMode := flag.Bool("auto", lookupEnvOrBool("AUTO_MODE", false), "bridge starts in auto mode")
 	flag.Parse()
 	log.Printf("app.config %v\n", getConfig(flag.CommandLine))
 
@@ -86,7 +87,7 @@ func main() {
 		Config:         config,
 		MumbleAddr:     *mumbleAddr + ":" + strconv.Itoa(*mumblePort),
 		MumbleInsecure: *mumbleInsecure,
-		Auto:           false,
+		Auto:           *autoMode,
 		Command:        *discordCommand,
 		GID:            *discordGID,
 		CID:            *discordCID,
@@ -100,7 +101,10 @@ func main() {
 	userCount := make(chan int)
 	go pingMumble(*mumbleAddr, strconv.Itoa(*mumblePort), userCount)
 	go discordStatusUpdate(discord, userCount)
-
+	if *autoMode {
+		Bridge.AutoChan = make(chan bool)
+		go AutoBridge(discord)
+	}
 	sc := make(chan os.Signal, 1)
 	signal.Notify(sc, syscall.SIGINT, syscall.SIGTERM, os.Interrupt, os.Kill)
 	<-sc

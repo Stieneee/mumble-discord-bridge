@@ -68,7 +68,6 @@ func discordSendPCM(v *discordgo.VoiceConnection, pcm <-chan []int16, die chan b
 		}
 		<-ticker.C
 		if len(pcm) > 1 {
-			log.Println("looking for speech")
 			if !streaming {
 				v.Speaking(true)
 				streaming = true
