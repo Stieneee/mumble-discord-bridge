@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"strings"
 	"time"
@@ -139,6 +140,12 @@ func voiceUpdate(s *discordgo.Session, event *discordgo.VoiceStateUpdate) {
 	if event.GuildID == BridgeConf.GID {
 		if event.ChannelID == BridgeConf.CID {
 			log.Println("user joined watched discord channel")
+			u, err := s.User(event.UserID)
+			if err != nil {
+				log.Printf("error looking up user for uid %v", event.UserID)
+			} else {
+				Bridge.CurrentChannel.Send(fmt.Sprintf("%v has joined Discord channel\n", u.Username), false)
+			}
 			Bridge.DiscordUserCount = Bridge.DiscordUserCount + 1
 		}
 		if event.ChannelID == "" {

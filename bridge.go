@@ -14,6 +14,16 @@ import (
 	"layeh.com/gumble/gumble"
 )
 
+type BridgeState struct {
+	ActiveConn       chan bool
+	Connected        bool
+	Client           *gumble.Client
+	CurrentChannel   *gumble.Channel
+	MumbleUserCount  int
+	DiscordUserCount int
+	AutoChan         chan bool
+}
+
 func startBridge(discord *discordgo.Session, discordGID string, discordCID string, config *gumble.Config, mumbleAddr string, mumbleInsecure bool, die chan bool) {
 	dgv, err := discord.ChannelVoiceJoin(discordGID, discordCID, false, false)
 	if err != nil {
@@ -43,6 +53,13 @@ func startBridge(discord *discordgo.Session, discordGID string, discordCID strin
 		return
 	}
 	defer mumble.Disconnect()
+	Bridge.Client = mumble
+	if BridgeConf.MumbleChannel != "" {
+		//join specified channel
+		startingChannel := mumble.Channels.Find(BridgeConf.MumbleChannel)
+		mumble.Self.Move(startingChannel)
+		Bridge.CurrentChannel = startingChannel
+	}
 
 	// Shared Channels
 	// Shared channels pass PCM information in 10ms chunks [480]int16
@@ -97,6 +114,9 @@ func startBridge(discord *discordgo.Session, discordGID string, discordCID strin
 		close(m.Close)
 		close(toMumble)
 		Bridge.Connected = false
+		Bridge.Client = nil
+		Bridge.MumbleUserCount = 0
+		Bridge.DiscordUserCount = 0
 	}
 }
 
