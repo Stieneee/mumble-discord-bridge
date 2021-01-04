@@ -19,6 +19,7 @@ type BridgeState struct {
 	Connected        bool
 	Client           *gumble.Client
 	CurrentChannel   *gumble.Channel
+	DiscordUsers     map[string]bool
 	MumbleUserCount  int
 	DiscordUserCount int
 	AutoChan         chan bool
@@ -103,6 +104,25 @@ func startBridge(discord *discordgo.Session, discordGID string, discordCID strin
 		}
 	}()
 
+	//Setup initial discord state
+	g, err := discord.State.Guild(discordGID)
+	Bridge.DiscordUsers = make(map[string]bool)
+	if err != nil {
+		log.Println("error finding guild")
+		panic(err)
+	}
+	for _, vs := range g.VoiceStates {
+		if vs.ChannelID == discordCID {
+			Bridge.DiscordUserCount = Bridge.DiscordUserCount + 1
+			u, err := discord.User(vs.UserID)
+			if err != nil {
+				log.Println("error looking up username")
+				Bridge.DiscordUsers[u.Username] = true
+				Bridge.CurrentChannel.Send(fmt.Sprintf("%v has joined Discord channel\n", u.Username), false)
+			}
+		}
+	}
+
 	select {
 	case sig := <-c:
 		log.Printf("\nGot %s signal. Terminating Mumble-Bridge\n", sig)
@@ -117,6 +137,7 @@ func startBridge(discord *discordgo.Session, discordGID string, discordCID strin
 		Bridge.Client = nil
 		Bridge.MumbleUserCount = 0
 		Bridge.DiscordUserCount = 0
+		Bridge.DiscordUsers = nil
 	}
 }
 

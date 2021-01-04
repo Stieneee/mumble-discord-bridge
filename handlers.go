@@ -139,23 +139,18 @@ func guildCreate(s *discordgo.Session, event *discordgo.GuildCreate) {
 func voiceUpdate(s *discordgo.Session, event *discordgo.VoiceStateUpdate) {
 	if event.GuildID == BridgeConf.GID {
 		if event.ChannelID == BridgeConf.CID {
-			//check to see if this is actually a new user
-			g, err := s.State.Guild(event.GuildID)
-			if err != nil {
-				log.Println("Could not find guild while checking VoiceStateUpdate")
-				return
-			}
-			for _, vs := range g.VoiceStates {
-				if vs.UserID == event.UserID {
-					//user is already in channel (and is probably just muting/etc), ignore
-					return
-				}
-			}
-			log.Println("user joined watched discord channel")
+			//get user
 			u, err := s.User(event.UserID)
 			if err != nil {
 				log.Printf("error looking up user for uid %v", event.UserID)
-			} else if Bridge.Connected {
+			}
+			//check to see if actually new user
+			if Bridge.DiscordUsers[u.Username] {
+				//not actually new user
+				return
+			}
+			log.Println("user joined watched discord channel")
+			if Bridge.Connected {
 				Bridge.CurrentChannel.Send(fmt.Sprintf("%v has joined Discord channel\n", u.Username), false)
 			}
 			Bridge.DiscordUserCount = Bridge.DiscordUserCount + 1
@@ -177,6 +172,11 @@ func voiceUpdate(s *discordgo.Session, event *discordgo.VoiceStateUpdate) {
 				}
 			}
 			if Bridge.DiscordUserCount > count {
+				u, err := s.User(event.UserID)
+				if err != nil {
+					log.Printf("error looking up user for uid %v", event.UserID)
+				}
+				delete(Bridge.DiscordUsers, u.Username)
 				log.Println("user left watched discord channel")
 				Bridge.DiscordUserCount = count
 			}
