@@ -18,6 +18,8 @@ Usage of mumble-discord-bridge:
         DISCORD_GID, discord gid
   -discord-token string
         DISCORD_TOKEN, discord bot token
+  -discord-command string
+	DISCORD_COMMAND, the string to look for when manually entering commands in Discord (in the form of !DISCORD_COMMAND)
   -mumble-address string
         MUMBLE_ADDRESS, mumble server address, example example.com
   -mumble-password string
@@ -28,8 +30,24 @@ Usage of mumble-discord-bridge:
         MUMBLE_USERNAME, mumble username (default "discord-bridge")
   -mumble-insecure bool
         MUMBLE_INSECURE, allow connection to insecure (invalid TLS cert) mumble server
+  -mumble-channel string
+	MUMBLE_CHANNEL, pick what channel the bridge joins in Mumble. Must be a direct child of Root.
+  -auto-mode bool
+	AUTO_MODE, enables the bridge to automatically start if there's users in both Discord and Mumble
 ```
 
+The bridge can be manually controlled in Discord with the following commands:
+
+```
+!DISCORD_COMMAND link
+	Commands the bridge to join the Discord channel the user is in and the Mumble server
+!DISCORD_COMMAND unlink
+	Commands the bridge to leave the Discord channel the user is in and the Mumble server
+!DISCORD_COMMAND refresh
+	Commands the bridge to unlink, then link again.
+!DISCORD_COMMAND auto
+	Toggle AUTO_MODE
+```
 ## Setup
 
 ### Creating a Discord Bot
