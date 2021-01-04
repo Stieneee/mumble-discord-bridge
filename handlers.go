@@ -139,6 +139,18 @@ func guildCreate(s *discordgo.Session, event *discordgo.GuildCreate) {
 func voiceUpdate(s *discordgo.Session, event *discordgo.VoiceStateUpdate) {
 	if event.GuildID == BridgeConf.GID {
 		if event.ChannelID == BridgeConf.CID {
+			//check to see if this is actually a new user
+			g, err := s.State.Guild(event.GuildID)
+			if err != nil {
+				log.Println("Could not find guild while checking VoiceStateUpdate")
+				return
+			}
+			for _, vs := range g.VoiceStates {
+				if vs.UserID == event.UserID {
+					//user is already in channel (and is probably just muting/etc), ignore
+					return
+				}
+			}
 			log.Println("user joined watched discord channel")
 			u, err := s.User(event.UserID)
 			if err != nil {
