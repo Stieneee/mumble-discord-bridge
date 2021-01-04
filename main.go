@@ -26,7 +26,7 @@ func main() {
 	mumbleUsername := flag.String("mumble-username", lookupEnvOrString("MUMBLE_USERNAME", "discord-bridge"), "MUMBLE_USERNAME, mumble username")
 	mumblePassword := flag.String("mumble-password", lookupEnvOrString("MUMBLE_PASSWORD", ""), "MUMBLE_PASSWORD, mumble password, optional")
 	mumbleInsecure := flag.Bool("mumble-insecure", lookupEnvOrBool("MUMBLE_INSECURE", false), "mumble insecure,  env alt MUMBLE_INSECURE")
-
+	mumbleChannel := flag.String("mumble-channel", lookupEnvOrString("MUMBLE_CHANNEL", ""), "mumble channel to start in")
 	discordToken := flag.String("discord-token", lookupEnvOrString("DISCORD_TOKEN", ""), "DISCORD_TOKEN, discord bot token")
 	discordGID := flag.String("discord-gid", lookupEnvOrString("DISCORD_GID", ""), "DISCORD_GID, discord gid")
 	discordCID := flag.String("discord-cid", lookupEnvOrString("DISCORD_CID", ""), "DISCORD_CID, discord cid")
@@ -87,6 +87,7 @@ func main() {
 		Config:         config,
 		MumbleAddr:     *mumbleAddr + ":" + strconv.Itoa(*mumblePort),
 		MumbleInsecure: *mumbleInsecure,
+		MumbleChannel:  *mumbleChannel,
 		Auto:           *autoMode,
 		Command:        *discordCommand,
 		GID:            *discordGID,
