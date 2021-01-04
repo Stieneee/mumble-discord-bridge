@@ -100,37 +100,32 @@ func startBridge(discord *discordgo.Session, discordGID string, discordCID strin
 	}
 }
 
-func pingMumble(host, port string, c chan int) {
-	m, _ := time.ParseDuration("30s")
+func discordStatusUpdate(dg *discordgo.Session, host, port string) {
+	status := ""
 	curr := 0
+	m, _ := time.ParseDuration("30s")
 	for {
 		time.Sleep(3 * time.Second)
 		resp, err := gumble.Ping(host+":"+port, -1, m)
-		curr = resp.ConnectedUsers
-		if err != nil {
-			panic(err)
-		}
-		if Bridge.Connected {
-			curr = curr - 1
-		}
-		if curr != Bridge.MumbleUserCount {
-			Bridge.MumbleUserCount = curr
-			c <- Bridge.MumbleUserCount
-		}
-	}
-}
 
-func discordStatusUpdate(dg *discordgo.Session, c chan int) {
-	status := ""
-	curr := 0
-	for {
-		curr = <-c
-		if curr == 0 {
-			status = ""
+		if err != nil {
+			log.Printf("error pinging mumble server %v\n", err)
+			dg.UpdateListeningStatus("an error pinging mumble")
 		} else {
-			status = fmt.Sprintf("%v users in Mumble\n", curr)
+			curr = resp.ConnectedUsers
+			if Bridge.Connected {
+				curr = curr - 1
+			}
+			if curr != Bridge.MumbleUserCount {
+				Bridge.MumbleUserCount = curr
+			}
+			if curr == 0 {
+				status = ""
+			} else {
+				status = fmt.Sprintf("%v users in Mumble\n", curr)
+			}
+			dg.UpdateListeningStatus(status)
 		}
-		dg.UpdateListeningStatus(status)
 	}
 }
 

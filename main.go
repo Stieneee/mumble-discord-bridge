@@ -98,9 +98,7 @@ func main() {
 		MumbleUserCount:  0,
 		DiscordUserCount: 0,
 	}
-	userCount := make(chan int)
-	go pingMumble(*mumbleAddr, strconv.Itoa(*mumblePort), userCount)
-	go discordStatusUpdate(discord, userCount)
+	go discordStatusUpdate(discord, *mumbleAddr, strconv.Itoa(*mumblePort))
 	if *autoMode {
 		Bridge.AutoChan = make(chan bool)
 		go AutoBridge(discord)
