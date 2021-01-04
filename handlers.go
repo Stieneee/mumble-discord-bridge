@@ -143,7 +143,7 @@ func voiceUpdate(s *discordgo.Session, event *discordgo.VoiceStateUpdate) {
 			u, err := s.User(event.UserID)
 			if err != nil {
 				log.Printf("error looking up user for uid %v", event.UserID)
-			} else {
+			} else if Bridge.Connected {
 				Bridge.CurrentChannel.Send(fmt.Sprintf("%v has joined Discord channel\n", u.Username), false)
 			}
 			Bridge.DiscordUserCount = Bridge.DiscordUserCount + 1
