@@ -178,6 +178,7 @@ func voiceUpdate(s *discordgo.Session, event *discordgo.VoiceStateUpdate) {
 				}
 				delete(Bridge.DiscordUsers, u.Username)
 				log.Println("user left watched discord channel")
+				Bridge.CurrentChannel.Send(fmt.Sprintf("%v has left Discord channel\n", u.Username), false)
 				Bridge.DiscordUserCount = count
 			}
 		}
