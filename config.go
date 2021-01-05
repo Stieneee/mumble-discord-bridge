@@ -10,12 +10,20 @@ import (
 	"layeh.com/gumble/gumble"
 )
 
+type BridgeMode int
+
+const (
+	BridgeModeAuto BridgeMode = iota
+	BridgeModeManual
+	BridgeModeConstant
+)
+
 type BridgeConfig struct {
 	Config         *gumble.Config
 	MumbleAddr     string
 	MumbleInsecure bool
 	MumbleChannel  string
-	Auto           bool
+	Mode           BridgeMode
 	Command        string
 	GID            string
 	CID            string
