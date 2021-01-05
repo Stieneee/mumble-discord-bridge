@@ -154,6 +154,7 @@ func voiceUpdate(s *discordgo.Session, event *discordgo.VoiceStateUpdate) {
 				Bridge.CurrentChannel.Send(fmt.Sprintf("%v has joined Discord channel\n", u.Username), false)
 			}
 			Bridge.DiscordUserCount = Bridge.DiscordUserCount + 1
+			Bridge.DiscordUsers[u.Username] = true
 		}
 		if event.ChannelID == "" {
 			//leave event, trigger recount of active users
