@@ -31,7 +31,7 @@ func main() {
 	discordGID := flag.String("discord-gid", lookupEnvOrString("DISCORD_GID", ""), "DISCORD_GID, discord gid")
 	discordCID := flag.String("discord-cid", lookupEnvOrString("DISCORD_CID", ""), "DISCORD_CID, discord cid")
 	discordCommand := flag.String("discord-command", lookupEnvOrString("DISCORD_COMMAND", "mumble-discord"), "Discord command string, env alt DISCORD_COMMAND, optional, defaults to mumble-discord")
-	autoMode := flag.Bool("auto-mode", lookupEnvOrBool("AUTO_MODE", false), "bridge starts in auto mode")
+	mode := flag.String("mode", lookupEnvOrString("MODE", "manual"), "determine which mode the bridge starts in")
 	flag.Parse()
 	log.Printf("app.config %v\n", getConfig(flag.CommandLine))
 
@@ -50,6 +50,9 @@ func main() {
 	}
 	if *discordCID == "" {
 		log.Fatalln("missing discord cid")
+	}
+	if *mode == "" {
+		log.Fatalln("missing mode set")
 	}
 	err := syscall.Setpriority(syscall.PRIO_PROCESS, os.Getpid(), -5)
 	if err != nil {
@@ -82,6 +85,7 @@ func main() {
 
 	log.Println("Discord Bot Connected")
 	log.Printf("Discord bot looking for command !%v", *discordCommand)
+	// Mumble setup
 	config := gumble.NewConfig()
 	config.Username = *mumbleUsername
 	config.Password = *mumblePassword
@@ -92,7 +96,7 @@ func main() {
 		MumbleAddr:     *mumbleAddr + ":" + strconv.Itoa(*mumblePort),
 		MumbleInsecure: *mumbleInsecure,
 		MumbleChannel:  *mumbleChannel,
-		Auto:           *autoMode,
+		Mode:           -1,
 		Command:        *discordCommand,
 		GID:            *discordGID,
 		CID:            *discordCID,
@@ -104,11 +108,25 @@ func main() {
 		DiscordUserCount: 0,
 		DiscordUsers:     make(map[string]bool),
 	}
-	go discordStatusUpdate(discord, *mumbleAddr, strconv.Itoa(*mumblePort))
-	if *autoMode {
+	switch *mode {
+	case "auto":
+		log.Println("bridge starting in automatic mode")
 		Bridge.AutoChan = make(chan bool)
+		BridgeConf.Mode = BridgeModeAuto
 		go AutoBridge(discord)
+	case "manual":
+		log.Println("bridge starting in manual mode")
+		BridgeConf.Mode = BridgeModeManual
+	case "constant":
+		log.Println("bridge starting in constant mode")
+		BridgeConf.Mode = BridgeModeConstant
+		go startBridge(discord, *discordGID, *discordCID, config, BridgeConf.MumbleAddr, *mumbleInsecure, make(chan bool))
+	default:
+		discord.Close()
+		log.Fatalln("invalid bridge mode set")
 	}
+
+	go discordStatusUpdate(discord, *mumbleAddr, strconv.Itoa(*mumblePort))
 	sc := make(chan os.Signal, 1)
 	signal.Notify(sc, syscall.SIGINT, syscall.SIGTERM, os.Interrupt, os.Kill)
 	<-sc

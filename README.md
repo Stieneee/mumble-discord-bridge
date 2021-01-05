@@ -13,9 +13,9 @@ The binary will also attempt to load .env file located in the working directory.
 ```bash
 Usage of mumble-discord-bridge:
   -discord-cid string
-        DISCORD_CID, discord cid
+        DISCORD_CID, discord channel ID
   -discord-gid string
-        DISCORD_GID, discord gid
+        DISCORD_GID, discord guild ID
   -discord-token string
         DISCORD_TOKEN, discord bot token
   -discord-command string
@@ -32,13 +32,24 @@ Usage of mumble-discord-bridge:
         MUMBLE_INSECURE, allow connection to insecure (invalid TLS cert) mumble server
   -mumble-channel string
 	MUMBLE_CHANNEL, pick what channel the bridge joins in Mumble. Must be a direct child of Root.
-  -auto-mode bool
-	AUTO_MODE, enables the bridge to automatically start if there's users in both Discord and Mumble
+  -mode string
+	MODE, determines what mode the bridge starts in
 ```
 
-The bridge can be manually controlled in Discord with the following commands:
-
+The bridge can be run with the follow modes:
+```bash
+   auto
+       The bridge starts up but does not connect immediately. It can be either manually linked (see below) or will join the voice channels when there's at least one person on each side.
+       The bridge will leave both voice channels once there is no one on either end
+   manual
+       The bridge starts up but does not connect immediately. It will join the voice channels when issued the link command and will leave with the unlink command
+   constant
+       The bridge starts up and immediately connects to both Discord and Mumble voice channels. It can not be controlled in this mode and quits when the program is stopped
 ```
+
+In "auto" or "manual" modes, the bridge can be controlled in Discord with the following commands:
+
+```bash
 !DISCORD_COMMAND link
 	Commands the bridge to join the Discord channel the user is in and the Mumble server
 !DISCORD_COMMAND unlink
@@ -46,7 +57,7 @@ The bridge can be manually controlled in Discord with the following commands:
 !DISCORD_COMMAND refresh
 	Commands the bridge to unlink, then link again.
 !DISCORD_COMMAND auto
-	Toggle AUTO_MODE
+	Toggle between manual and auto mode
 ```
 ## Setup
 

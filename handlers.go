@@ -15,9 +15,11 @@ func ready(s *discordgo.Session, event *discordgo.Ready) {
 
 func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 
+	if BridgeConf.Mode == BridgeModeConstant {
+		return
+	}
+
 	// Ignore all messages created by the bot itself
-	// This isn't required in this specific example but it's a good practice.
-	log.Println("Checking message")
 	if m.Author.ID == s.State.User.ID {
 		return
 	}
@@ -111,13 +113,13 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 	}
 
 	if strings.HasPrefix(m.Content, prefix+" auto") {
-		if BridgeConf.Auto == false {
-			BridgeConf.Auto = true
+		if BridgeConf.Mode != BridgeModeAuto {
+			BridgeConf.Mode = BridgeModeAuto
 			Bridge.AutoChan = make(chan bool)
 			go AutoBridge(s)
 		} else {
 			Bridge.AutoChan <- true
-			BridgeConf.Auto = false
+			BridgeConf.Mode = BridgeModeManual
 		}
 	}
 }
