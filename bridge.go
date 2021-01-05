@@ -12,6 +12,7 @@ import (
 
 	"github.com/bwmarrin/discordgo"
 	"layeh.com/gumble/gumble"
+	"layeh.com/gumble/gumbleutil"
 )
 
 type BridgeState struct {
@@ -44,7 +45,9 @@ func startBridge(discord *discordgo.Session, discordGID string, discordCID strin
 	if mumbleInsecure {
 		tlsConfig.InsecureSkipVerify = true
 	}
-
+	config.Attach(gumbleutil.Listener{
+		Connect: mumbleConnect,
+	})
 	mumble, err := gumble.DialWithDialer(new(net.Dialer), mumbleAddr, config, &tlsConfig)
 
 	if err != nil {
@@ -53,13 +56,6 @@ func startBridge(discord *discordgo.Session, discordGID string, discordCID strin
 	}
 	defer mumble.Disconnect()
 	Bridge.Client = mumble
-	if BridgeConf.MumbleChannel != "" {
-		//join specified channel
-		startingChannel := mumble.Channels.Find(BridgeConf.MumbleChannel)
-		if startingChannel != nil {
-			mumble.Self.Move(startingChannel)
-		}
-	}
 	// Shared Channels
 	// Shared channels pass PCM information in 10ms chunks [480]int16
 	var toMumble = mumble.AudioOutgoing()
@@ -71,6 +67,7 @@ func startBridge(discord *discordgo.Session, discordGID string, discordCID strin
 	// Mumble
 	go m.fromMumbleMixer(toDiscord, die)
 	det := config.AudioListeners.Attach(m)
+
 	//Discord
 	go discordReceivePCM(dgv, die)
 	go fromDiscordMixer(toMumble, die)

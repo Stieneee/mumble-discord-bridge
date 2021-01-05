@@ -91,6 +91,7 @@ func main() {
 	config.Password = *mumblePassword
 	config.AudioInterval = time.Millisecond * 10
 
+	// Bridge setup
 	BridgeConf = &BridgeConfig{
 		Config:         config,
 		MumbleAddr:     *mumbleAddr + ":" + strconv.Itoa(*mumblePort),

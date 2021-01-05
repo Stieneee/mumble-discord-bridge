@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/bwmarrin/discordgo"
+	"layeh.com/gumble/gumble"
 )
 
 func ready(s *discordgo.Session, event *discordgo.Ready) {
@@ -191,4 +192,14 @@ func voiceUpdate(s *discordgo.Session, event *discordgo.VoiceStateUpdate) {
 
 	}
 	return
+}
+
+func mumbleConnect(e *gumble.ConnectEvent) {
+	if BridgeConf.MumbleChannel != "" {
+		//join specified channel
+		startingChannel := e.Client.Channels.Find(BridgeConf.MumbleChannel)
+		if startingChannel != nil {
+			e.Client.Self.Move(startingChannel)
+		}
+	}
 }
