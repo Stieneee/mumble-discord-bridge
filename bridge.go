@@ -18,7 +18,6 @@ type BridgeState struct {
 	ActiveConn       chan bool
 	Connected        bool
 	Client           *gumble.Client
-	CurrentChannel   *gumble.Channel
 	DiscordUsers     map[string]bool
 	MumbleUserCount  int
 	DiscordUserCount int
@@ -33,7 +32,6 @@ func startBridge(discord *discordgo.Session, discordGID string, discordCID strin
 	}
 	defer dgv.Speaking(false)
 	defer dgv.Close()
-	Bridge.Connected = true
 	discord.ShouldReconnectOnError = true
 
 	// MUMBLE Setup
@@ -58,10 +56,10 @@ func startBridge(discord *discordgo.Session, discordGID string, discordCID strin
 	if BridgeConf.MumbleChannel != "" {
 		//join specified channel
 		startingChannel := mumble.Channels.Find(BridgeConf.MumbleChannel)
-		mumble.Self.Move(startingChannel)
-		Bridge.CurrentChannel = startingChannel
+		if startingChannel != nil {
+			mumble.Self.Move(startingChannel)
+		}
 	}
-
 	// Shared Channels
 	// Shared channels pass PCM information in 10ms chunks [480]int16
 	var toMumble = mumble.AudioOutgoing()
@@ -106,7 +104,6 @@ func startBridge(discord *discordgo.Session, discordGID string, discordCID strin
 
 	//Setup initial discord state
 	g, err := discord.State.Guild(discordGID)
-	Bridge.DiscordUsers = make(map[string]bool)
 	if err != nil {
 		log.Println("error finding guild")
 		panic(err)
@@ -118,10 +115,11 @@ func startBridge(discord *discordgo.Session, discordGID string, discordCID strin
 			if err != nil {
 				log.Println("error looking up username")
 				Bridge.DiscordUsers[u.Username] = true
-				Bridge.CurrentChannel.Send(fmt.Sprintf("%v has joined Discord channel\n", u.Username), false)
+				Bridge.Client.Self.Channel.Send(fmt.Sprintf("%v has joined Discord channel\n", u.Username), false)
 			}
 		}
 	}
+	Bridge.Connected = true
 
 	select {
 	case sig := <-c:
@@ -137,7 +135,7 @@ func startBridge(discord *discordgo.Session, discordGID string, discordCID strin
 		Bridge.Client = nil
 		Bridge.MumbleUserCount = 0
 		Bridge.DiscordUserCount = 0
-		Bridge.DiscordUsers = nil
+		Bridge.DiscordUsers = make(map[string]bool)
 	}
 }
 

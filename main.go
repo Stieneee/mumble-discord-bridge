@@ -51,6 +51,10 @@ func main() {
 	if *discordCID == "" {
 		log.Fatalln("missing discord cid")
 	}
+	err := syscall.Setpriority(syscall.PRIO_PROCESS, os.Getpid(), -5)
+	if err != nil {
+		log.Println("Unable to set priority. ", err)
+	}
 
 	// DISCORD Setup
 
@@ -98,6 +102,7 @@ func main() {
 		Connected:        false,
 		MumbleUserCount:  0,
 		DiscordUserCount: 0,
+		DiscordUsers:     make(map[string]bool),
 	}
 	go discordStatusUpdate(discord, *mumbleAddr, strconv.Itoa(*mumblePort))
 	if *autoMode {

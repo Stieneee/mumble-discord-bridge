@@ -151,9 +151,10 @@ func voiceUpdate(s *discordgo.Session, event *discordgo.VoiceStateUpdate) {
 			}
 			log.Println("user joined watched discord channel")
 			if Bridge.Connected {
-				Bridge.CurrentChannel.Send(fmt.Sprintf("%v has joined Discord channel\n", u.Username), false)
-				Bridge.DiscordUsers[u.Username] = true
+				Bridge.Client.Self.Channel.Send(fmt.Sprintf("%v has joined Discord channel\n", u.Username), false)
 			}
+			Bridge.DiscordUsers[u.Username] = true
+			log.Println(Bridge.DiscordUsers)
 			Bridge.DiscordUserCount = Bridge.DiscordUserCount + 1
 		}
 		if event.ChannelID == "" {
@@ -179,7 +180,9 @@ func voiceUpdate(s *discordgo.Session, event *discordgo.VoiceStateUpdate) {
 				}
 				delete(Bridge.DiscordUsers, u.Username)
 				log.Println("user left watched discord channel")
-				Bridge.CurrentChannel.Send(fmt.Sprintf("%v has left Discord channel\n", u.Username), false)
+				if Bridge.Connected {
+					Bridge.Client.Self.Channel.Send(fmt.Sprintf("%v has left Discord channel\n", u.Username), false)
+				}
 				Bridge.DiscordUserCount = count
 			}
 		}
