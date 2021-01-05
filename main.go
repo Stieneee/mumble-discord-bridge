@@ -31,7 +31,7 @@ func main() {
 	discordGID := flag.String("discord-gid", lookupEnvOrString("DISCORD_GID", ""), "DISCORD_GID, discord gid")
 	discordCID := flag.String("discord-cid", lookupEnvOrString("DISCORD_CID", ""), "DISCORD_CID, discord cid")
 	discordCommand := flag.String("discord-command", lookupEnvOrString("DISCORD_COMMAND", "mumble-discord"), "Discord command string, env alt DISCORD_COMMAND, optional, defaults to mumble-discord")
-	autoMode := flag.Bool("auto", lookupEnvOrBool("AUTO_MODE", false), "bridge starts in auto mode")
+	autoMode := flag.Bool("auto-mode", lookupEnvOrBool("AUTO_MODE", false), "bridge starts in auto mode")
 	flag.Parse()
 	log.Printf("app.config %v\n", getConfig(flag.CommandLine))
 
