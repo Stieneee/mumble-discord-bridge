@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"syscall"
 	"time"
 
 	"github.com/bwmarrin/discordgo"
@@ -88,6 +89,12 @@ func main() {
 		log.Fatalln("missing discord cid")
 	}
 
+	// Attempt to set the nice value of the process
+	err := syscall.Setpriority(syscall.PRIO_PROCESS, os.Getpid(), -5)
+	if err != nil {
+		log.Println("Unable to set priority. ", err)
+	}
+
 	// DISCORD Setup
 
 	discord, err := discordgo.New("Bot " + *discordToken)
@@ -131,7 +138,7 @@ func main() {
 		tlsConfig.InsecureSkipVerify = true
 	}
 
-	mumble, err := gumble.DialWithDialer(new(net.Dialer),*mumbleAddr+":"+strconv.Itoa(*mumblePort),config, &tlsConfig)
+	mumble, err := gumble.DialWithDialer(new(net.Dialer), *mumbleAddr+":"+strconv.Itoa(*mumblePort), config, &tlsConfig)
 
 	if err != nil {
 		log.Println(err)
