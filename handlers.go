@@ -10,6 +10,11 @@ import (
 	"layeh.com/gumble/gumble"
 )
 
+type Listener struct {
+	BridgeConf *BridgeConfig
+	Bridge     *BridgeState
+}
+
 func ready(s *discordgo.Session, event *discordgo.Ready) {
 	log.Println("READY event registered")
 }
@@ -47,7 +52,7 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 				log.Printf("Trying to join GID %v and VID %v\n", g.ID, vs.ChannelID)
 				die := make(chan bool)
 				Bridge.ActiveConn = die
-				go startBridge(s, g.ID, vs.ChannelID, BridgeConf.Config, BridgeConf.MumbleAddr, BridgeConf.MumbleInsecure, die)
+				//go startBridge(s, g.ID, vs.ChannelID, BridgeConf.Config, BridgeConf.MumbleAddr, BridgeConf.MumbleInsecure, die)
 				return
 			}
 		}
@@ -107,7 +112,7 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 				DiscordReset()
 				time.Sleep(5 * time.Second)
 				Bridge.ActiveConn = make(chan bool)
-				go startBridge(s, g.ID, vs.ChannelID, BridgeConf.Config, BridgeConf.MumbleAddr, BridgeConf.MumbleInsecure, Bridge.ActiveConn)
+				//go startBridge(s, g.ID, vs.ChannelID, BridgeConf.Config, BridgeConf.MumbleAddr, BridgeConf.MumbleInsecure, Bridge.ActiveConn)
 				return
 			}
 		}
@@ -117,7 +122,7 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 		if BridgeConf.Mode != BridgeModeAuto {
 			BridgeConf.Mode = BridgeModeAuto
 			Bridge.AutoChan = make(chan bool)
-			go AutoBridge(s)
+			//go AutoBridge(s)
 		} else {
 			Bridge.AutoChan <- true
 			BridgeConf.Mode = BridgeModeManual
@@ -198,8 +203,8 @@ func voiceUpdate(s *discordgo.Session, event *discordgo.VoiceStateUpdate) {
 	return
 }
 
-func mumbleConnect(e *gumble.ConnectEvent) {
-	if BridgeConf.MumbleChannel != "" {
+func (l *Listener) mumbleConnect(e *gumble.ConnectEvent) {
+	if l.BridgeConf.MumbleChannel != "" {
 		//join specified channel
 		startingChannel := e.Client.Channels.Find(BridgeConf.MumbleChannel)
 		if startingChannel != nil {
@@ -208,15 +213,15 @@ func mumbleConnect(e *gumble.ConnectEvent) {
 	}
 }
 
-func mumbleUserChange(e *gumble.UserChangeEvent) {
+func (l *Listener) mumbleUserChange(e *gumble.UserChangeEvent) {
 	if e.Type.Has(gumble.UserChangeConnected) || e.Type.Has(gumble.UserChangeChannel) || e.Type.Has(gumble.UserChangeDisconnected) {
 		Bridge.MumbleUsers = make(map[string]bool)
-		for _, user := range Bridge.Client.Self.Channel.Users {
+		for _, user := range l.Bridge.Client.Self.Channel.Users {
 			//note, this might be too slow for really really big channels?
 			//event listeners block while processing
 			//also probably bad to rebuild the set every user change.
-			if user.Name != Bridge.Client.Self.Name {
-				Bridge.MumbleUsers[user.Name] = true
+			if user.Name != l.Bridge.Client.Self.Name {
+				l.Bridge.MumbleUsers[user.Name] = true
 			}
 		}
 	}

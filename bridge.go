@@ -26,7 +26,7 @@ type BridgeState struct {
 	AutoChan         chan bool
 }
 
-func startBridge(discord *discordgo.Session, discordGID string, discordCID string, config *gumble.Config, mumbleAddr string, mumbleInsecure bool, die chan bool) {
+func startBridge(discord *discordgo.Session, discordGID string, discordCID string, l *Listener, die chan bool) {
 	dgv, err := discord.ChannelVoiceJoin(discordGID, discordCID, false, false)
 	if err != nil {
 		log.Println(err)
@@ -43,14 +43,14 @@ func startBridge(discord *discordgo.Session, discordGID string, discordCID strin
 	}
 
 	var tlsConfig tls.Config
-	if mumbleInsecure {
+	if l.BridgeConf.MumbleInsecure {
 		tlsConfig.InsecureSkipVerify = true
 	}
-	config.Attach(gumbleutil.Listener{
-		Connect:    mumbleConnect,
-		UserChange: mumbleUserChange,
+	l.BridgeConf.Config.Attach(gumbleutil.Listener{
+		Connect:    l.mumbleConnect,
+		UserChange: l.mumbleUserChange,
 	})
-	mumble, err := gumble.DialWithDialer(new(net.Dialer), mumbleAddr, config, &tlsConfig)
+	mumble, err := gumble.DialWithDialer(new(net.Dialer), l.BridgeConf.MumbleAddr, l.BridgeConf.Config, &tlsConfig)
 
 	if err != nil {
 		log.Println(err)
@@ -68,7 +68,7 @@ func startBridge(discord *discordgo.Session, discordGID string, discordCID strin
 	// Start Passing Between
 	// Mumble
 	go m.fromMumbleMixer(toDiscord, die)
-	det := config.AudioListeners.Attach(m)
+	det := l.BridgeConf.Config.AudioListeners.Attach(m)
 
 	//Discord
 	go discordReceivePCM(dgv, die)
@@ -173,7 +173,7 @@ func discordStatusUpdate(dg *discordgo.Session, host, port string) {
 	}
 }
 
-func AutoBridge(s *discordgo.Session) {
+func AutoBridge(s *discordgo.Session, l *Listener) {
 	log.Println("beginning auto mode")
 	for {
 		select {
@@ -187,7 +187,7 @@ func AutoBridge(s *discordgo.Session) {
 			log.Println("users detected in mumble and discord, bridging")
 			die := make(chan bool)
 			Bridge.ActiveConn = die
-			go startBridge(s, BridgeConf.GID, BridgeConf.CID, BridgeConf.Config, BridgeConf.MumbleAddr, BridgeConf.MumbleInsecure, die)
+			go startBridge(s, BridgeConf.GID, BridgeConf.CID, l, die)
 		}
 		if Bridge.Connected && Bridge.MumbleUserCount == 0 && Bridge.DiscordUserCount <= 1 {
 			log.Println("no one online, killing bridge")
