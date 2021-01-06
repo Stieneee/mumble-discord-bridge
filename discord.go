@@ -183,6 +183,8 @@ func discordReceivePCM(v *discordgo.VoiceConnection, die chan bool) {
 		case fromDiscordMap[p.SSRC].pcm <- p.PCM[0:480]:
 		default:
 			log.Println("fromDiscordMap buffer full. Dropping packet")
+			discordMutex.Unlock()
+			continue
 		}
 		select {
 		case fromDiscordMap[p.SSRC].pcm <- p.PCM[480:960]:

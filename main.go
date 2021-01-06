@@ -54,10 +54,10 @@ func main() {
 	if *mode == "" {
 		log.Fatalln("missing mode set")
 	}
-	err := syscall.Setpriority(syscall.PRIO_PROCESS, os.Getpid(), -5)
-	if err != nil {
-		log.Println("Unable to set priority. ", err)
-	}
+	//err := syscall.Setpriority(syscall.PRIO_PROCESS, os.Getpid(), -5)
+	//if err != nil {
+	//	log.Println("Unable to set priority. ", err)
+	//}
 
 	// DISCORD Setup
 
