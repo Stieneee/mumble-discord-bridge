@@ -109,19 +109,20 @@ func main() {
 		DiscordUserCount: 0,
 		DiscordUsers:     make(map[string]bool),
 	}
+	l := &Listener{BridgeConf, Bridge}
 	switch *mode {
 	case "auto":
 		log.Println("bridge starting in automatic mode")
 		Bridge.AutoChan = make(chan bool)
 		BridgeConf.Mode = BridgeModeAuto
-		go AutoBridge(discord)
+		//go AutoBridge(discord,l)
 	case "manual":
 		log.Println("bridge starting in manual mode")
 		BridgeConf.Mode = BridgeModeManual
 	case "constant":
 		log.Println("bridge starting in constant mode")
 		BridgeConf.Mode = BridgeModeConstant
-		go startBridge(discord, *discordGID, *discordCID, config, BridgeConf.MumbleAddr, *mumbleInsecure, make(chan bool))
+		go startBridge(discord, *discordGID, *discordCID, l, make(chan bool))
 	default:
 		discord.Close()
 		log.Fatalln("invalid bridge mode set")
