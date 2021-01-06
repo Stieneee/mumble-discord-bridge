@@ -57,7 +57,7 @@ func startBridge(discord *discordgo.Session, discordGID string, discordCID strin
 		return
 	}
 	defer mumble.Disconnect()
-	Bridge.Client = mumble
+	l.Bridge.Client = mumble
 	// Shared Channels
 	// Shared channels pass PCM information in 10ms chunks [480]int16
 	var toMumble = mumble.AudioOutgoing()
@@ -109,18 +109,18 @@ func startBridge(discord *discordgo.Session, discordGID string, discordCID strin
 	}
 	for _, vs := range g.VoiceStates {
 		if vs.ChannelID == discordCID {
-			Bridge.DiscordUserCount = Bridge.DiscordUserCount + 1
+			l.Bridge.DiscordUserCount = l.Bridge.DiscordUserCount + 1
 			u, err := discord.User(vs.UserID)
 			if err != nil {
 				log.Println("error looking up username")
-				Bridge.DiscordUsers[u.Username] = true
-				Bridge.Client.Do(func() {
-					Bridge.Client.Self.Channel.Send(fmt.Sprintf("%v has joined Discord channel\n", u.Username), false)
+				l.Bridge.DiscordUsers[u.Username] = true
+				l.Bridge.Client.Do(func() {
+					l.Bridge.Client.Self.Channel.Send(fmt.Sprintf("%v has joined Discord channel\n", u.Username), false)
 				})
 			}
 		}
 	}
-	Bridge.Connected = true
+	l.Bridge.Connected = true
 
 	select {
 	case sig := <-c:
@@ -132,15 +132,16 @@ func startBridge(discord *discordgo.Session, discordGID string, discordCID strin
 		close(die)
 		close(m.Close)
 		close(toMumble)
-		Bridge.Connected = false
-		Bridge.Client = nil
-		Bridge.MumbleUserCount = 0
-		Bridge.DiscordUserCount = 0
-		Bridge.DiscordUsers = make(map[string]bool)
+		l.Bridge.Connected = false
+		l.Bridge.Client = nil
+		l.Bridge.MumbleUserCount = 0
+		l.Bridge.MumbleUsers = make(map[string]bool)
+		l.Bridge.DiscordUserCount = 0
+		l.Bridge.DiscordUsers = make(map[string]bool)
 	}
 }
 
-func discordStatusUpdate(dg *discordgo.Session, host, port string) {
+func discordStatusUpdate(dg *discordgo.Session, host, port string, l *Listener) {
 	status := ""
 	curr := 0
 	m, _ := time.ParseDuration("30s")
@@ -153,17 +154,17 @@ func discordStatusUpdate(dg *discordgo.Session, host, port string) {
 			dg.UpdateListeningStatus("an error pinging mumble")
 		} else {
 			curr = resp.ConnectedUsers
-			if Bridge.Connected {
+			if l.Bridge.Connected {
 				curr = curr - 1
 			}
-			if curr != Bridge.MumbleUserCount {
-				Bridge.MumbleUserCount = curr
+			if curr != l.Bridge.MumbleUserCount {
+				l.Bridge.MumbleUserCount = curr
 			}
 			if curr == 0 {
 				status = ""
 			} else {
-				if len(Bridge.MumbleUsers) > 0 {
-					status = fmt.Sprintf("%v/%v users in Mumble\n", len(Bridge.MumbleUsers), curr)
+				if len(l.Bridge.MumbleUsers) > 0 {
+					status = fmt.Sprintf("%v/%v users in Mumble\n", len(l.Bridge.MumbleUsers), curr)
 				} else {
 					status = fmt.Sprintf("%v users in Mumble\n", curr)
 				}
@@ -178,20 +179,20 @@ func AutoBridge(s *discordgo.Session, l *Listener) {
 	for {
 		select {
 		default:
-		case <-Bridge.AutoChan:
+		case <-l.Bridge.AutoChan:
 			log.Println("ending automode")
 			return
 		}
 		time.Sleep(3 * time.Second)
-		if !Bridge.Connected && Bridge.MumbleUserCount > 0 && Bridge.DiscordUserCount > 0 {
+		if !l.Bridge.Connected && l.Bridge.MumbleUserCount > 0 && l.Bridge.DiscordUserCount > 0 {
 			log.Println("users detected in mumble and discord, bridging")
 			die := make(chan bool)
-			Bridge.ActiveConn = die
-			go startBridge(s, BridgeConf.GID, BridgeConf.CID, l, die)
+			l.Bridge.ActiveConn = die
+			go startBridge(s, l.BridgeConf.GID, l.BridgeConf.CID, l, die)
 		}
-		if Bridge.Connected && Bridge.MumbleUserCount == 0 && Bridge.DiscordUserCount <= 1 {
+		if l.Bridge.Connected && l.Bridge.MumbleUserCount == 0 && l.Bridge.DiscordUserCount <= 1 {
 			log.Println("no one online, killing bridge")
-			Bridge.ActiveConn <- true
+			l.Bridge.ActiveConn <- true
 			MumbleReset()
 			DiscordReset()
 		}

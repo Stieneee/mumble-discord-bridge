@@ -15,9 +15,6 @@ import (
 	_ "layeh.com/gumble/opus"
 )
 
-var BridgeConf *BridgeConfig
-var Bridge *BridgeState
-
 func main() {
 	godotenv.Load()
 
@@ -73,7 +70,7 @@ func main() {
 	config.AudioInterval = time.Millisecond * 10
 
 	// Bridge setup
-	BridgeConf = &BridgeConfig{
+	BridgeConf := &BridgeConfig{
 		Config:         config,
 		MumbleAddr:     *mumbleAddr + ":" + strconv.Itoa(*mumblePort),
 		MumbleInsecure: *mumbleInsecure,
@@ -83,7 +80,7 @@ func main() {
 		GID:            *discordGID,
 		CID:            *discordCID,
 	}
-	Bridge = &BridgeState{
+	Bridge := &BridgeState{
 		ActiveConn:       make(chan bool),
 		Connected:        false,
 		MumbleUserCount:  0,
@@ -130,7 +127,7 @@ func main() {
 		log.Fatalln("invalid bridge mode set")
 	}
 
-	go discordStatusUpdate(discord, *mumbleAddr, strconv.Itoa(*mumblePort))
+	go discordStatusUpdate(discord, *mumbleAddr, strconv.Itoa(*mumblePort), l)
 	sc := make(chan os.Signal, 1)
 	signal.Notify(sc, syscall.SIGINT, syscall.SIGTERM, os.Interrupt, os.Kill)
 	<-sc
