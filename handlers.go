@@ -15,13 +15,13 @@ type Listener struct {
 	Bridge     *BridgeState
 }
 
-func ready(s *discordgo.Session, event *discordgo.Ready) {
+func (l *Listener) ready(s *discordgo.Session, event *discordgo.Ready) {
 	log.Println("READY event registered")
 }
 
-func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
+func (l *Listener) messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 
-	if BridgeConf.Mode == BridgeModeConstant {
+	if l.BridgeConf.Mode == BridgeModeConstant {
 		return
 	}
 
@@ -29,7 +29,7 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 	if m.Author.ID == s.State.User.ID {
 		return
 	}
-	prefix := "!" + BridgeConf.Command
+	prefix := "!" + l.BridgeConf.Command
 	if strings.HasPrefix(m.Content, prefix+" link") {
 
 		// Find the channel that the message came from.
@@ -51,8 +51,8 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 			if vs.UserID == m.Author.ID {
 				log.Printf("Trying to join GID %v and VID %v\n", g.ID, vs.ChannelID)
 				die := make(chan bool)
-				Bridge.ActiveConn = die
-				//go startBridge(s, g.ID, vs.ChannelID, BridgeConf.Config, BridgeConf.MumbleAddr, BridgeConf.MumbleInsecure, die)
+				l.Bridge.ActiveConn = die
+				go startBridge(s, g.ID, vs.ChannelID, l, die)
 				return
 			}
 		}
@@ -78,8 +78,8 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 		for _, vs := range g.VoiceStates {
 			if vs.UserID == m.Author.ID {
 				log.Printf("Trying to leave GID %v and VID %v\n", g.ID, vs.ChannelID)
-				Bridge.ActiveConn <- true
-				Bridge.ActiveConn = nil
+				l.Bridge.ActiveConn <- true
+				l.Bridge.ActiveConn = nil
 				MumbleReset()
 				DiscordReset()
 				return
@@ -107,30 +107,30 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 		for _, vs := range g.VoiceStates {
 			if vs.UserID == m.Author.ID {
 				log.Printf("Trying to refresh GID %v and VID %v\n", g.ID, vs.ChannelID)
-				Bridge.ActiveConn <- true
+				l.Bridge.ActiveConn <- true
 				MumbleReset()
 				DiscordReset()
 				time.Sleep(5 * time.Second)
-				Bridge.ActiveConn = make(chan bool)
-				//go startBridge(s, g.ID, vs.ChannelID, BridgeConf.Config, BridgeConf.MumbleAddr, BridgeConf.MumbleInsecure, Bridge.ActiveConn)
+				l.Bridge.ActiveConn = make(chan bool)
+				go startBridge(s, g.ID, vs.ChannelID, l, l.Bridge.ActiveConn)
 				return
 			}
 		}
 	}
 
 	if strings.HasPrefix(m.Content, prefix+" auto") {
-		if BridgeConf.Mode != BridgeModeAuto {
-			BridgeConf.Mode = BridgeModeAuto
-			Bridge.AutoChan = make(chan bool)
-			//go AutoBridge(s)
+		if l.BridgeConf.Mode != BridgeModeAuto {
+			l.BridgeConf.Mode = BridgeModeAuto
+			l.Bridge.AutoChan = make(chan bool)
+			go AutoBridge(s, l)
 		} else {
-			Bridge.AutoChan <- true
-			BridgeConf.Mode = BridgeModeManual
+			l.Bridge.AutoChan <- true
+			l.BridgeConf.Mode = BridgeModeManual
 		}
 	}
 }
 
-func guildCreate(s *discordgo.Session, event *discordgo.GuildCreate) {
+func (l *Listener) guildCreate(s *discordgo.Session, event *discordgo.GuildCreate) {
 
 	if event.Guild.Unavailable {
 		return
@@ -144,7 +144,7 @@ func guildCreate(s *discordgo.Session, event *discordgo.GuildCreate) {
 	}
 }
 
-func voiceUpdate(s *discordgo.Session, event *discordgo.VoiceStateUpdate) {
+func (l *Listener) voiceUpdate(s *discordgo.Session, event *discordgo.VoiceStateUpdate) {
 	if event.GuildID == BridgeConf.GID {
 		if event.ChannelID == BridgeConf.CID {
 			//get user
