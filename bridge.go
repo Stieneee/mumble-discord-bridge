@@ -12,6 +12,7 @@ import (
 
 	"github.com/bwmarrin/discordgo"
 	"layeh.com/gumble/gumble"
+	"layeh.com/gumble/gumbleutil"
 )
 
 type BridgeState struct {
@@ -19,6 +20,7 @@ type BridgeState struct {
 	Connected        bool
 	Client           *gumble.Client
 	DiscordUsers     map[string]bool
+	MumbleUsers      map[string]bool
 	MumbleUserCount  int
 	DiscordUserCount int
 	AutoChan         chan bool
@@ -44,7 +46,10 @@ func startBridge(discord *discordgo.Session, discordGID string, discordCID strin
 	if mumbleInsecure {
 		tlsConfig.InsecureSkipVerify = true
 	}
-
+	config.Attach(gumbleutil.Listener{
+		Connect:    mumbleConnect,
+		UserChange: mumbleUserChange,
+	})
 	mumble, err := gumble.DialWithDialer(new(net.Dialer), mumbleAddr, config, &tlsConfig)
 
 	if err != nil {
@@ -53,13 +58,6 @@ func startBridge(discord *discordgo.Session, discordGID string, discordCID strin
 	}
 	defer mumble.Disconnect()
 	Bridge.Client = mumble
-	if BridgeConf.MumbleChannel != "" {
-		//join specified channel
-		startingChannel := mumble.Channels.Find(BridgeConf.MumbleChannel)
-		if startingChannel != nil {
-			mumble.Self.Move(startingChannel)
-		}
-	}
 	// Shared Channels
 	// Shared channels pass PCM information in 10ms chunks [480]int16
 	var toMumble = mumble.AudioOutgoing()
@@ -71,6 +69,7 @@ func startBridge(discord *discordgo.Session, discordGID string, discordCID strin
 	// Mumble
 	go m.fromMumbleMixer(toDiscord, die)
 	det := config.AudioListeners.Attach(m)
+
 	//Discord
 	go discordReceivePCM(dgv, die)
 	go fromDiscordMixer(toMumble, die)
@@ -115,7 +114,9 @@ func startBridge(discord *discordgo.Session, discordGID string, discordCID strin
 			if err != nil {
 				log.Println("error looking up username")
 				Bridge.DiscordUsers[u.Username] = true
-				Bridge.Client.Self.Channel.Send(fmt.Sprintf("%v has joined Discord channel\n", u.Username), false)
+				Bridge.Client.Do(func() {
+					Bridge.Client.Self.Channel.Send(fmt.Sprintf("%v has joined Discord channel\n", u.Username), false)
+				})
 			}
 		}
 	}
@@ -161,7 +162,11 @@ func discordStatusUpdate(dg *discordgo.Session, host, port string) {
 			if curr == 0 {
 				status = ""
 			} else {
-				status = fmt.Sprintf("%v users in Mumble\n", curr)
+				if len(Bridge.MumbleUsers) > 0 {
+					status = fmt.Sprintf("%v/%v users in Mumble\n", len(Bridge.MumbleUsers), curr)
+				} else {
+					status = fmt.Sprintf("%v users in Mumble\n", curr)
+				}
 			}
 			dg.UpdateListeningStatus(status)
 		}

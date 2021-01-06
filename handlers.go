@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/bwmarrin/discordgo"
+	"layeh.com/gumble/gumble"
 )
 
 func ready(s *discordgo.Session, event *discordgo.Ready) {
@@ -153,7 +154,9 @@ func voiceUpdate(s *discordgo.Session, event *discordgo.VoiceStateUpdate) {
 			}
 			log.Println("user joined watched discord channel")
 			if Bridge.Connected {
-				Bridge.Client.Self.Channel.Send(fmt.Sprintf("%v has joined Discord channel\n", u.Username), false)
+				Bridge.Client.Do(func() {
+					Bridge.Client.Self.Channel.Send(fmt.Sprintf("%v has joined Discord channel\n", u.Username), false)
+				})
 			}
 			Bridge.DiscordUsers[u.Username] = true
 			log.Println(Bridge.DiscordUsers)
@@ -183,7 +186,9 @@ func voiceUpdate(s *discordgo.Session, event *discordgo.VoiceStateUpdate) {
 				delete(Bridge.DiscordUsers, u.Username)
 				log.Println("user left watched discord channel")
 				if Bridge.Connected {
-					Bridge.Client.Self.Channel.Send(fmt.Sprintf("%v has left Discord channel\n", u.Username), false)
+					Bridge.Client.Do(func() {
+						Bridge.Client.Self.Channel.Send(fmt.Sprintf("%v has left Discord channel\n", u.Username), false)
+					})
 				}
 				Bridge.DiscordUserCount = count
 			}
@@ -191,4 +196,28 @@ func voiceUpdate(s *discordgo.Session, event *discordgo.VoiceStateUpdate) {
 
 	}
 	return
+}
+
+func mumbleConnect(e *gumble.ConnectEvent) {
+	if BridgeConf.MumbleChannel != "" {
+		//join specified channel
+		startingChannel := e.Client.Channels.Find(BridgeConf.MumbleChannel)
+		if startingChannel != nil {
+			e.Client.Self.Move(startingChannel)
+		}
+	}
+}
+
+func mumbleUserChange(e *gumble.UserChangeEvent) {
+	if e.Type.Has(gumble.UserChangeConnected) || e.Type.Has(gumble.UserChangeChannel) || e.Type.Has(gumble.UserChangeDisconnected) {
+		Bridge.MumbleUsers = make(map[string]bool)
+		for _, user := range Bridge.Client.Self.Channel.Users {
+			//note, this might be too slow for really really big channels?
+			//event listeners block while processing
+			//also probably bad to rebuild the set every user change.
+			if user.Name != Bridge.Client.Self.Name {
+				Bridge.MumbleUsers[user.Name] = true
+			}
+		}
+	}
 }
