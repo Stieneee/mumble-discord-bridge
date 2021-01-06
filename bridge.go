@@ -113,11 +113,12 @@ func startBridge(discord *discordgo.Session, discordGID string, discordCID strin
 			u, err := discord.User(vs.UserID)
 			if err != nil {
 				log.Println("error looking up username")
-				Bridge.DiscordUsers[u.Username] = true
-				Bridge.Client.Do(func() {
-					Bridge.Client.Self.Channel.Send(fmt.Sprintf("%v has joined Discord channel\n", u.Username), false)
-				})
+				continue
 			}
+			Bridge.DiscordUsers[u.Username] = true
+			Bridge.Client.Do(func() {
+				Bridge.Client.Self.Channel.Send(fmt.Sprintf("%v has joined Discord channel\n", u.Username), false)
+			})
 		}
 	}
 	Bridge.Connected = true
