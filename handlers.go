@@ -203,3 +203,17 @@ func mumbleConnect(e *gumble.ConnectEvent) {
 		}
 	}
 }
+
+func mumbleUserChange(e *gumble.UserChangeEvent) {
+	if e.Type.Has(gumble.UserChangeConnected) || e.Type.Has(gumble.UserChangeChannel) || e.Type.Has(gumble.UserChangeDisconnected) {
+		Bridge.MumbleUsers = make(map[string]bool)
+		for _, user := range Bridge.Client.Self.Channel.Users {
+			//note, this might be too slow for really really big channels?
+			//event listeners block while processing
+			//also probably bad to rebuild the set every user change.
+			if user.Name != Bridge.Client.Self.Name {
+				Bridge.MumbleUsers[user.Name] = true
+			}
+		}
+	}
+}

@@ -20,6 +20,7 @@ type BridgeState struct {
 	Connected        bool
 	Client           *gumble.Client
 	DiscordUsers     map[string]bool
+	MumbleUsers      map[string]bool
 	MumbleUserCount  int
 	DiscordUserCount int
 	AutoChan         chan bool
@@ -46,7 +47,8 @@ func startBridge(discord *discordgo.Session, discordGID string, discordCID strin
 		tlsConfig.InsecureSkipVerify = true
 	}
 	config.Attach(gumbleutil.Listener{
-		Connect: mumbleConnect,
+		Connect:    mumbleConnect,
+		UserChange: mumbleUserChange,
 	})
 	mumble, err := gumble.DialWithDialer(new(net.Dialer), mumbleAddr, config, &tlsConfig)
 
@@ -158,7 +160,11 @@ func discordStatusUpdate(dg *discordgo.Session, host, port string) {
 			if curr == 0 {
 				status = ""
 			} else {
-				status = fmt.Sprintf("%v users in Mumble\n", curr)
+				if len(Bridge.MumbleUsers) > 0 {
+					status = fmt.Sprintf("%v/%v users in Mumble\n", len(Bridge.MumbleUsers), curr)
+				} else {
+					status = fmt.Sprintf("%v users in Mumble\n", curr)
+				}
 			}
 			dg.UpdateListeningStatus(status)
 		}
