@@ -59,32 +59,13 @@ func main() {
 		log.Println("Unable to set priority. ", err)
 	}
 
-	// DISCORD Setup
-
+	//Connect to discord
 	discord, err := discordgo.New("Bot " + *discordToken)
 	if err != nil {
 		log.Println(err)
 		return
 	}
 
-	// Open Websocket
-	discord.LogLevel = 2
-	discord.StateEnabled = true
-	discord.Identify.Intents = discordgo.MakeIntent(discordgo.IntentsAllWithoutPrivileged)
-	// register handlers
-	discord.AddHandler(ready)
-	discord.AddHandler(messageCreate)
-	discord.AddHandler(guildCreate)
-	discord.AddHandler(voiceUpdate)
-	err = discord.Open()
-	if err != nil {
-		log.Println(err)
-		return
-	}
-	defer discord.Close()
-
-	log.Println("Discord Bot Connected")
-	log.Printf("Discord bot looking for command !%v", *discordCommand)
 	// Mumble setup
 	config := gumble.NewConfig()
 	config.Username = *mumbleUsername
@@ -110,12 +91,33 @@ func main() {
 		DiscordUsers:     make(map[string]bool),
 	}
 	l := &Listener{BridgeConf, Bridge}
+
+	// Discord setup
+	// Open Websocket
+	discord.LogLevel = 2
+	discord.StateEnabled = true
+	discord.Identify.Intents = discordgo.MakeIntent(discordgo.IntentsAllWithoutPrivileged)
+	// register handlers
+	discord.AddHandler(l.ready)
+	discord.AddHandler(l.messageCreate)
+	discord.AddHandler(l.guildCreate)
+	discord.AddHandler(l.voiceUpdate)
+	err = discord.Open()
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	defer discord.Close()
+
+	log.Println("Discord Bot Connected")
+	log.Printf("Discord bot looking for command !%v", *discordCommand)
+
 	switch *mode {
 	case "auto":
 		log.Println("bridge starting in automatic mode")
 		Bridge.AutoChan = make(chan bool)
 		BridgeConf.Mode = BridgeModeAuto
-		//go AutoBridge(discord,l)
+		go AutoBridge(discord, l)
 	case "manual":
 		log.Println("bridge starting in manual mode")
 		BridgeConf.Mode = BridgeModeManual
