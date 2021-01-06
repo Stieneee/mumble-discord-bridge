@@ -159,7 +159,6 @@ func voiceUpdate(s *discordgo.Session, event *discordgo.VoiceStateUpdate) {
 				})
 			}
 			Bridge.DiscordUsers[u.Username] = true
-			log.Println(Bridge.DiscordUsers)
 			Bridge.DiscordUserCount = Bridge.DiscordUserCount + 1
 		}
 		if event.ChannelID == "" {
