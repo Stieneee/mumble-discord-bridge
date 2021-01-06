@@ -145,26 +145,26 @@ func (l *Listener) guildCreate(s *discordgo.Session, event *discordgo.GuildCreat
 }
 
 func (l *Listener) voiceUpdate(s *discordgo.Session, event *discordgo.VoiceStateUpdate) {
-	if event.GuildID == BridgeConf.GID {
-		if event.ChannelID == BridgeConf.CID {
+	if event.GuildID == l.BridgeConf.GID {
+		if event.ChannelID == l.BridgeConf.CID {
 			//get user
 			u, err := s.User(event.UserID)
 			if err != nil {
 				log.Printf("error looking up user for uid %v", event.UserID)
 			}
 			//check to see if actually new user
-			if Bridge.DiscordUsers[u.Username] {
+			if l.Bridge.DiscordUsers[u.Username] {
 				//not actually new user
 				return
 			}
 			log.Println("user joined watched discord channel")
-			if Bridge.Connected {
-				Bridge.Client.Do(func() {
-					Bridge.Client.Self.Channel.Send(fmt.Sprintf("%v has joined Discord channel\n", u.Username), false)
+			if l.Bridge.Connected {
+				l.Bridge.Client.Do(func() {
+					l.Bridge.Client.Self.Channel.Send(fmt.Sprintf("%v has joined Discord channel\n", u.Username), false)
 				})
 			}
-			Bridge.DiscordUsers[u.Username] = true
-			Bridge.DiscordUserCount = Bridge.DiscordUserCount + 1
+			l.Bridge.DiscordUsers[u.Username] = true
+			l.Bridge.DiscordUserCount = l.Bridge.DiscordUserCount + 1
 		}
 		if event.ChannelID == "" {
 			//leave event, trigger recount of active users
@@ -178,23 +178,23 @@ func (l *Listener) voiceUpdate(s *discordgo.Session, event *discordgo.VoiceState
 			// Look for current voice states in watched channel
 			count := 0
 			for _, vs := range g.VoiceStates {
-				if vs.ChannelID == BridgeConf.CID {
+				if vs.ChannelID == l.BridgeConf.CID {
 					count = count + 1
 				}
 			}
-			if Bridge.DiscordUserCount > count {
+			if l.Bridge.DiscordUserCount > count {
 				u, err := s.User(event.UserID)
 				if err != nil {
 					log.Printf("error looking up user for uid %v", event.UserID)
 				}
-				delete(Bridge.DiscordUsers, u.Username)
+				delete(l.Bridge.DiscordUsers, u.Username)
 				log.Println("user left watched discord channel")
-				if Bridge.Connected {
-					Bridge.Client.Do(func() {
-						Bridge.Client.Self.Channel.Send(fmt.Sprintf("%v has left Discord channel\n", u.Username), false)
+				if l.Bridge.Connected {
+					l.Bridge.Client.Do(func() {
+						l.Bridge.Client.Self.Channel.Send(fmt.Sprintf("%v has left Discord channel\n", u.Username), false)
 					})
 				}
-				Bridge.DiscordUserCount = count
+				l.Bridge.DiscordUserCount = count
 			}
 		}
 
@@ -205,7 +205,7 @@ func (l *Listener) voiceUpdate(s *discordgo.Session, event *discordgo.VoiceState
 func (l *Listener) mumbleConnect(e *gumble.ConnectEvent) {
 	if l.BridgeConf.MumbleChannel != "" {
 		//join specified channel
-		startingChannel := e.Client.Channels.Find(BridgeConf.MumbleChannel)
+		startingChannel := e.Client.Channels.Find(l.BridgeConf.MumbleChannel)
 		if startingChannel != nil {
 			e.Client.Self.Move(startingChannel)
 		}
@@ -214,7 +214,7 @@ func (l *Listener) mumbleConnect(e *gumble.ConnectEvent) {
 
 func (l *Listener) mumbleUserChange(e *gumble.UserChangeEvent) {
 	if e.Type.Has(gumble.UserChangeConnected) || e.Type.Has(gumble.UserChangeChannel) || e.Type.Has(gumble.UserChangeDisconnected) {
-		Bridge.MumbleUsers = make(map[string]bool)
+		l.Bridge.MumbleUsers = make(map[string]bool)
 		for _, user := range l.Bridge.Client.Self.Channel.Users {
 			//note, this might be too slow for really really big channels?
 			//event listeners block while processing
