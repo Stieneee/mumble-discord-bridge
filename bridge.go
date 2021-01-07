@@ -12,12 +12,12 @@ import (
 
 	"github.com/bwmarrin/discordgo"
 	"layeh.com/gumble/gumble"
-	"layeh.com/gumble/gumbleutil"
 )
 
 type BridgeState struct {
 	ActiveConn       chan bool
 	Connected        bool
+	Mode             BridgeMode
 	Client           *gumble.Client
 	DiscordUsers     map[string]bool
 	MumbleUsers      map[string]bool
@@ -46,10 +46,7 @@ func startBridge(discord *discordgo.Session, discordGID string, discordCID strin
 	if l.BridgeConf.MumbleInsecure {
 		tlsConfig.InsecureSkipVerify = true
 	}
-	l.BridgeConf.Config.Attach(gumbleutil.Listener{
-		Connect:    l.mumbleConnect,
-		UserChange: l.mumbleUserChange,
-	})
+
 	mumble, err := gumble.DialWithDialer(new(net.Dialer), l.BridgeConf.MumbleAddr, l.BridgeConf.Config, &tlsConfig)
 
 	if err != nil {
@@ -100,8 +97,9 @@ func startBridge(discord *discordgo.Session, discordGID string, discordCID strin
 			}
 		}
 	}()
-
+	l.ConnectedLock.Lock()
 	l.Bridge.Connected = true
+	l.ConnectedLock.Unlock()
 
 	select {
 	case sig := <-c:
@@ -134,6 +132,8 @@ func discordStatusUpdate(dg *discordgo.Session, host, port string, l *Listener) 
 			log.Printf("error pinging mumble server %v\n", err)
 			dg.UpdateListeningStatus("an error pinging mumble")
 		} else {
+			l.UserCountLock.Lock()
+			l.ConnectedLock.Lock()
 			curr = resp.ConnectedUsers
 			if l.Bridge.Connected {
 				curr = curr - 1
@@ -150,6 +150,8 @@ func discordStatusUpdate(dg *discordgo.Session, host, port string, l *Listener) 
 					status = fmt.Sprintf("%v users in Mumble\n", curr)
 				}
 			}
+			l.ConnectedLock.Unlock()
+			l.UserCountLock.Unlock()
 			dg.UpdateListeningStatus(status)
 		}
 	}
@@ -165,6 +167,7 @@ func AutoBridge(s *discordgo.Session, l *Listener) {
 			return
 		}
 		time.Sleep(3 * time.Second)
+		l.UserCountLock.Lock()
 		if !l.Bridge.Connected && l.Bridge.MumbleUserCount > 0 && l.Bridge.DiscordUserCount > 0 {
 			log.Println("users detected in mumble and discord, bridging")
 			die := make(chan bool)
@@ -177,5 +180,6 @@ func AutoBridge(s *discordgo.Session, l *Listener) {
 			MumbleReset()
 			DiscordReset()
 		}
+		l.UserCountLock.Unlock()
 	}
 }

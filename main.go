@@ -6,12 +6,14 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/joho/godotenv"
 	"layeh.com/gumble/gumble"
+	"layeh.com/gumble/gumbleutil"
 	_ "layeh.com/gumble/opus"
 )
 
@@ -75,7 +77,6 @@ func main() {
 		MumbleAddr:     *mumbleAddr + ":" + strconv.Itoa(*mumblePort),
 		MumbleInsecure: *mumbleInsecure,
 		MumbleChannel:  *mumbleChannel,
-		Mode:           -1,
 		Command:        *discordCommand,
 		GID:            *discordGID,
 		CID:            *discordCID,
@@ -86,8 +87,11 @@ func main() {
 		MumbleUserCount:  0,
 		DiscordUserCount: 0,
 		DiscordUsers:     make(map[string]bool),
+		MumbleUsers:      make(map[string]bool),
 	}
-	l := &Listener{BridgeConf, Bridge}
+	ul := &sync.Mutex{}
+	cl := &sync.Mutex{}
+	l := &Listener{BridgeConf, Bridge, ul, cl}
 
 	// Discord setup
 	// Open Websocket
@@ -100,6 +104,10 @@ func main() {
 	discord.AddHandler(l.guildCreate)
 	discord.AddHandler(l.voiceUpdate)
 	err = discord.Open()
+	l.BridgeConf.Config.Attach(gumbleutil.Listener{
+		Connect:    l.mumbleConnect,
+		UserChange: l.mumbleUserChange,
+	})
 	if err != nil {
 		log.Println(err)
 		return
@@ -113,14 +121,14 @@ func main() {
 	case "auto":
 		log.Println("bridge starting in automatic mode")
 		Bridge.AutoChan = make(chan bool)
-		BridgeConf.Mode = BridgeModeAuto
+		Bridge.Mode = BridgeModeAuto
 		go AutoBridge(discord, l)
 	case "manual":
 		log.Println("bridge starting in manual mode")
-		BridgeConf.Mode = BridgeModeManual
+		Bridge.Mode = BridgeModeManual
 	case "constant":
 		log.Println("bridge starting in constant mode")
-		BridgeConf.Mode = BridgeModeConstant
+		Bridge.Mode = BridgeModeConstant
 		go startBridge(discord, *discordGID, *discordCID, l, make(chan bool))
 	default:
 		discord.Close()
