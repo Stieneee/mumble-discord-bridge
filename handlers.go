@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/bwmarrin/discordgo"
@@ -11,17 +12,43 @@ import (
 )
 
 type Listener struct {
-	BridgeConf *BridgeConfig
-	Bridge     *BridgeState
+	BridgeConf    *BridgeConfig
+	Bridge        *BridgeState
+	UserCountLock *sync.Mutex
+	ConnectedLock *sync.Mutex
 }
 
 func (l *Listener) ready(s *discordgo.Session, event *discordgo.Ready) {
 	log.Println("READY event registered")
+	//Setup initial discord state
+	var g *discordgo.Guild
+	for _, i := range event.Guilds {
+		if i.ID == l.BridgeConf.GID {
+			g = i
+		}
+	}
+	for _, vs := range g.VoiceStates {
+		if vs.ChannelID == l.BridgeConf.CID {
+			l.UserCountLock.Lock()
+			l.Bridge.DiscordUserCount = l.Bridge.DiscordUserCount + 1
+			u, err := s.User(vs.UserID)
+			if err != nil {
+				log.Println("error looking up username")
+			}
+			l.Bridge.DiscordUsers[u.Username] = true
+			if l.Bridge.Connected {
+				l.Bridge.Client.Do(func() {
+					l.Bridge.Client.Self.Channel.Send(fmt.Sprintf("%v has joined Discord channel\n", u.Username), false)
+				})
+			}
+			l.UserCountLock.Unlock()
+		}
+	}
 }
 
 func (l *Listener) messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 
-	if l.BridgeConf.Mode == BridgeModeConstant {
+	if l.Bridge.Mode == BridgeModeConstant {
 		return
 	}
 
@@ -119,13 +146,13 @@ func (l *Listener) messageCreate(s *discordgo.Session, m *discordgo.MessageCreat
 	}
 
 	if strings.HasPrefix(m.Content, prefix+" auto") {
-		if l.BridgeConf.Mode != BridgeModeAuto {
-			l.BridgeConf.Mode = BridgeModeAuto
+		if l.Bridge.Mode != BridgeModeAuto {
+			l.Bridge.Mode = BridgeModeAuto
 			l.Bridge.AutoChan = make(chan bool)
 			go AutoBridge(s, l)
 		} else {
 			l.Bridge.AutoChan <- true
-			l.BridgeConf.Mode = BridgeModeManual
+			l.Bridge.Mode = BridgeModeManual
 		}
 	}
 }
@@ -145,6 +172,7 @@ func (l *Listener) guildCreate(s *discordgo.Session, event *discordgo.GuildCreat
 }
 
 func (l *Listener) voiceUpdate(s *discordgo.Session, event *discordgo.VoiceStateUpdate) {
+	l.UserCountLock.Lock()
 	if event.GuildID == l.BridgeConf.GID {
 		if event.ChannelID == l.BridgeConf.CID {
 			//get user
@@ -155,17 +183,21 @@ func (l *Listener) voiceUpdate(s *discordgo.Session, event *discordgo.VoiceState
 			//check to see if actually new user
 			if l.Bridge.DiscordUsers[u.Username] {
 				//not actually new user
+				l.UserCountLock.Unlock()
 				return
 			}
 			log.Println("user joined watched discord channel")
+			l.ConnectedLock.Lock()
 			if l.Bridge.Connected {
 				l.Bridge.Client.Do(func() {
 					l.Bridge.Client.Self.Channel.Send(fmt.Sprintf("%v has joined Discord channel\n", u.Username), false)
 				})
 			}
+			l.ConnectedLock.Unlock()
 			l.Bridge.DiscordUsers[u.Username] = true
 			log.Println(l.Bridge.DiscordUsers)
 			l.Bridge.DiscordUserCount = l.Bridge.DiscordUserCount + 1
+			l.UserCountLock.Unlock()
 		}
 		if event.ChannelID == "" {
 			//leave event, trigger recount of active users
@@ -173,6 +205,7 @@ func (l *Listener) voiceUpdate(s *discordgo.Session, event *discordgo.VoiceState
 			g, err := s.State.Guild(event.GuildID)
 			if err != nil {
 				// Could not find guild.
+				l.UserCountLock.Unlock()
 				return
 			}
 
@@ -190,12 +223,15 @@ func (l *Listener) voiceUpdate(s *discordgo.Session, event *discordgo.VoiceState
 				}
 				delete(l.Bridge.DiscordUsers, u.Username)
 				log.Println("user left watched discord channel")
+				l.ConnectedLock.Lock()
 				if l.Bridge.Connected {
 					l.Bridge.Client.Do(func() {
 						l.Bridge.Client.Self.Channel.Send(fmt.Sprintf("%v has left Discord channel\n", u.Username), false)
 					})
 				}
+				l.ConnectedLock.Unlock()
 				l.Bridge.DiscordUserCount = count
+				l.UserCountLock.Unlock()
 			}
 		}
 
@@ -214,6 +250,7 @@ func (l *Listener) mumbleConnect(e *gumble.ConnectEvent) {
 }
 
 func (l *Listener) mumbleUserChange(e *gumble.UserChangeEvent) {
+	l.UserCountLock.Lock()
 	if e.Type.Has(gumble.UserChangeConnected) || e.Type.Has(gumble.UserChangeChannel) || e.Type.Has(gumble.UserChangeDisconnected) {
 		l.Bridge.MumbleUsers = make(map[string]bool)
 		for _, user := range l.Bridge.Client.Self.Channel.Users {
@@ -225,4 +262,5 @@ func (l *Listener) mumbleUserChange(e *gumble.UserChangeEvent) {
 			}
 		}
 	}
+	l.UserCountLock.Unlock()
 }
