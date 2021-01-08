@@ -14,10 +14,11 @@ import (
 	"layeh.com/gumble/gumble"
 )
 
+//BridgeState manages dynamic information about the bridge during runtime
 type BridgeState struct {
 	ActiveConn       chan bool
 	Connected        bool
-	Mode             BridgeMode
+	Mode             bridgeMode
 	Client           *gumble.Client
 	DiscordUsers     map[string]bool
 	MumbleUsers      map[string]bool
@@ -157,6 +158,9 @@ func discordStatusUpdate(dg *discordgo.Session, host, port string, l *Listener) 
 	}
 }
 
+//AutoBridge starts a goroutine to check the number of users in discord and mumble
+//when there is at least one user on both, starts up the bridge
+//when there are no users on either side, kills the bridge
 func AutoBridge(s *discordgo.Session, l *Listener) {
 	log.Println("beginning auto mode")
 	for {
@@ -177,8 +181,7 @@ func AutoBridge(s *discordgo.Session, l *Listener) {
 		if l.Bridge.Connected && l.Bridge.MumbleUserCount == 0 && l.Bridge.DiscordUserCount <= 1 {
 			log.Println("no one online, killing bridge")
 			l.Bridge.ActiveConn <- true
-			MumbleReset()
-			DiscordReset()
+			l.Bridge.ActiveConn = nil
 		}
 		l.UserCountLock.Unlock()
 	}

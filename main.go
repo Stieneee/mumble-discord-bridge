@@ -121,14 +121,14 @@ func main() {
 	case "auto":
 		log.Println("bridge starting in automatic mode")
 		Bridge.AutoChan = make(chan bool)
-		Bridge.Mode = BridgeModeAuto
+		Bridge.Mode = bridgeModeAuto
 		go AutoBridge(discord, l)
 	case "manual":
 		log.Println("bridge starting in manual mode")
-		Bridge.Mode = BridgeModeManual
+		Bridge.Mode = bridgeModeManual
 	case "constant":
 		log.Println("bridge starting in constant mode")
-		Bridge.Mode = BridgeModeConstant
+		Bridge.Mode = bridgeModeConstant
 		go startBridge(discord, *discordGID, *discordCID, l, make(chan bool))
 	default:
 		discord.Close()

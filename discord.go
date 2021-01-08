@@ -22,10 +22,6 @@ var discordMutex sync.Mutex
 var discordMixerMutex sync.Mutex
 var fromDiscordMap = make(map[uint32]fromDiscord)
 
-func DiscordReset() {
-	fromDiscordMap = make(map[uint32]fromDiscord)
-}
-
 // OnError gets called by dgvoice when an error is encountered.
 // By default logs to STDERR
 var OnError = func(str string, err error) {

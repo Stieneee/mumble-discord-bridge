@@ -11,6 +11,8 @@ import (
 	"layeh.com/gumble/gumble"
 )
 
+//Listener holds references to the current BridgeConf
+//and BridgeState for use by the event handlers
 type Listener struct {
 	BridgeConf    *BridgeConfig
 	Bridge        *BridgeState
@@ -22,10 +24,15 @@ func (l *Listener) ready(s *discordgo.Session, event *discordgo.Ready) {
 	log.Println("READY event registered")
 	//Setup initial discord state
 	var g *discordgo.Guild
+	g = nil
 	for _, i := range event.Guilds {
 		if i.ID == l.BridgeConf.GID {
 			g = i
 		}
+	}
+	if g == nil {
+		log.Println("bad guild on READY")
+		return
 	}
 	for _, vs := range g.VoiceStates {
 		if vs.ChannelID == l.BridgeConf.CID {
@@ -48,7 +55,7 @@ func (l *Listener) ready(s *discordgo.Session, event *discordgo.Ready) {
 
 func (l *Listener) messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 
-	if l.Bridge.Mode == BridgeModeConstant {
+	if l.Bridge.Mode == bridgeModeConstant {
 		return
 	}
 
@@ -56,23 +63,21 @@ func (l *Listener) messageCreate(s *discordgo.Session, m *discordgo.MessageCreat
 	if m.Author.ID == s.State.User.ID {
 		return
 	}
+	// Find the channel that the message came from.
+	c, err := s.State.Channel(m.ChannelID)
+	if err != nil {
+		// Could not find channel.
+		return
+	}
+
+	// Find the guild for that channel.
+	g, err := s.State.Guild(c.GuildID)
+	if err != nil {
+		// Could not find guild.
+		return
+	}
 	prefix := "!" + l.BridgeConf.Command
 	if strings.HasPrefix(m.Content, prefix+" link") {
-
-		// Find the channel that the message came from.
-		c, err := s.State.Channel(m.ChannelID)
-		if err != nil {
-			// Could not find channel.
-			return
-		}
-
-		// Find the guild for that channel.
-		g, err := s.State.Guild(c.GuildID)
-		if err != nil {
-			// Could not find guild.
-			return
-		}
-
 		// Look for the message sender in that guild's current voice states.
 		for _, vs := range g.VoiceStates {
 			if vs.UserID == m.Author.ID {
@@ -86,57 +91,23 @@ func (l *Listener) messageCreate(s *discordgo.Session, m *discordgo.MessageCreat
 	}
 
 	if strings.HasPrefix(m.Content, prefix+" unlink") {
-
-		// Find the channel that the message came from.
-		c, err := s.State.Channel(m.ChannelID)
-		if err != nil {
-			// Could not find channel.
-			return
-		}
-
-		// Find the guild for that channel.
-		g, err := s.State.Guild(c.GuildID)
-		if err != nil {
-			// Could not find guild.
-			return
-		}
-
 		// Look for the message sender in that guild's current voice states.
 		for _, vs := range g.VoiceStates {
 			if vs.UserID == m.Author.ID {
 				log.Printf("Trying to leave GID %v and VID %v\n", g.ID, vs.ChannelID)
 				l.Bridge.ActiveConn <- true
 				l.Bridge.ActiveConn = nil
-				MumbleReset()
-				DiscordReset()
 				return
 			}
 		}
 	}
 
 	if strings.HasPrefix(m.Content, prefix+" refresh") {
-
-		// Find the channel that the message came from.
-		c, err := s.State.Channel(m.ChannelID)
-		if err != nil {
-			// Could not find channel.
-			return
-		}
-
-		// Find the guild for that channel.
-		g, err := s.State.Guild(c.GuildID)
-		if err != nil {
-			// Could not find guild.
-			return
-		}
-
 		// Look for the message sender in that guild's current voice states.
 		for _, vs := range g.VoiceStates {
 			if vs.UserID == m.Author.ID {
 				log.Printf("Trying to refresh GID %v and VID %v\n", g.ID, vs.ChannelID)
 				l.Bridge.ActiveConn <- true
-				MumbleReset()
-				DiscordReset()
 				time.Sleep(5 * time.Second)
 				l.Bridge.ActiveConn = make(chan bool)
 				go startBridge(s, g.ID, vs.ChannelID, l, l.Bridge.ActiveConn)
@@ -146,13 +117,13 @@ func (l *Listener) messageCreate(s *discordgo.Session, m *discordgo.MessageCreat
 	}
 
 	if strings.HasPrefix(m.Content, prefix+" auto") {
-		if l.Bridge.Mode != BridgeModeAuto {
-			l.Bridge.Mode = BridgeModeAuto
+		if l.Bridge.Mode != bridgeModeAuto {
+			l.Bridge.Mode = bridgeModeAuto
 			l.Bridge.AutoChan = make(chan bool)
 			go AutoBridge(s, l)
 		} else {
 			l.Bridge.AutoChan <- true
-			l.Bridge.Mode = BridgeModeManual
+			l.Bridge.Mode = bridgeModeManual
 		}
 	}
 }
