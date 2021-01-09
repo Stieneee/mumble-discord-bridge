@@ -18,6 +18,13 @@ import (
 	_ "layeh.com/gumble/opus"
 )
 
+var (
+	// Build vars
+	version string
+	commit  string
+	date    string
+)
+
 func lookupEnvOrString(key string, defaultVal string) string {
 	if val, ok := os.LookupEnv(key); ok {
 		return val
@@ -57,6 +64,9 @@ func getConfig(fs *flag.FlagSet) []string {
 }
 
 func main() {
+	log.Println("Mumble-Discord-Bridge")
+	log.Println("v" + version + " " + commit + " " + date)
+
 	godotenv.Load()
 
 	mumbleAddr := flag.String("mumble-address", lookupEnvOrString("MUMBLE_ADDRESS", ""), "MUMBLE_ADDRESS, mumble server address, example example.com")
@@ -89,10 +99,12 @@ func main() {
 		log.Fatalln("missing discord cid")
 	}
 
-	// Attempt to set the nice value of the process
+	// Attempt to set Process Priority
+	// This is allowed to fail
+
 	err := syscall.Setpriority(syscall.PRIO_PROCESS, os.Getpid(), -5)
 	if err != nil {
-		log.Println("Unable to set priority. ", err)
+		log.Println("Unable to set process priority. ", err)
 	}
 
 	// DISCORD Setup
@@ -104,7 +116,7 @@ func main() {
 	}
 
 	// Open Websocket
-	discord.LogLevel = 2
+	discord.LogLevel = 1
 	err = discord.Open()
 	if err != nil {
 		log.Println(err)
