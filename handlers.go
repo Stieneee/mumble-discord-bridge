@@ -201,8 +201,8 @@ func (l *Listener) voiceUpdate(s *discordgo.Session, event *discordgo.VoiceState
 				}
 				l.ConnectedLock.Unlock()
 				l.Bridge.DiscordUserCount = count
-				l.UserCountLock.Unlock()
 			}
+			l.UserCountLock.Unlock()
 		}
 
 	}
