@@ -12,12 +12,13 @@ import (
 
 	"github.com/bwmarrin/discordgo"
 	"layeh.com/gumble/gumble"
-	"layeh.com/gumble/gumbleutil"
 )
 
+//BridgeState manages dynamic information about the bridge during runtime
 type BridgeState struct {
 	ActiveConn       chan bool
 	Connected        bool
+	Mode             bridgeMode
 	Client           *gumble.Client
 	DiscordUsers     map[string]bool
 	MumbleUsers      map[string]bool
@@ -26,7 +27,7 @@ type BridgeState struct {
 	AutoChan         chan bool
 }
 
-func startBridge(discord *discordgo.Session, discordGID string, discordCID string, config *gumble.Config, mumbleAddr string, mumbleInsecure bool, die chan bool) {
+func startBridge(discord *discordgo.Session, discordGID string, discordCID string, l *Listener, die chan bool) {
 	dgv, err := discord.ChannelVoiceJoin(discordGID, discordCID, false, false)
 	if err != nil {
 		log.Println(err)
@@ -43,21 +44,18 @@ func startBridge(discord *discordgo.Session, discordGID string, discordCID strin
 	}
 
 	var tlsConfig tls.Config
-	if mumbleInsecure {
+	if l.BridgeConf.MumbleInsecure {
 		tlsConfig.InsecureSkipVerify = true
 	}
-	config.Attach(gumbleutil.Listener{
-		Connect:    mumbleConnect,
-		UserChange: mumbleUserChange,
-	})
-	mumble, err := gumble.DialWithDialer(new(net.Dialer), mumbleAddr, config, &tlsConfig)
+
+	mumble, err := gumble.DialWithDialer(new(net.Dialer), l.BridgeConf.MumbleAddr, l.BridgeConf.Config, &tlsConfig)
 
 	if err != nil {
 		log.Println(err)
 		return
 	}
 	defer mumble.Disconnect()
-	Bridge.Client = mumble
+	l.Bridge.Client = mumble
 	// Shared Channels
 	// Shared channels pass PCM information in 10ms chunks [480]int16
 	var toMumble = mumble.AudioOutgoing()
@@ -68,7 +66,7 @@ func startBridge(discord *discordgo.Session, discordGID string, discordCID strin
 	// Start Passing Between
 	// Mumble
 	go m.fromMumbleMixer(toDiscord, die)
-	det := config.AudioListeners.Attach(m)
+	det := l.BridgeConf.Config.AudioListeners.Attach(m)
 
 	//Discord
 	go discordReceivePCM(dgv, die)
@@ -100,28 +98,9 @@ func startBridge(discord *discordgo.Session, discordGID string, discordCID strin
 			}
 		}
 	}()
-
-	//Setup initial discord state
-	g, err := discord.State.Guild(discordGID)
-	if err != nil {
-		log.Println("error finding guild")
-		panic(err)
-	}
-	for _, vs := range g.VoiceStates {
-		if vs.ChannelID == discordCID {
-			Bridge.DiscordUserCount = Bridge.DiscordUserCount + 1
-			u, err := discord.User(vs.UserID)
-			if err != nil {
-				log.Println("error looking up username")
-				continue
-			}
-			Bridge.DiscordUsers[u.Username] = true
-			Bridge.Client.Do(func() {
-				Bridge.Client.Self.Channel.Send(fmt.Sprintf("%v has joined Discord channel\n", u.Username), false)
-			})
-		}
-	}
-	Bridge.Connected = true
+	l.ConnectedLock.Lock()
+	l.Bridge.Connected = true
+	l.ConnectedLock.Unlock()
 
 	select {
 	case sig := <-c:
@@ -133,15 +112,16 @@ func startBridge(discord *discordgo.Session, discordGID string, discordCID strin
 		close(die)
 		close(m.Close)
 		close(toMumble)
-		Bridge.Connected = false
-		Bridge.Client = nil
-		Bridge.MumbleUserCount = 0
-		Bridge.DiscordUserCount = 0
-		Bridge.DiscordUsers = make(map[string]bool)
+		l.Bridge.Connected = false
+		l.Bridge.Client = nil
+		l.Bridge.MumbleUserCount = 0
+		l.Bridge.MumbleUsers = make(map[string]bool)
+		l.Bridge.DiscordUserCount = 0
+		l.Bridge.DiscordUsers = make(map[string]bool)
 	}
 }
 
-func discordStatusUpdate(dg *discordgo.Session, host, port string) {
+func discordStatusUpdate(dg *discordgo.Session, host, port string, l *Listener) {
 	status := ""
 	curr := 0
 	m, _ := time.ParseDuration("30s")
@@ -153,48 +133,56 @@ func discordStatusUpdate(dg *discordgo.Session, host, port string) {
 			log.Printf("error pinging mumble server %v\n", err)
 			dg.UpdateListeningStatus("an error pinging mumble")
 		} else {
+			l.UserCountLock.Lock()
+			l.ConnectedLock.Lock()
 			curr = resp.ConnectedUsers
-			if Bridge.Connected {
+			if l.Bridge.Connected {
 				curr = curr - 1
 			}
-			if curr != Bridge.MumbleUserCount {
-				Bridge.MumbleUserCount = curr
+			if curr != l.Bridge.MumbleUserCount {
+				l.Bridge.MumbleUserCount = curr
 			}
 			if curr == 0 {
 				status = ""
 			} else {
-				if len(Bridge.MumbleUsers) > 0 {
-					status = fmt.Sprintf("%v/%v users in Mumble\n", len(Bridge.MumbleUsers), curr)
+				if len(l.Bridge.MumbleUsers) > 0 {
+					status = fmt.Sprintf("%v/%v users in Mumble\n", len(l.Bridge.MumbleUsers), curr)
 				} else {
 					status = fmt.Sprintf("%v users in Mumble\n", curr)
 				}
 			}
+			l.ConnectedLock.Unlock()
+			l.UserCountLock.Unlock()
 			dg.UpdateListeningStatus(status)
 		}
 	}
 }
 
-func AutoBridge(s *discordgo.Session) {
+//AutoBridge starts a goroutine to check the number of users in discord and mumble
+//when there is at least one user on both, starts up the bridge
+//when there are no users on either side, kills the bridge
+func AutoBridge(s *discordgo.Session, l *Listener) {
 	log.Println("beginning auto mode")
 	for {
 		select {
 		default:
-		case <-Bridge.AutoChan:
+		case <-l.Bridge.AutoChan:
 			log.Println("ending automode")
 			return
 		}
 		time.Sleep(3 * time.Second)
-		if !Bridge.Connected && Bridge.MumbleUserCount > 0 && Bridge.DiscordUserCount > 0 {
+		l.UserCountLock.Lock()
+		if !l.Bridge.Connected && l.Bridge.MumbleUserCount > 0 && l.Bridge.DiscordUserCount > 0 {
 			log.Println("users detected in mumble and discord, bridging")
 			die := make(chan bool)
-			Bridge.ActiveConn = die
-			go startBridge(s, BridgeConf.GID, BridgeConf.CID, BridgeConf.Config, BridgeConf.MumbleAddr, BridgeConf.MumbleInsecure, die)
+			l.Bridge.ActiveConn = die
+			go startBridge(s, l.BridgeConf.GID, l.BridgeConf.CID, l, die)
 		}
-		if Bridge.Connected && Bridge.MumbleUserCount == 0 && Bridge.DiscordUserCount <= 1 {
+		if l.Bridge.Connected && l.Bridge.MumbleUserCount == 0 && l.Bridge.DiscordUserCount <= 1 {
 			log.Println("no one online, killing bridge")
-			Bridge.ActiveConn <- true
-			MumbleReset()
-			DiscordReset()
+			l.Bridge.ActiveConn <- true
+			l.Bridge.ActiveConn = nil
 		}
+		l.UserCountLock.Unlock()
 	}
 }

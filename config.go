@@ -10,20 +10,21 @@ import (
 	"layeh.com/gumble/gumble"
 )
 
-type BridgeMode int
+type bridgeMode int
 
 const (
-	BridgeModeAuto BridgeMode = iota
-	BridgeModeManual
-	BridgeModeConstant
+	bridgeModeAuto bridgeMode = iota
+	bridgeModeManual
+	bridgeModeConstant
 )
 
+//BridgeConfig holds configuration information set at startup
+//It should not change during runtime
 type BridgeConfig struct {
 	Config         *gumble.Config
 	MumbleAddr     string
 	MumbleInsecure bool
 	MumbleChannel  string
-	Mode           BridgeMode
 	Command        string
 	GID            string
 	CID            string

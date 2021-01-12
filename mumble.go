@@ -18,11 +18,6 @@ type MumbleDuplex struct {
 	Close chan bool
 }
 
-func MumbleReset() {
-	fromMumbleArr = []chan gumble.AudioBuffer{}
-	mumbleStreamingArr = []bool{}
-}
-
 // OnAudioStream - Spawn routines to handle incoming packets
 func (m MumbleDuplex) OnAudioStream(e *gumble.AudioStreamEvent) {
 

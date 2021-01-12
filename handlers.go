@@ -4,19 +4,58 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/bwmarrin/discordgo"
 	"layeh.com/gumble/gumble"
 )
 
-func ready(s *discordgo.Session, event *discordgo.Ready) {
-	log.Println("READY event registered")
+//Listener holds references to the current BridgeConf
+//and BridgeState for use by the event handlers
+type Listener struct {
+	BridgeConf    *BridgeConfig
+	Bridge        *BridgeState
+	UserCountLock *sync.Mutex
+	ConnectedLock *sync.Mutex
 }
 
-func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
+func (l *Listener) ready(s *discordgo.Session, event *discordgo.Ready) {
+	log.Println("READY event registered")
+	//Setup initial discord state
+	var g *discordgo.Guild
+	g = nil
+	for _, i := range event.Guilds {
+		if i.ID == l.BridgeConf.GID {
+			g = i
+		}
+	}
+	if g == nil {
+		log.Println("bad guild on READY")
+		return
+	}
+	for _, vs := range g.VoiceStates {
+		if vs.ChannelID == l.BridgeConf.CID {
+			l.UserCountLock.Lock()
+			l.Bridge.DiscordUserCount = l.Bridge.DiscordUserCount + 1
+			u, err := s.User(vs.UserID)
+			if err != nil {
+				log.Println("error looking up username")
+			}
+			l.Bridge.DiscordUsers[u.Username] = true
+			if l.Bridge.Connected {
+				l.Bridge.Client.Do(func() {
+					l.Bridge.Client.Self.Channel.Send(fmt.Sprintf("%v has joined Discord channel\n", u.Username), false)
+				})
+			}
+			l.UserCountLock.Unlock()
+		}
+	}
+}
 
-	if BridgeConf.Mode == BridgeModeConstant {
+func (l *Listener) messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
+
+	if l.Bridge.Mode == bridgeModeConstant {
 		return
 	}
 
@@ -24,108 +63,72 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 	if m.Author.ID == s.State.User.ID {
 		return
 	}
-	prefix := "!" + BridgeConf.Command
+	// Find the channel that the message came from.
+	c, err := s.State.Channel(m.ChannelID)
+	if err != nil {
+		// Could not find channel.
+		return
+	}
+
+	// Find the guild for that channel.
+	g, err := s.State.Guild(c.GuildID)
+	if err != nil {
+		// Could not find guild.
+		return
+	}
+	prefix := "!" + l.BridgeConf.Command
 	if strings.HasPrefix(m.Content, prefix+" link") {
-
-		// Find the channel that the message came from.
-		c, err := s.State.Channel(m.ChannelID)
-		if err != nil {
-			// Could not find channel.
-			return
-		}
-
-		// Find the guild for that channel.
-		g, err := s.State.Guild(c.GuildID)
-		if err != nil {
-			// Could not find guild.
-			return
-		}
-
 		// Look for the message sender in that guild's current voice states.
 		for _, vs := range g.VoiceStates {
 			if vs.UserID == m.Author.ID {
 				log.Printf("Trying to join GID %v and VID %v\n", g.ID, vs.ChannelID)
 				die := make(chan bool)
-				Bridge.ActiveConn = die
-				go startBridge(s, g.ID, vs.ChannelID, BridgeConf.Config, BridgeConf.MumbleAddr, BridgeConf.MumbleInsecure, die)
+				l.Bridge.ActiveConn = die
+				go startBridge(s, g.ID, vs.ChannelID, l, die)
 				return
 			}
 		}
 	}
 
 	if strings.HasPrefix(m.Content, prefix+" unlink") {
-
-		// Find the channel that the message came from.
-		c, err := s.State.Channel(m.ChannelID)
-		if err != nil {
-			// Could not find channel.
-			return
-		}
-
-		// Find the guild for that channel.
-		g, err := s.State.Guild(c.GuildID)
-		if err != nil {
-			// Could not find guild.
-			return
-		}
-
 		// Look for the message sender in that guild's current voice states.
 		for _, vs := range g.VoiceStates {
 			if vs.UserID == m.Author.ID {
 				log.Printf("Trying to leave GID %v and VID %v\n", g.ID, vs.ChannelID)
-				Bridge.ActiveConn <- true
-				Bridge.ActiveConn = nil
-				MumbleReset()
-				DiscordReset()
+				l.Bridge.ActiveConn <- true
+				l.Bridge.ActiveConn = nil
 				return
 			}
 		}
 	}
 
 	if strings.HasPrefix(m.Content, prefix+" refresh") {
-
-		// Find the channel that the message came from.
-		c, err := s.State.Channel(m.ChannelID)
-		if err != nil {
-			// Could not find channel.
-			return
-		}
-
-		// Find the guild for that channel.
-		g, err := s.State.Guild(c.GuildID)
-		if err != nil {
-			// Could not find guild.
-			return
-		}
-
 		// Look for the message sender in that guild's current voice states.
 		for _, vs := range g.VoiceStates {
 			if vs.UserID == m.Author.ID {
 				log.Printf("Trying to refresh GID %v and VID %v\n", g.ID, vs.ChannelID)
-				Bridge.ActiveConn <- true
-				MumbleReset()
-				DiscordReset()
+				l.Bridge.ActiveConn <- true
 				time.Sleep(5 * time.Second)
-				Bridge.ActiveConn = make(chan bool)
-				go startBridge(s, g.ID, vs.ChannelID, BridgeConf.Config, BridgeConf.MumbleAddr, BridgeConf.MumbleInsecure, Bridge.ActiveConn)
+				l.Bridge.ActiveConn = make(chan bool)
+				go startBridge(s, g.ID, vs.ChannelID, l, l.Bridge.ActiveConn)
 				return
 			}
 		}
 	}
 
 	if strings.HasPrefix(m.Content, prefix+" auto") {
-		if BridgeConf.Mode != BridgeModeAuto {
-			BridgeConf.Mode = BridgeModeAuto
-			Bridge.AutoChan = make(chan bool)
-			go AutoBridge(s)
+		if l.Bridge.Mode != bridgeModeAuto {
+			l.Bridge.Mode = bridgeModeAuto
+			l.Bridge.AutoChan = make(chan bool)
+			go AutoBridge(s, l)
 		} else {
-			Bridge.AutoChan <- true
-			BridgeConf.Mode = BridgeModeManual
+			l.Bridge.AutoChan <- true
+			l.Bridge.Mode = bridgeModeManual
 		}
 	}
 }
 
-func guildCreate(s *discordgo.Session, event *discordgo.GuildCreate) {
+func (l *Listener) guildCreate(s *discordgo.Session, event *discordgo.GuildCreate) {
 
 	if event.Guild.Unavailable {
 		return
@@ -139,27 +142,32 @@ func guildCreate(s *discordgo.Session, event *discordgo.GuildCreate) {
 	}
 }
 
-func voiceUpdate(s *discordgo.Session, event *discordgo.VoiceStateUpdate) {
-	if event.GuildID == BridgeConf.GID {
-		if event.ChannelID == BridgeConf.CID {
+func (l *Listener) voiceUpdate(s *discordgo.Session, event *discordgo.VoiceStateUpdate) {
+	l.UserCountLock.Lock()
+	if event.GuildID == l.BridgeConf.GID {
+		if event.ChannelID == l.BridgeConf.CID {
 			//get user
 			u, err := s.User(event.UserID)
 			if err != nil {
 				log.Printf("error looking up user for uid %v", event.UserID)
 			}
 			//check to see if actually new user
-			if Bridge.DiscordUsers[u.Username] {
+			if l.Bridge.DiscordUsers[u.Username] {
 				//not actually new user
+				l.UserCountLock.Unlock()
 				return
 			}
 			log.Println("user joined watched discord channel")
-			if Bridge.Connected {
-				Bridge.Client.Do(func() {
-					Bridge.Client.Self.Channel.Send(fmt.Sprintf("%v has joined Discord channel\n", u.Username), false)
+			l.ConnectedLock.Lock()
+			if l.Bridge.Connected {
+				l.Bridge.Client.Do(func() {
+					l.Bridge.Client.Self.Channel.Send(fmt.Sprintf("%v has joined Discord channel\n", u.Username), false)
 				})
 			}
-			Bridge.DiscordUsers[u.Username] = true
-			Bridge.DiscordUserCount = Bridge.DiscordUserCount + 1
+			l.ConnectedLock.Unlock()
+			l.Bridge.DiscordUsers[u.Username] = true
+			l.Bridge.DiscordUserCount = l.Bridge.DiscordUserCount + 1
+			l.UserCountLock.Unlock()
 		}
 		if event.ChannelID == "" {
 			//leave event, trigger recount of active users
@@ -167,56 +175,62 @@ func voiceUpdate(s *discordgo.Session, event *discordgo.VoiceStateUpdate) {
 			g, err := s.State.Guild(event.GuildID)
 			if err != nil {
 				// Could not find guild.
+				l.UserCountLock.Unlock()
 				return
 			}
 
 			// Look for current voice states in watched channel
 			count := 0
 			for _, vs := range g.VoiceStates {
-				if vs.ChannelID == BridgeConf.CID {
+				if vs.ChannelID == l.BridgeConf.CID {
 					count = count + 1
 				}
 			}
-			if Bridge.DiscordUserCount > count {
+			if l.Bridge.DiscordUserCount > count {
 				u, err := s.User(event.UserID)
 				if err != nil {
 					log.Printf("error looking up user for uid %v", event.UserID)
 				}
-				delete(Bridge.DiscordUsers, u.Username)
+				delete(l.Bridge.DiscordUsers, u.Username)
 				log.Println("user left watched discord channel")
-				if Bridge.Connected {
-					Bridge.Client.Do(func() {
-						Bridge.Client.Self.Channel.Send(fmt.Sprintf("%v has left Discord channel\n", u.Username), false)
+				l.ConnectedLock.Lock()
+				if l.Bridge.Connected {
+					l.Bridge.Client.Do(func() {
+						l.Bridge.Client.Self.Channel.Send(fmt.Sprintf("%v has left Discord channel\n", u.Username), false)
 					})
 				}
-				Bridge.DiscordUserCount = count
+				l.ConnectedLock.Unlock()
+				l.Bridge.DiscordUserCount = count
 			}
+			l.UserCountLock.Unlock()
 		}
 
 	}
 	return
 }
 
-func mumbleConnect(e *gumble.ConnectEvent) {
-	if BridgeConf.MumbleChannel != "" {
+func (l *Listener) mumbleConnect(e *gumble.ConnectEvent) {
+	if l.BridgeConf.MumbleChannel != "" {
 		//join specified channel
-		startingChannel := e.Client.Channels.Find(BridgeConf.MumbleChannel)
+		startingChannel := e.Client.Channels.Find(l.BridgeConf.MumbleChannel)
 		if startingChannel != nil {
 			e.Client.Self.Move(startingChannel)
 		}
 	}
 }
 
-func mumbleUserChange(e *gumble.UserChangeEvent) {
+func (l *Listener) mumbleUserChange(e *gumble.UserChangeEvent) {
+	l.UserCountLock.Lock()
 	if e.Type.Has(gumble.UserChangeConnected) || e.Type.Has(gumble.UserChangeChannel) || e.Type.Has(gumble.UserChangeDisconnected) {
-		Bridge.MumbleUsers = make(map[string]bool)
-		for _, user := range Bridge.Client.Self.Channel.Users {
+		l.Bridge.MumbleUsers = make(map[string]bool)
+		for _, user := range l.Bridge.Client.Self.Channel.Users {
 			//note, this might be too slow for really really big channels?
 			//event listeners block while processing
 			//also probably bad to rebuild the set every user change.
-			if user.Name != Bridge.Client.Self.Name {
-				Bridge.MumbleUsers[user.Name] = true
+			if user.Name != l.Bridge.Client.Self.Name {
+				l.Bridge.MumbleUsers[user.Name] = true
 			}
 		}
 	}
+	l.UserCountLock.Unlock()
 }

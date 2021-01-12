@@ -6,17 +6,16 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/joho/godotenv"
 	"layeh.com/gumble/gumble"
+	"layeh.com/gumble/gumbleutil"
 	_ "layeh.com/gumble/opus"
 )
-
-var BridgeConf *BridgeConfig
-var Bridge *BridgeState
 
 func main() {
 	godotenv.Load()
@@ -59,24 +58,56 @@ func main() {
 	//	log.Println("Unable to set priority. ", err)
 	//}
 
-	// DISCORD Setup
-
+	//Connect to discord
 	discord, err := discordgo.New("Bot " + *discordToken)
 	if err != nil {
 		log.Println(err)
 		return
 	}
 
+	// Mumble setup
+	config := gumble.NewConfig()
+	config.Username = *mumbleUsername
+	config.Password = *mumblePassword
+	config.AudioInterval = time.Millisecond * 10
+
+	// Bridge setup
+	BridgeConf := &BridgeConfig{
+		Config:         config,
+		MumbleAddr:     *mumbleAddr + ":" + strconv.Itoa(*mumblePort),
+		MumbleInsecure: *mumbleInsecure,
+		MumbleChannel:  *mumbleChannel,
+		Command:        *discordCommand,
+		GID:            *discordGID,
+		CID:            *discordCID,
+	}
+	Bridge := &BridgeState{
+		ActiveConn:       make(chan bool),
+		Connected:        false,
+		MumbleUserCount:  0,
+		DiscordUserCount: 0,
+		DiscordUsers:     make(map[string]bool),
+		MumbleUsers:      make(map[string]bool),
+	}
+	ul := &sync.Mutex{}
+	cl := &sync.Mutex{}
+	l := &Listener{BridgeConf, Bridge, ul, cl}
+
+	// Discord setup
 	// Open Websocket
 	discord.LogLevel = 2
 	discord.StateEnabled = true
 	discord.Identify.Intents = discordgo.MakeIntent(discordgo.IntentsAllWithoutPrivileged)
 	// register handlers
-	discord.AddHandler(ready)
-	discord.AddHandler(messageCreate)
-	discord.AddHandler(guildCreate)
-	discord.AddHandler(voiceUpdate)
+	discord.AddHandler(l.ready)
+	discord.AddHandler(l.messageCreate)
+	discord.AddHandler(l.guildCreate)
+	discord.AddHandler(l.voiceUpdate)
 	err = discord.Open()
+	l.BridgeConf.Config.Attach(gumbleutil.Listener{
+		Connect:    l.mumbleConnect,
+		UserChange: l.mumbleUserChange,
+	})
 	if err != nil {
 		log.Println(err)
 		return
@@ -85,49 +116,26 @@ func main() {
 
 	log.Println("Discord Bot Connected")
 	log.Printf("Discord bot looking for command !%v", *discordCommand)
-	// Mumble setup
-	config := gumble.NewConfig()
-	config.Username = *mumbleUsername
-	config.Password = *mumblePassword
-	config.AudioInterval = time.Millisecond * 10
 
-	// Bridge setup
-	BridgeConf = &BridgeConfig{
-		Config:         config,
-		MumbleAddr:     *mumbleAddr + ":" + strconv.Itoa(*mumblePort),
-		MumbleInsecure: *mumbleInsecure,
-		MumbleChannel:  *mumbleChannel,
-		Mode:           -1,
-		Command:        *discordCommand,
-		GID:            *discordGID,
-		CID:            *discordCID,
-	}
-	Bridge = &BridgeState{
-		ActiveConn:       make(chan bool),
-		Connected:        false,
-		MumbleUserCount:  0,
-		DiscordUserCount: 0,
-		DiscordUsers:     make(map[string]bool),
-	}
 	switch *mode {
 	case "auto":
 		log.Println("bridge starting in automatic mode")
 		Bridge.AutoChan = make(chan bool)
-		BridgeConf.Mode = BridgeModeAuto
-		go AutoBridge(discord)
+		Bridge.Mode = bridgeModeAuto
+		go AutoBridge(discord, l)
 	case "manual":
 		log.Println("bridge starting in manual mode")
-		BridgeConf.Mode = BridgeModeManual
+		Bridge.Mode = bridgeModeManual
 	case "constant":
 		log.Println("bridge starting in constant mode")
-		BridgeConf.Mode = BridgeModeConstant
-		go startBridge(discord, *discordGID, *discordCID, config, BridgeConf.MumbleAddr, *mumbleInsecure, make(chan bool))
+		Bridge.Mode = bridgeModeConstant
+		go startBridge(discord, *discordGID, *discordCID, l, make(chan bool))
 	default:
 		discord.Close()
 		log.Fatalln("invalid bridge mode set")
 	}
 
-	go discordStatusUpdate(discord, *mumbleAddr, strconv.Itoa(*mumblePort))
+	go discordStatusUpdate(discord, *mumbleAddr, strconv.Itoa(*mumblePort), l)
 	sc := make(chan os.Signal, 1)
 	signal.Notify(sc, syscall.SIGINT, syscall.SIGTERM, os.Interrupt, os.Kill)
 	<-sc
