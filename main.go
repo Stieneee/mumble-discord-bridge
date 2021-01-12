@@ -29,8 +29,9 @@ func main() {
 	discordToken := flag.String("discord-token", lookupEnvOrString("DISCORD_TOKEN", ""), "DISCORD_TOKEN, discord bot token")
 	discordGID := flag.String("discord-gid", lookupEnvOrString("DISCORD_GID", ""), "DISCORD_GID, discord gid")
 	discordCID := flag.String("discord-cid", lookupEnvOrString("DISCORD_CID", ""), "DISCORD_CID, discord cid")
-	discordCommand := flag.String("discord-command", lookupEnvOrString("DISCORD_COMMAND", "mumble-discord"), "Discord command string, env alt DISCORD_COMMAND, optional, defaults to mumble-discord")
-	mode := flag.String("mode", lookupEnvOrString("MODE", "manual"), "determine which mode the bridge starts in")
+	discordCommand := flag.String("discord-command", lookupEnvOrString("DISCORD_COMMAND", "mumble-discord"), "DISCORD_COMMAND,Discord command string, env alt DISCORD_COMMAND, optional, defaults to mumble-discord")
+	mode := flag.String("mode", lookupEnvOrString("MODE", "manual"), "MODE,determine which mode the bridge starts in")
+	nice := flag.Bool("nice", lookupEnvOrBool("NICE", false), "NICE,whether the bridge should automatically try to 'nice' itself")
 	flag.Parse()
 	log.Printf("app.config %v\n", getConfig(flag.CommandLine))
 
@@ -53,10 +54,12 @@ func main() {
 	if *mode == "" {
 		log.Fatalln("missing mode set")
 	}
-	//err := syscall.Setpriority(syscall.PRIO_PROCESS, os.Getpid(), -5)
-	//if err != nil {
-	//	log.Println("Unable to set priority. ", err)
-	//}
+	if *nice {
+		err := syscall.Setpriority(syscall.PRIO_PROCESS, os.Getpid(), -5)
+		if err != nil {
+			log.Println("Unable to set priority. ", err)
+		}
+	}
 
 	//Connect to discord
 	discord, err := discordgo.New("Bot " + *discordToken)
