@@ -174,6 +174,7 @@ func discordReceivePCM(v *discordgo.VoiceConnection, die chan bool) {
 			log.Println("Opus size error")
 			continue
 		}
+
 		discordMutex.Lock()
 		select {
 		case fromDiscordMap[p.SSRC].pcm <- p.PCM[0:480]:
