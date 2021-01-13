@@ -25,6 +25,11 @@ var (
 	date    string
 )
 
+var (
+	discordGID *string
+	discordCID *string
+)
+
 func lookupEnvOrString(key string, defaultVal string) string {
 	if val, ok := os.LookupEnv(key); ok {
 		return val
@@ -71,13 +76,13 @@ func main() {
 
 	mumbleAddr := flag.String("mumble-address", lookupEnvOrString("MUMBLE_ADDRESS", ""), "MUMBLE_ADDRESS, mumble server address, example example.com")
 	mumblePort := flag.Int("mumble-port", lookupEnvOrInt("MUMBLE_PORT", 64738), "MUMBLE_PORT mumble port")
-	mumbleUsername := flag.String("mumble-username", lookupEnvOrString("MUMBLE_USERNAME", "discord-bridge"), "MUMBLE_USERNAME, mumble username")
+	mumbleUsername := flag.String("mumble-username", lookupEnvOrString("MUMBLE_USERNAME", "discord"), "MUMBLE_USERNAME, mumble username")
 	mumblePassword := flag.String("mumble-password", lookupEnvOrString("MUMBLE_PASSWORD", ""), "MUMBLE_PASSWORD, mumble password, optional")
 	mumbleInsecure := flag.Bool("mumble-insecure", lookupEnvOrBool("MUMBLE_INSECURE", false), "mumble insecure,  env alt MUMBLE_INSECURE")
 
 	discordToken := flag.String("discord-token", lookupEnvOrString("DISCORD_TOKEN", ""), "DISCORD_TOKEN, discord bot token")
-	discordGID := flag.String("discord-gid", lookupEnvOrString("DISCORD_GID", ""), "DISCORD_GID, discord gid")
-	discordCID := flag.String("discord-cid", lookupEnvOrString("DISCORD_CID", ""), "DISCORD_CID, discord cid")
+	discordGID = flag.String("discord-gid", lookupEnvOrString("DISCORD_GID", ""), "DISCORD_GID, discord gid")
+	discordCID = flag.String("discord-cid", lookupEnvOrString("DISCORD_CID", ""), "DISCORD_CID, discord cid")
 
 	flag.Parse()
 	log.Printf("app.config %v\n", getConfig(flag.CommandLine))
@@ -116,7 +121,11 @@ func main() {
 	}
 
 	// Open Websocket
+	discord.ShouldReconnectOnError = true
 	discord.LogLevel = 1
+	discord.StateEnabled = true
+	discord.Identify.Intents = discordgo.MakeIntent(discordgo.IntentsAllWithoutPrivileged)
+
 	err = discord.Open()
 	if err != nil {
 		log.Println(err)
@@ -134,8 +143,6 @@ func main() {
 	defer dgv.Speaking(false)
 	defer dgv.Close()
 
-	discord.ShouldReconnectOnError = true
-
 	// MUMBLE Setup
 
 	config := gumble.NewConfig()
@@ -144,7 +151,9 @@ func main() {
 	config.AudioInterval = time.Millisecond * 10
 
 	m := MumbleDuplex{}
-	ml := MumbleEventListener{}
+	ml := MumbleEventListener{
+		d: discord,
+	}
 
 	var tlsConfig tls.Config
 	if *mumbleInsecure {
@@ -167,6 +176,8 @@ func main() {
 
 	log.Println("Mumble Connected")
 
+	// Initial User States
+
 	// Start Passing Between
 	// Mumble
 	go m.fromMumbleMixer(toDiscord)
@@ -176,6 +187,7 @@ func main() {
 	go discordReceivePCM(dgv, die)
 	go fromDiscordMixer(toMumble)
 	go discordSendPCM(dgv, toDiscord, die)
+	go discordMemberWatcher(discord, mumble)
 
 	// Wait for Exit Signal
 	c := make(chan os.Signal)

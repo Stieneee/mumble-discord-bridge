@@ -18,9 +18,18 @@ type fromDiscord struct {
 	streaming bool
 }
 
+type discordUser struct {
+	username string
+	seen     bool
+	dm       *discordgo.Channel
+}
+
 var discordMutex sync.Mutex
 var discordMixerMutex sync.Mutex
 var fromDiscordMap = make(map[uint32]fromDiscord)
+
+var discordUsersMutex sync.Mutex
+var discordUsers = make(map[string]discordUser) // id is the key
 
 // OnError gets called by dgvoice when an error is encountered.
 // By default logs to STDERR
@@ -226,4 +235,97 @@ func fromDiscordMixer(toMumble chan<- gumble.AudioBuffer) {
 
 		}
 	}
+}
+
+// This function acts a filter from the interall discordgo state the local state
+// This function
+func discordMemberWatcher(d *discordgo.Session, m *gumble.Client) {
+	ticker := time.NewTicker(250 * time.Millisecond)
+
+	g, err := d.State.Guild(*discordGID)
+	if err != nil {
+		log.Println("error finding guild")
+		panic(err)
+	}
+
+	// Watch Discordgo internal state for member changes in the channel
+	for {
+		<-ticker.C
+
+		discordUsersMutex.Lock()
+
+		// start := time.Now()
+
+		// Set all members to false
+		for u := range discordUsers {
+			du := discordUsers[u]
+			du.seen = false
+			discordUsers[u] = du
+		}
+
+		// Sync the channel voice states to the local discordUsersMap
+		for _, vs := range g.VoiceStates {
+			if vs.ChannelID == *discordCID {
+				if d.State.User.ID == vs.UserID {
+					continue
+				}
+
+				if _, ok := discordUsers[vs.UserID]; !ok {
+
+					u, err := d.User(vs.UserID)
+					if err != nil {
+						log.Println("error looking up username")
+						continue
+					}
+
+					println("User joined Discord " + u.Username)
+					dm, err := d.UserChannelCreate(u.ID)
+					if err != nil {
+						log.Panicln("Error creating private channel for", u.Username)
+					}
+					discordUsers[vs.UserID] = discordUser{
+						username: u.Username,
+						seen:     true,
+						dm:       dm,
+					}
+					m.Do(func() {
+						m.Self.Channel.Send(fmt.Sprintf("%v has joined Discord\n", u.Username), false)
+					})
+				} else {
+					du := discordUsers[vs.UserID]
+					du.seen = true
+					discordUsers[vs.UserID] = du
+				}
+
+			}
+		}
+
+		// Remove users that are no longer connected
+		for id := range discordUsers {
+			if discordUsers[id].seen == false {
+				println("User left Discord channel " + discordUsers[id].username)
+				m.Do(func() {
+					m.Self.Channel.Send(fmt.Sprintf("%v has left Discord channel\n", discordUsers[id].username), false)
+				})
+				delete(discordUsers, id)
+			}
+		}
+
+		discordUsersMutex.Unlock()
+
+		// elapsed := time.Since(start)
+		// log.Printf("Discord user sync took %s", elapsed)
+	}
+}
+
+func discordSendMessageAll(d *discordgo.Session, msg string) {
+	discordUsersMutex.Lock()
+	for id := range discordUsers {
+		du := discordUsers[id]
+		if du.dm != nil {
+			log.Println("Sensing msg to ")
+			d.ChannelMessageSend(du.dm.ID, msg)
+		}
+	}
+	discordUsersMutex.Unlock()
 }

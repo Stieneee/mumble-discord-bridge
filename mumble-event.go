@@ -2,13 +2,17 @@ package main
 
 import (
 	"fmt"
+	"strings"
 
+	"github.com/bwmarrin/discordgo"
 	"layeh.com/gumble/gumble"
 	_ "layeh.com/gumble/opus"
 )
 
 // MumbleEventListener - Bridge Event Handler
-type MumbleEventListener struct{}
+type MumbleEventListener struct {
+	d *discordgo.Session
+}
 
 // OnConnect - event handler
 func (ml MumbleEventListener) OnConnect(e *gumble.ConnectEvent) {
@@ -28,6 +32,33 @@ func (ml MumbleEventListener) OnTextMessage(e *gumble.TextMessageEvent) {
 // OnUserChange - event handler
 func (ml MumbleEventListener) OnUserChange(e *gumble.UserChangeEvent) {
 	fmt.Println("OnUserChange", e.User.Name, e)
+	if e.Type.Has(gumble.UserChangeConnected) {
+		e.User.Send("Mumble-Discord-Bridge v" + version)
+
+		// Tell the user who is connected to discord
+		if len(discordUsers) == 0 {
+			e.User.Send("No users connected to Discord")
+		} else {
+			s := "Users connected to Discord: "
+
+			arr := []string{}
+			discordUsersMutex.Lock()
+			for u := range discordUsers {
+				arr = append(arr, u)
+			}
+
+			s = s + strings.Join(arr[:], ",")
+
+			discordUsersMutex.Unlock()
+			e.User.Send(s)
+		}
+
+		// Send discord a notice
+		discordSendMessageAll(ml.d, e.User.Name+" has joined mumble")
+	}
+	if e.Type.Has(gumble.UserChangeDisconnected) {
+		discordSendMessageAll(ml.d, e.User.Name+" has left mumble")
+	}
 }
 
 // OnChannelChange - event handler
