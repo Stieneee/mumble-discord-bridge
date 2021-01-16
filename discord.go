@@ -56,8 +56,13 @@ func discordSendPCM(v *discordgo.VoiceConnection, pcm <-chan []int16, die chan b
 	var readyTimeout *time.Timer
 
 	for {
+		select {
+		case <-die:
+			log.Println("Killing discordSendPCM")
+			return
+		default:
+		}
 		<-ticker.C
-
 		if len(pcm) > 1 {
 			if !streaming {
 				v.Speaking(true)
@@ -88,7 +93,6 @@ func discordSendPCM(v *discordgo.VoiceConnection, pcm <-chan []int16, die chan b
 				lastReady = true
 				readyTimeout.Stop()
 			}
-
 			v.OpusSend <- opus
 		} else {
 			if streaming {
@@ -108,10 +112,17 @@ func discordReceivePCM(v *discordgo.VoiceConnection, die chan bool) {
 	var readyTimeout *time.Timer
 
 	for {
+		select {
+		case <-die:
+			log.Println("killing discord ReceivePCM")
+			return
+		default:
+		}
 		if v.Ready == false || v.OpusRecv == nil {
 			if lastReady == true {
 				OnError(fmt.Sprintf("Discordgo not to receive opus packets. %+v : %+v", v.Ready, v.OpusSend), nil)
 				readyTimeout = time.AfterFunc(30*time.Second, func() {
+					log.Println("set ready timeout")
 					die <- true
 				})
 				lastReady = false
@@ -122,8 +133,14 @@ func discordReceivePCM(v *discordgo.VoiceConnection, die chan bool) {
 			lastReady = true
 			readyTimeout.Stop()
 		}
-
-		p, ok := <-v.OpusRecv
+		var ok bool
+		var p *discordgo.Packet
+		select {
+		case p, ok = <-v.OpusRecv:
+		case <-die:
+			log.Println("killing discord ReceivePCM")
+			return
+		}
 		if !ok {
 			log.Println("Opus not ok")
 			continue
@@ -175,11 +192,17 @@ func discordReceivePCM(v *discordgo.VoiceConnection, die chan bool) {
 	}
 }
 
-func fromDiscordMixer(toMumble chan<- gumble.AudioBuffer) {
+func fromDiscordMixer(toMumble chan<- gumble.AudioBuffer, die chan bool) {
 	ticker := time.NewTicker(10 * time.Millisecond)
 	sendAudio := false
 
 	for {
+		select {
+		case <-die:
+			log.Println("killing fromDiscordMixer")
+			return
+		default:
+		}
 		<-ticker.C
 		discordMutex.Lock()
 

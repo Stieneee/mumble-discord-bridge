@@ -14,7 +14,9 @@ var fromMumbleArr []chan gumble.AudioBuffer
 var mumbleStreamingArr []bool
 
 // MumbleDuplex - listenera and outgoing
-type MumbleDuplex struct{}
+type MumbleDuplex struct {
+	Close chan bool
+}
 
 // OnAudioStream - Spawn routines to handle incoming packets
 func (m MumbleDuplex) OnAudioStream(e *gumble.AudioStreamEvent) {
@@ -27,10 +29,14 @@ func (m MumbleDuplex) OnAudioStream(e *gumble.AudioStreamEvent) {
 	mumbleStreamingArr = append(mumbleStreamingArr, false)
 	mutex.Unlock()
 
-	go func() {
+	go func(die chan bool) {
 		log.Println("new mumble audio stream", e.User.Name)
 		for {
 			select {
+			default:
+			case <-die:
+				log.Println("Removing mumble audio stream")
+				return
 			case p := <-e.C:
 				// log.Println("audio packet", p.Sender.Name, len(p.AudioBuffer))
 
@@ -40,15 +46,21 @@ func (m MumbleDuplex) OnAudioStream(e *gumble.AudioStreamEvent) {
 				}
 			}
 		}
-	}()
+	}(m.Close)
 	return
 }
 
-func (m MumbleDuplex) fromMumbleMixer(toDiscord chan []int16) {
+func (m MumbleDuplex) fromMumbleMixer(toDiscord chan []int16, die chan bool) {
 	ticker := time.NewTicker(10 * time.Millisecond)
 	sendAudio := false
 
 	for {
+		select {
+		case <-die:
+			log.Println("Killing fromMumbleMixer")
+			return
+		default:
+		}
 		<-ticker.C
 
 		mutex.Lock()
@@ -88,6 +100,9 @@ func (m MumbleDuplex) fromMumbleMixer(toDiscord chan []int16) {
 		if sendAudio {
 			select {
 			case toDiscord <- outBuf:
+			case <-die:
+				log.Println("Killing fromMumbleMixer")
+				return
 			default:
 				log.Println("toDiscord buffer full. Dropping packet")
 			}
