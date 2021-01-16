@@ -33,7 +33,6 @@ func (m MumbleDuplex) OnAudioStream(e *gumble.AudioStreamEvent) {
 		log.Println("new mumble audio stream", e.User.Name)
 		for {
 			select {
-			default:
 			case <-die:
 				log.Println("Removing mumble audio stream")
 				return
