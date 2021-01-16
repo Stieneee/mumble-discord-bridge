@@ -35,7 +35,6 @@ func startBridge(discord *discordgo.Session, discordGID string, discordCID strin
 	}
 	defer dgv.Speaking(false)
 	defer dgv.Close()
-	discord.ShouldReconnectOnError = true
 
 	// MUMBLE Setup
 
