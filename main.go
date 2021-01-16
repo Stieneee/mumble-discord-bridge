@@ -25,8 +25,6 @@ var (
 	date    string
 )
 
-var cpuprofile = flag.String("cpuprofile", "", "write cpu profile to `file`")
-
 func main() {
 	log.Println("Mumble-Discord-Bridge")
 	log.Println("v" + version + " " + commit + " " + date)
@@ -45,6 +43,9 @@ func main() {
 	discordCommand := flag.String("discord-command", lookupEnvOrString("DISCORD_COMMAND", "mumble-discord"), "DISCORD_COMMAND,Discord command string, env alt DISCORD_COMMAND, optional, defaults to mumble-discord")
 	mode := flag.String("mode", lookupEnvOrString("MODE", "constant"), "MODE,determine which mode the bridge starts in")
 	nice := flag.Bool("nice", lookupEnvOrBool("NICE", false), "NICE,whether the bridge should automatically try to 'nice' itself")
+
+	cpuprofile := flag.String("cpuprofile", "", "write cpu profile to `file`")
+
 	flag.Parse()
 	log.Printf("app.config %v\n", getConfig(flag.CommandLine))
 
