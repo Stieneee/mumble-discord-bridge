@@ -73,6 +73,12 @@ Individual Discord servers need to invite the bot before it can connect.
 ### Binary
 
 Prebuilt binaries are available.
+The binaries require the opus code runtime library to be installed.
+
+```bash
+# Ubuntu
+sudo apt install libopus0
+```
 
 ```bash
 curl -s https://api.github.com/repos/stieneee/mumble-discord-bridge/releases/latest | grep "mumble-discord-bridge" | grep "browser_download_url" | cut -d '"' -f 4 | wget -qi -
@@ -116,6 +122,8 @@ Ensure the opus library is installed.
 
 ```bash
 go build -o mumble-discord-bridge *.go
+#or
+make mumble-discord-bridge
 ```
 
 ## Known Issues
