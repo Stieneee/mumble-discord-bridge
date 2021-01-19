@@ -144,7 +144,6 @@ func main() {
 	Bridge.DiscordListener = &DiscordListener{
 		Bridge: Bridge,
 	}
-	Bridge.DiscordSession.AddHandler(Bridge.DiscordListener.ready)
 	Bridge.DiscordSession.AddHandler(Bridge.DiscordListener.messageCreate)
 	Bridge.DiscordSession.AddHandler(Bridge.DiscordListener.guildCreate)
 	Bridge.DiscordSession.AddHandler(Bridge.DiscordListener.voiceUpdate)
