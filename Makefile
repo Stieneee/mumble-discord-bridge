@@ -1,4 +1,4 @@
-GOFILES=main.go mumble.go discord.go bridge.go config.go handlers.go
+GOFILES=main.go mumble.go discord.go bridge.go config.go mumble-handlers.go discord-handlers.go
 
 mumble-discord-bridge: $(GOFILES)
 	goreleaser build --skip-validate --rm-dist

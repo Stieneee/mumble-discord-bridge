@@ -2,12 +2,12 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
 	"runtime/pprof"
 	"strconv"
-	"sync"
 	"syscall"
 	"time"
 
@@ -26,23 +26,27 @@ var (
 )
 
 func main() {
-	log.Println("Mumble-Discord-Bridge")
-	log.Println("v" + version + " " + commit + " " + date)
+	var err error
+
+	fmt.Println("Mumble-Discord-Bridge")
+	fmt.Println("v" + version + " " + commit + " " + date)
 
 	godotenv.Load()
 
-	mumbleAddr := flag.String("mumble-address", lookupEnvOrString("MUMBLE_ADDRESS", ""), "MUMBLE_ADDRESS, mumble server address, example example.com")
-	mumblePort := flag.Int("mumble-port", lookupEnvOrInt("MUMBLE_PORT", 64738), "MUMBLE_PORT mumble port")
-	mumbleUsername := flag.String("mumble-username", lookupEnvOrString("MUMBLE_USERNAME", "Discord"), "MUMBLE_USERNAME, mumble username")
+	mumbleAddr := flag.String("mumble-address", lookupEnvOrString("MUMBLE_ADDRESS", ""), "MUMBLE_ADDRESS, mumble server address, example example.com, required")
+	mumblePort := flag.Int("mumble-port", lookupEnvOrInt("MUMBLE_PORT", 64738), "MUMBLE_PORT, mumble port, (default 64738)")
+	mumbleUsername := flag.String("mumble-username", lookupEnvOrString("MUMBLE_USERNAME", "Discord"), "MUMBLE_USERNAME, mumble username, (default: discord)")
 	mumblePassword := flag.String("mumble-password", lookupEnvOrString("MUMBLE_PASSWORD", ""), "MUMBLE_PASSWORD, mumble password, optional")
-	mumbleInsecure := flag.Bool("mumble-insecure", lookupEnvOrBool("MUMBLE_INSECURE", false), "mumble insecure,  env alt MUMBLE_INSECURE")
-	mumbleChannel := flag.String("mumble-channel", lookupEnvOrString("MUMBLE_CHANNEL", ""), "mumble channel to start in")
-	discordToken := flag.String("discord-token", lookupEnvOrString("DISCORD_TOKEN", ""), "DISCORD_TOKEN, discord bot token")
-	discordGID := flag.String("discord-gid", lookupEnvOrString("DISCORD_GID", ""), "DISCORD_GID, discord gid")
-	discordCID := flag.String("discord-cid", lookupEnvOrString("DISCORD_CID", ""), "DISCORD_CID, discord cid")
-	discordCommand := flag.String("discord-command", lookupEnvOrString("DISCORD_COMMAND", "mumble-discord"), "DISCORD_COMMAND,Discord command string, env alt DISCORD_COMMAND, optional, defaults to mumble-discord")
-	mode := flag.String("mode", lookupEnvOrString("MODE", "constant"), "MODE,determine which mode the bridge starts in")
-	nice := flag.Bool("nice", lookupEnvOrBool("NICE", false), "NICE,whether the bridge should automatically try to 'nice' itself")
+	mumbleInsecure := flag.Bool("mumble-insecure", lookupEnvOrBool("MUMBLE_INSECURE", false), " MUMBLE_INSECURE, mumble insecure, optional")
+	mumbleChannel := flag.String("mumble-channel", lookupEnvOrString("MUMBLE_CHANNEL", ""), "MUMBLE_CHANNEL, mumble channel to start in, optional")
+	mumbleDisableText := flag.Bool("mumble-disable-text", lookupEnvOrBool("MUMBLE_DISABLE_TEXT", false), "MUMBLE_DISABLE_TEXT, disable sending text to mumble, (default false)")
+	discordToken := flag.String("discord-token", lookupEnvOrString("DISCORD_TOKEN", ""), "DISCORD_TOKEN, discord bot token, required")
+	discordGID := flag.String("discord-gid", lookupEnvOrString("DISCORD_GID", ""), "DISCORD_GID, discord gid, required")
+	discordCID := flag.String("discord-cid", lookupEnvOrString("DISCORD_CID", ""), "DISCORD_CID, discord cid, required")
+	discordCommand := flag.String("discord-command", lookupEnvOrString("DISCORD_COMMAND", "mumble-discord"), "DISCORD_COMMAND, Discord command string, env alt DISCORD_COMMAND, optional, (defaults mumble-discord)")
+	discordDisableText := flag.Bool("discord-disable-text", lookupEnvOrBool("DISCORD_DISABLE_TEXT", false), "DISCORD_DISABLE_TEXT, disable sending direct messages to discord, (default false)")
+	mode := flag.String("mode", lookupEnvOrString("MODE", "constant"), "MODE, [constant, manual, auto] determine which mode the bridge starts in, (default constant)")
+	nice := flag.Bool("nice", lookupEnvOrBool("NICE", false), "NICE, whether the bridge should automatically try to 'nice' itself, (default false)")
 
 	cpuprofile := flag.String("cpuprofile", "", "write cpu profile to `file`")
 
@@ -75,6 +79,7 @@ func main() {
 		}
 	}
 
+	// Optional CPU Profiling
 	if *cpuprofile != "" {
 		f, err := os.Create(*cpuprofile)
 		if err != nil {
@@ -87,62 +92,70 @@ func main() {
 		defer pprof.StopCPUProfile()
 	}
 
-	//Connect to discord
-	discord, err := discordgo.New("Bot " + *discordToken)
-	if err != nil {
-		log.Println(err)
-		return
-	}
+	// BRIDGE SETUP
 
-	// Mumble setup
-	config := gumble.NewConfig()
-	config.Username = *mumbleUsername
-	config.Password = *mumblePassword
-	config.AudioInterval = time.Millisecond * 10
-
-	// Bridge setup
-	BridgeConf := &BridgeConfig{
-		Config:         config,
-		MumbleAddr:     *mumbleAddr + ":" + strconv.Itoa(*mumblePort),
-		MumbleInsecure: *mumbleInsecure,
-		MumbleChannel:  *mumbleChannel,
-		Command:        *discordCommand,
-		GID:            *discordGID,
-		CID:            *discordCID,
-	}
 	Bridge := &BridgeState{
-		ActiveConn:       make(chan bool),
-		Connected:        false,
-		MumbleUserCount:  0,
-		DiscordUserCount: 0,
-		DiscordUsers:     make(map[string]bool),
-		MumbleUsers:      make(map[string]bool),
+		BridgeConfig: &BridgeConfig{
+			// MumbleConfig:   config,
+			MumbleAddr:         *mumbleAddr + ":" + strconv.Itoa(*mumblePort),
+			MumbleInsecure:     *mumbleInsecure,
+			MumbleChannel:      *mumbleChannel,
+			MumbleDisableText:  *mumbleDisableText,
+			Command:            *discordCommand,
+			GID:                *discordGID,
+			CID:                *discordCID,
+			DiscordDisableText: *discordDisableText,
+		},
+		Connected:    false,
+		DiscordUsers: make(map[string]discordUser),
+		MumbleUsers:  make(map[string]bool),
 	}
-	ul := &sync.Mutex{}
-	cl := &sync.Mutex{}
-	l := &Listener{BridgeConf, Bridge, ul, cl}
 
-	// Discord setup
-	// Open Websocket
-	discord.LogLevel = 1
-	discord.StateEnabled = true
-	discord.Identify.Intents = discordgo.MakeIntent(discordgo.IntentsAllWithoutPrivileged)
-	discord.ShouldReconnectOnError = true
-	// register handlers
-	discord.AddHandler(l.ready)
-	discord.AddHandler(l.messageCreate)
-	discord.AddHandler(l.guildCreate)
-	discord.AddHandler(l.voiceUpdate)
-	err = discord.Open()
-	l.BridgeConf.Config.Attach(gumbleutil.Listener{
-		Connect:    l.mumbleConnect,
-		UserChange: l.mumbleUserChange,
+	// MUMBLE SETUP
+	MumbleConfig := gumble.NewConfig()
+	Bridge.BridgeConfig.MumbleConfig = MumbleConfig
+	MumbleConfig.Username = *mumbleUsername
+	MumbleConfig.Password = *mumblePassword
+	MumbleConfig.AudioInterval = time.Millisecond * 10
+
+	Bridge.MumbleListener = &MumbleListener{
+		Bridge: Bridge,
+	}
+
+	MumbleConfig.Attach(gumbleutil.Listener{
+		Connect:    Bridge.MumbleListener.mumbleConnect,
+		UserChange: Bridge.MumbleListener.mumbleUserChange,
 	})
+
+	// DISCORD SETUP
+
+	//Connect to discord
+	Bridge.DiscordSession, err = discordgo.New("Bot " + *discordToken)
 	if err != nil {
 		log.Println(err)
 		return
 	}
-	defer discord.Close()
+
+	Bridge.DiscordSession.LogLevel = 1
+	Bridge.DiscordSession.StateEnabled = true
+	Bridge.DiscordSession.Identify.Intents = discordgo.MakeIntent(discordgo.IntentsAllWithoutPrivileged)
+	Bridge.DiscordSession.ShouldReconnectOnError = true
+	// register handlers
+	Bridge.DiscordListener = &DiscordListener{
+		Bridge: Bridge,
+	}
+	Bridge.DiscordSession.AddHandler(Bridge.DiscordListener.ready)
+	Bridge.DiscordSession.AddHandler(Bridge.DiscordListener.messageCreate)
+	Bridge.DiscordSession.AddHandler(Bridge.DiscordListener.guildCreate)
+	Bridge.DiscordSession.AddHandler(Bridge.DiscordListener.voiceUpdate)
+
+	// Open Discord websocket
+	err = Bridge.DiscordSession.Open()
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	defer Bridge.DiscordSession.Close()
 
 	log.Println("Discord Bot Connected")
 	log.Printf("Discord bot looking for command !%v", *discordCommand)
@@ -150,22 +163,23 @@ func main() {
 	switch *mode {
 	case "auto":
 		log.Println("bridge starting in automatic mode")
-		Bridge.AutoChan = make(chan bool)
+		Bridge.AutoChanDie = make(chan bool)
 		Bridge.Mode = bridgeModeAuto
-		go AutoBridge(discord, l)
+		go Bridge.AutoBridge()
 	case "manual":
 		log.Println("bridge starting in manual mode")
 		Bridge.Mode = bridgeModeManual
 	case "constant":
 		log.Println("bridge starting in constant mode")
 		Bridge.Mode = bridgeModeConstant
-		go startBridge(discord, *discordGID, *discordCID, l, make(chan bool))
+		go Bridge.startBridge()
 	default:
-		discord.Close()
+		Bridge.DiscordSession.Close()
 		log.Fatalln("invalid bridge mode set")
 	}
 
-	go discordStatusUpdate(discord, *mumbleAddr, strconv.Itoa(*mumblePort), l)
+	go Bridge.discordStatusUpdate()
+
 	sc := make(chan os.Signal, 1)
 	signal.Notify(sc, syscall.SIGINT, syscall.SIGTERM, os.Interrupt, os.Kill)
 	<-sc

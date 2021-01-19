@@ -11,29 +11,35 @@ All variables can be set using flags or in the environment.
 The binary will also attempt to load .env file located in the working directory.
 
 ```bash
-Usage of mumble-discord-bridge:
+Usage of ./mumble-discord-bridge:
   -discord-cid string
-        DISCORD_CID, discord channel ID
-  -discord-gid string
-        DISCORD_GID, discord guild ID
-  -discord-token string
-        DISCORD_TOKEN, discord bot token
+    	DISCORD_CID, discord cid, required
   -discord-command string
-	DISCORD_COMMAND, the string to look for when manually entering commands in Discord (in the form of !DISCORD_COMMAND)
-  -mumble-address string
-        MUMBLE_ADDRESS, mumble server address, example example.com
-  -mumble-password string
-        MUMBLE_PASSWORD, mumble password, optional
-  -mumble-port int
-        MUMBLE_PORT mumble port (default 64738)
-  -mumble-username string
-        MUMBLE_USERNAME, mumble username (default "discord-bridge")
-  -mumble-insecure bool
-        MUMBLE_INSECURE, allow connection to insecure (invalid TLS cert) mumble server
-  -mumble-channel string
-	MUMBLE_CHANNEL, pick what channel the bridge joins in Mumble. Must be a direct child of Root.
+    	DISCORD_COMMAND, Discord command string, env alt DISCORD_COMMAND, optional, (defaults mumble-discord) (default "mumble-discord")
+  -discord-disable-text
+    	DISCORD_DISABLE_TEXT, disable sending direct messages to discord, (default false)
+  -discord-gid string
+    	DISCORD_GID, discord gid, required
+  -discord-token string
+    	DISCORD_TOKEN, discord bot token, required
   -mode string
-	MODE, determines what mode the bridge starts in
+    	MODE, [constant, manual, auto] determine which mode the bridge starts in, (default constant) (default "constant")
+  -mumble-address string
+    	MUMBLE_ADDRESS, mumble server address, example example.com, required
+  -mumble-channel string
+    	MUMBLE_CHANNEL, mumble channel to start in, optional
+  -mumble-disable-text
+    	MUMBLE_DISABLE_TEXT, disable sending text to mumble, (default false)
+  -mumble-insecure
+    	 MUMBLE_INSECURE, mumble insecure, optional
+  -mumble-password string
+    	MUMBLE_PASSWORD, mumble password, optional
+  -mumble-port int
+    	MUMBLE_PORT, mumble port, (default 64738) (default 64738)
+  -mumble-username string
+    	MUMBLE_USERNAME, mumble username, (default: discord) (default "Discord")
+  -nice
+    	NICE, whether the bridge should automatically try to 'nice' itself, (default false)
 ```
 
 The bridge can be run with the follow modes:

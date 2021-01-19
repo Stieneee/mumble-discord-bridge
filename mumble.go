@@ -15,7 +15,7 @@ var mumbleStreamingArr []bool
 
 // MumbleDuplex - listenera and outgoing
 type MumbleDuplex struct {
-	Close chan bool
+	die chan bool
 }
 
 // OnAudioStream - Spawn routines to handle incoming packets
@@ -29,11 +29,11 @@ func (m MumbleDuplex) OnAudioStream(e *gumble.AudioStreamEvent) {
 	mumbleStreamingArr = append(mumbleStreamingArr, false)
 	mutex.Unlock()
 
-	go func(die chan bool) {
+	go func() {
 		log.Println("new mumble audio stream", e.User.Name)
 		for {
 			select {
-			case <-die:
+			case <-m.die:
 				log.Println("Removing mumble audio stream")
 				return
 			case p := <-e.C:
@@ -45,7 +45,7 @@ func (m MumbleDuplex) OnAudioStream(e *gumble.AudioStreamEvent) {
 				}
 			}
 		}
-	}(m.Close)
+	}()
 	return
 }
 

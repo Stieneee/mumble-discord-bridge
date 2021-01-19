@@ -5,183 +5,234 @@ import (
 	"fmt"
 	"log"
 	"net"
-	"os"
-	"os/signal"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/bwmarrin/discordgo"
 	"layeh.com/gumble/gumble"
 )
 
-//BridgeState manages dynamic information about the bridge during runtime
-type BridgeState struct {
-	ActiveConn       chan bool
-	Connected        bool
-	Mode             bridgeMode
-	Client           *gumble.Client
-	DiscordUsers     map[string]bool
-	MumbleUsers      map[string]bool
-	MumbleUserCount  int
-	DiscordUserCount int
-	AutoChan         chan bool
+type discordUser struct {
+	username string
+	seen     bool
+	dm       *discordgo.Channel
 }
 
-func startBridge(discord *discordgo.Session, discordGID string, discordCID string, l *Listener, die chan bool) {
-	dgv, err := discord.ChannelVoiceJoin(discordGID, discordCID, false, false)
+//BridgeState manages dynamic information about the bridge during runtime
+type BridgeState struct {
+	// The configuration data for this bridge
+	BridgeConfig *BridgeConfig
+
+	// TODO
+	BridgeDie chan bool
+
+	// Bridge connection
+	Connected bool
+
+	// The bridge mode constant, auto, manual. Default is constant.
+	Mode bridgeMode
+
+	// Discord session. This is created and outside the bridge state
+	DiscordSession *discordgo.Session
+
+	// Discord voice connection. Empty if not connected.
+	DiscordVoice *discordgo.VoiceConnection
+
+	// Mumble client. Empty if not connected.
+	MumbleClient *gumble.Client
+
+	// Map of Discord users tracked by this bridge.
+	DiscordUsers      map[string]discordUser
+	DiscordUsersMutex sync.Mutex
+
+	// Map of Mumble users tracked by this bridge
+	MumbleUsers      map[string]bool
+	MumbleUsersMutex sync.Mutex
+
+	// Kill the auto connect routine
+	AutoChanDie chan bool
+
+	// Discord Duplex and Event Listener
+	DiscordStream   *DiscordDuplex
+	DiscordListener *DiscordListener
+
+	// Mumble Duplex and Event Listener
+	MumbleStream   *MumbleDuplex
+	MumbleListener *MumbleListener
+}
+
+// startBridge established the voice connection
+func (b *BridgeState) startBridge() {
+
+	b.BridgeDie = make(chan bool)
+
+	var err error
+
+	// DISCORD Connect Voice
+
+	b.DiscordVoice, err = b.DiscordSession.ChannelVoiceJoin(b.BridgeConfig.GID, b.BridgeConfig.CID, false, false)
 	if err != nil {
 		log.Println(err)
 		return
 	}
-	defer dgv.Speaking(false)
-	defer dgv.Close()
+	defer b.DiscordVoice.Speaking(false)
+	defer b.DiscordVoice.Close()
 
-	// MUMBLE Setup
+	// MUMBLE Connect
 
-	m := MumbleDuplex{
-		Close: make(chan bool),
+	b.MumbleStream = &MumbleDuplex{
+		die: b.BridgeDie,
 	}
+	det := b.BridgeConfig.MumbleConfig.AudioListeners.Attach(b.MumbleStream)
 
 	var tlsConfig tls.Config
-	if l.BridgeConf.MumbleInsecure {
+	if b.BridgeConfig.MumbleInsecure {
 		tlsConfig.InsecureSkipVerify = true
 	}
 
-	mumble, err := gumble.DialWithDialer(new(net.Dialer), l.BridgeConf.MumbleAddr, l.BridgeConf.Config, &tlsConfig)
+	b.MumbleClient, err = gumble.DialWithDialer(new(net.Dialer), b.BridgeConfig.MumbleAddr, b.BridgeConfig.MumbleConfig, &tlsConfig)
 
 	if err != nil {
 		log.Println(err)
 		return
 	}
-	defer mumble.Disconnect()
-	l.Bridge.Client = mumble
+	defer b.MumbleClient.Disconnect()
+
 	// Shared Channels
 	// Shared channels pass PCM information in 10ms chunks [480]int16
-	var toMumble = mumble.AudioOutgoing()
+	// These channels are internal and are not added to the bridge state.
+	var toMumble = b.MumbleClient.AudioOutgoing()
 	var toDiscord = make(chan []int16, 100)
 
 	log.Println("Mumble Connected")
 
 	// Start Passing Between
-	// Mumble
-	go m.fromMumbleMixer(toDiscord, die)
-	det := l.BridgeConf.Config.AudioListeners.Attach(m)
 
-	//Discord
-	go discordReceivePCM(dgv, die)
-	go fromDiscordMixer(toMumble, die)
-	go discordSendPCM(dgv, toDiscord, die)
-	c := make(chan os.Signal)
-	signal.Notify(c, os.Interrupt)
+	// From Mumble
+	go b.MumbleStream.fromMumbleMixer(toDiscord, b.BridgeDie)
+
+	// From Discord
+	b.DiscordStream = &DiscordDuplex{
+		Bridge:         b,
+		fromDiscordMap: make(map[uint32]fromDiscord),
+		die:            b.BridgeDie,
+	}
+
+	go b.DiscordStream.discordReceivePCM()
+	go b.DiscordStream.fromDiscordMixer(toMumble)
+
+	// To Discord
+	go b.DiscordStream.discordSendPCM(toDiscord)
 
 	go func() {
 		ticker := time.NewTicker(500 * time.Millisecond)
 		for {
 			<-ticker.C
-			if mumble.State() != 2 {
-				log.Println("Lost mumble connection " + strconv.Itoa(int(mumble.State())))
+			if b.MumbleClient.State() != 2 {
+				log.Println("Lost mumble connection " + strconv.Itoa(int(b.MumbleClient.State())))
 				select {
 				default:
-					close(die)
-				case <-die:
+					close(b.BridgeDie)
+				case <-b.BridgeDie:
 					//die is already closed
 				}
-
-				select {
-				default:
-					close(m.Close)
-				case <-m.Close:
-					//m.Close is already closed
-				}
-				return
 			}
 		}
 	}()
-	l.ConnectedLock.Lock()
-	l.Bridge.Connected = true
-	l.ConnectedLock.Unlock()
+
+	b.Connected = true
 
 	select {
-	case sig := <-c:
-		log.Printf("\nGot %s signal. Terminating Mumble-Bridge\n", sig)
-	case <-die:
+	case <-b.BridgeDie:
 		log.Println("\nGot internal die request. Terminating Mumble-Bridge")
-		dgv.Disconnect()
+		b.DiscordVoice.Disconnect()
 		det.Detach()
-		close(die)
-		close(m.Close)
+		close(toDiscord)
 		close(toMumble)
-		l.Bridge.Connected = false
-		l.Bridge.Client = nil
-		l.Bridge.MumbleUserCount = 0
-		l.Bridge.MumbleUsers = make(map[string]bool)
-		l.Bridge.DiscordUserCount = 0
-		l.Bridge.DiscordUsers = make(map[string]bool)
+		b.Connected = false
+		b.DiscordVoice = nil
+		b.MumbleClient = nil
+		b.MumbleUsers = make(map[string]bool)
+		b.DiscordUsers = make(map[string]discordUser)
 	}
 }
 
-func discordStatusUpdate(dg *discordgo.Session, host, port string, l *Listener) {
-	status := ""
-	curr := 0
+func (b *BridgeState) discordStatusUpdate() {
 	m, _ := time.ParseDuration("30s")
 	for {
 		time.Sleep(3 * time.Second)
-		resp, err := gumble.Ping(host+":"+port, -1, m)
+		resp, err := gumble.Ping(b.BridgeConfig.MumbleAddr, -1, m)
+		status := ""
 
 		if err != nil {
 			log.Printf("error pinging mumble server %v\n", err)
-			dg.UpdateListeningStatus("an error pinging mumble")
+			b.DiscordSession.UpdateListeningStatus("an error pinging mumble")
 		} else {
-			l.UserCountLock.Lock()
-			l.ConnectedLock.Lock()
-			curr = resp.ConnectedUsers
-			if l.Bridge.Connected {
-				curr = curr - 1
+			b.MumbleUsersMutex.Lock()
+			userCount := resp.ConnectedUsers
+			if b.Connected {
+				userCount = userCount - 1
 			}
-			if curr != l.Bridge.MumbleUserCount {
-				l.Bridge.MumbleUserCount = curr
-			}
-			if curr == 0 {
-				status = ""
+			if userCount == 0 {
+				status = "No users in Mumble"
 			} else {
-				if len(l.Bridge.MumbleUsers) > 0 {
-					status = fmt.Sprintf("%v/%v users in Mumble\n", len(l.Bridge.MumbleUsers), curr)
+				if len(b.MumbleUsers) > 0 {
+					status = fmt.Sprintf("%v/%v users in Mumble\n", len(b.MumbleUsers), userCount)
 				} else {
-					status = fmt.Sprintf("%v users in Mumble\n", curr)
+					status = fmt.Sprintf("%v users in Mumble\n", userCount)
 				}
 			}
-			l.ConnectedLock.Unlock()
-			l.UserCountLock.Unlock()
-			dg.UpdateListeningStatus(status)
+			b.MumbleUsersMutex.Unlock()
+			b.DiscordSession.UpdateListeningStatus(status)
 		}
 	}
 }
 
-//AutoBridge starts a goroutine to check the number of users in discord and mumble
-//when there is at least one user on both, starts up the bridge
-//when there are no users on either side, kills the bridge
-func AutoBridge(s *discordgo.Session, l *Listener) {
+// AutoBridge starts a goroutine to check the number of users in discord and mumble
+// when there is at least one user on both, starts up the bridge
+// when there are no users on either side, kills the bridge
+func (b *BridgeState) AutoBridge() {
 	log.Println("beginning auto mode")
+	ticker := time.NewTicker(3 * time.Second)
+
 	for {
 		select {
-		default:
-		case <-l.Bridge.AutoChan:
+		case <-ticker.C:
+		case <-b.AutoChanDie:
 			log.Println("ending automode")
 			return
 		}
-		time.Sleep(3 * time.Second)
-		l.UserCountLock.Lock()
-		if !l.Bridge.Connected && l.Bridge.MumbleUserCount > 0 && l.Bridge.DiscordUserCount > 0 {
+
+		b.MumbleUsersMutex.Lock()
+		b.DiscordUsersMutex.Lock()
+
+		if !b.Connected && len(b.MumbleUsers) > 0 && len(b.DiscordUsers) > 0 {
 			log.Println("users detected in mumble and discord, bridging")
-			die := make(chan bool)
-			l.Bridge.ActiveConn = die
-			go startBridge(s, l.BridgeConf.GID, l.BridgeConf.CID, l, die)
+			go b.startBridge()
 		}
-		if l.Bridge.Connected && l.Bridge.MumbleUserCount == 0 && l.Bridge.DiscordUserCount <= 1 {
+		if b.Connected && len(b.MumbleUsers) == 0 && len(b.DiscordUsers) <= 1 {
 			log.Println("no one online, killing bridge")
-			l.Bridge.ActiveConn <- true
-			l.Bridge.ActiveConn = nil
+			b.BridgeDie <- true
+			b.BridgeDie = nil
 		}
-		l.UserCountLock.Unlock()
+
+		b.MumbleUsersMutex.Unlock()
+		b.DiscordUsersMutex.Unlock()
 	}
+}
+
+func (b *BridgeState) discordSendMessageAll(msg string) {
+	if b.BridgeConfig.DiscordDisableText {
+		return
+	}
+
+	b.DiscordUsersMutex.Lock()
+	for id := range b.DiscordUsers {
+		du := b.DiscordUsers[id]
+		if du.dm != nil {
+			b.DiscordSession.ChannelMessageSend(du.dm.ID, msg)
+		}
+	}
+	b.DiscordUsersMutex.Unlock()
 }

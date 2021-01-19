@@ -18,9 +18,16 @@ type fromDiscord struct {
 	streaming bool
 }
 
-var discordMutex sync.Mutex
-var discordMixerMutex sync.Mutex
-var fromDiscordMap = make(map[uint32]fromDiscord)
+// DiscordDuplex Handle discord voice stream
+type DiscordDuplex struct {
+	Bridge *BridgeState
+
+	discordMutex      sync.Mutex
+	discordMixerMutex sync.Mutex
+	fromDiscordMap    map[uint32]fromDiscord
+
+	die chan bool
+}
 
 // OnError gets called by dgvoice when an error is encountered.
 // By default logs to STDERR
@@ -36,7 +43,7 @@ var OnError = func(str string, err error) {
 
 // SendPCM will receive on the provied channel encode
 // received PCM data into Opus then send that to Discordgo
-func discordSendPCM(v *discordgo.VoiceConnection, pcm <-chan []int16, die chan bool) {
+func (dd *DiscordDuplex) discordSendPCM(pcm <-chan []int16) {
 	const channels int = 1
 	const frameRate int = 48000              // audio sampling rate
 	const frameSize int = 960                // uint16 size of each audio frame
@@ -57,7 +64,7 @@ func discordSendPCM(v *discordgo.VoiceConnection, pcm <-chan []int16, die chan b
 
 	for {
 		select {
-		case <-die:
+		case <-dd.die:
 			log.Println("Killing discordSendPCM")
 			return
 		default:
@@ -65,7 +72,7 @@ func discordSendPCM(v *discordgo.VoiceConnection, pcm <-chan []int16, die chan b
 		<-ticker.C
 		if len(pcm) > 1 {
 			if !streaming {
-				v.Speaking(true)
+				dd.Bridge.DiscordVoice.Speaking(true)
 				streaming = true
 			}
 
@@ -79,11 +86,11 @@ func discordSendPCM(v *discordgo.VoiceConnection, pcm <-chan []int16, die chan b
 				continue
 			}
 
-			if v.Ready == false || v.OpusSend == nil {
+			if dd.Bridge.DiscordVoice.Ready == false || dd.Bridge.DiscordVoice.OpusSend == nil {
 				if lastReady == true {
-					OnError(fmt.Sprintf("Discordgo not ready for opus packets. %+v : %+v", v.Ready, v.OpusSend), nil)
+					OnError(fmt.Sprintf("Discordgo not ready for opus packets. %+v : %+v", dd.Bridge.DiscordVoice.Ready, dd.Bridge.DiscordVoice.OpusSend), nil)
 					readyTimeout = time.AfterFunc(30*time.Second, func() {
-						die <- true
+						dd.die <- true
 					})
 					lastReady = false
 				}
@@ -93,10 +100,10 @@ func discordSendPCM(v *discordgo.VoiceConnection, pcm <-chan []int16, die chan b
 				lastReady = true
 				readyTimeout.Stop()
 			}
-			v.OpusSend <- opus
+			dd.Bridge.DiscordVoice.OpusSend <- opus
 		} else {
 			if streaming {
-				v.Speaking(false)
+				dd.Bridge.DiscordVoice.Speaking(false)
 				streaming = false
 			}
 		}
@@ -105,25 +112,19 @@ func discordSendPCM(v *discordgo.VoiceConnection, pcm <-chan []int16, die chan b
 
 // ReceivePCM will receive on the the Discordgo OpusRecv channel and decode
 // the opus audio into PCM then send it on the provided channel.
-func discordReceivePCM(v *discordgo.VoiceConnection, die chan bool) {
+func (dd *DiscordDuplex) discordReceivePCM() {
 	var err error
 
 	lastReady := true
 	var readyTimeout *time.Timer
 
 	for {
-		select {
-		case <-die:
-			log.Println("killing discord ReceivePCM")
-			return
-		default:
-		}
-		if v.Ready == false || v.OpusRecv == nil {
+		if dd.Bridge.DiscordVoice.Ready == false || dd.Bridge.DiscordVoice.OpusRecv == nil {
 			if lastReady == true {
-				OnError(fmt.Sprintf("Discordgo not to receive opus packets. %+v : %+v", v.Ready, v.OpusSend), nil)
+				OnError(fmt.Sprintf("Discordgo not to receive opus packets. %+v : %+v", dd.Bridge.DiscordVoice.Ready, dd.Bridge.DiscordVoice.OpusSend), nil)
 				readyTimeout = time.AfterFunc(30*time.Second, func() {
 					log.Println("set ready timeout")
-					die <- true
+					dd.die <- true
 				})
 				lastReady = false
 			}
@@ -133,22 +134,25 @@ func discordReceivePCM(v *discordgo.VoiceConnection, die chan bool) {
 			lastReady = true
 			readyTimeout.Stop()
 		}
+
 		var ok bool
 		var p *discordgo.Packet
+
 		select {
-		case p, ok = <-v.OpusRecv:
-		case <-die:
+		case p, ok = <-dd.Bridge.DiscordVoice.OpusRecv:
+		case <-dd.die:
 			log.Println("killing discord ReceivePCM")
 			return
 		}
+
 		if !ok {
 			log.Println("Opus not ok")
 			continue
 		}
 
-		discordMutex.Lock()
-		_, ok = fromDiscordMap[p.SSRC]
-		discordMutex.Unlock()
+		dd.discordMutex.Lock()
+		_, ok = dd.fromDiscordMap[p.SSRC]
+		dd.discordMutex.Unlock()
 		if !ok {
 			newStream := fromDiscord{}
 			newStream.pcm = make(chan []int16, 100)
@@ -158,14 +162,14 @@ func discordReceivePCM(v *discordgo.VoiceConnection, die chan bool) {
 				OnError("error creating opus decoder", err)
 				continue
 			}
-			discordMutex.Lock()
-			fromDiscordMap[p.SSRC] = newStream
-			discordMutex.Unlock()
+			dd.discordMutex.Lock()
+			dd.fromDiscordMap[p.SSRC] = newStream
+			dd.discordMutex.Unlock()
 		}
 
-		discordMutex.Lock()
-		p.PCM, err = fromDiscordMap[p.SSRC].decoder.Decode(p.Opus, 960, false)
-		discordMutex.Unlock()
+		dd.discordMutex.Lock()
+		p.PCM, err = dd.fromDiscordMap[p.SSRC].decoder.Decode(p.Opus, 960, false)
+		dd.discordMutex.Unlock()
 		if err != nil {
 			OnError("Error decoding opus data", err)
 			continue
@@ -175,62 +179,62 @@ func discordReceivePCM(v *discordgo.VoiceConnection, die chan bool) {
 			continue
 		}
 
-		discordMutex.Lock()
+		dd.discordMutex.Lock()
 		select {
-		case fromDiscordMap[p.SSRC].pcm <- p.PCM[0:480]:
+		case dd.fromDiscordMap[p.SSRC].pcm <- p.PCM[0:480]:
 		default:
 			log.Println("fromDiscordMap buffer full. Dropping packet")
-			discordMutex.Unlock()
+			dd.discordMutex.Unlock()
 			continue
 		}
 		select {
-		case fromDiscordMap[p.SSRC].pcm <- p.PCM[480:960]:
+		case dd.fromDiscordMap[p.SSRC].pcm <- p.PCM[480:960]:
 		default:
 			log.Println("fromDiscordMap buffer full. Dropping packet")
 		}
-		discordMutex.Unlock()
+		dd.discordMutex.Unlock()
 	}
 }
 
-func fromDiscordMixer(toMumble chan<- gumble.AudioBuffer, die chan bool) {
+func (dd *DiscordDuplex) fromDiscordMixer(toMumble chan<- gumble.AudioBuffer) {
 	ticker := time.NewTicker(10 * time.Millisecond)
 	sendAudio := false
 
 	for {
 		select {
-		case <-die:
+		case <-dd.die:
 			log.Println("killing fromDiscordMixer")
 			return
-		default:
+		case <-ticker.C:
 		}
-		<-ticker.C
-		discordMutex.Lock()
+
+		dd.discordMutex.Lock()
 
 		sendAudio = false
 		internalMixerArr := make([][]int16, 0)
 
 		// Work through each channel
-		for i := range fromDiscordMap {
-			if len(fromDiscordMap[i].pcm) > 0 {
+		for i := range dd.fromDiscordMap {
+			if len(dd.fromDiscordMap[i].pcm) > 0 {
 				sendAudio = true
-				if fromDiscordMap[i].streaming == false {
-					x := fromDiscordMap[i]
+				if dd.fromDiscordMap[i].streaming == false {
+					x := dd.fromDiscordMap[i]
 					x.streaming = true
-					fromDiscordMap[i] = x
+					dd.fromDiscordMap[i] = x
 				}
 
-				x1 := (<-fromDiscordMap[i].pcm)
+				x1 := (<-dd.fromDiscordMap[i].pcm)
 				internalMixerArr = append(internalMixerArr, x1)
 			} else {
-				if fromDiscordMap[i].streaming == true {
-					x := fromDiscordMap[i]
+				if dd.fromDiscordMap[i].streaming == true {
+					x := dd.fromDiscordMap[i]
 					x.streaming = false
-					fromDiscordMap[i] = x
+					dd.fromDiscordMap[i] = x
 				}
 			}
 		}
 
-		discordMutex.Unlock()
+		dd.discordMutex.Unlock()
 
 		outBuf := make([]int16, 480)
 

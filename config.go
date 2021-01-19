@@ -21,13 +21,15 @@ const (
 //BridgeConfig holds configuration information set at startup
 //It should not change during runtime
 type BridgeConfig struct {
-	Config         *gumble.Config
-	MumbleAddr     string
-	MumbleInsecure bool
-	MumbleChannel  string
-	Command        string
-	GID            string
-	CID            string
+	MumbleConfig       *gumble.Config
+	MumbleAddr         string
+	MumbleInsecure     bool
+	MumbleChannel      string
+	MumbleDisableText  bool
+	Command            string
+	GID                string
+	CID                string
+	DiscordDisableText bool
 }
 
 func lookupEnvOrString(key string, defaultVal string) string {
