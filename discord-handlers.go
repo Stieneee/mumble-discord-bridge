@@ -35,6 +35,10 @@ func (l *DiscordListener) ready(s *discordgo.Session, event *discordgo.Ready) {
 
 	for _, vs := range g.VoiceStates {
 		if vs.ChannelID == l.Bridge.BridgeConfig.CID {
+			if s.State.User.ID == vs.UserID {
+				// Ignore bot
+				continue
+			}
 
 			u, err := s.User(vs.UserID)
 			if err != nil {
