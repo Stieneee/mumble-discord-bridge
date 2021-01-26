@@ -98,6 +98,7 @@ func (b *BridgeState) startBridge() {
 
 	if err != nil {
 		log.Println(err)
+		b.DiscordVoice.Disconnect()
 		return
 	}
 	defer b.MumbleClient.Disconnect()
