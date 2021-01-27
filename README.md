@@ -139,6 +139,8 @@ It is a known issue with a dependency of this project.
 
 Audio leveling from Discord needs to be improved.
 
+Delays in connecting to Mumble (such as from external authentication plugins) may result in extra error messages on initial connection.
+
 ## License
 
 Distributed under the MIT License. See LICENSE for more information.

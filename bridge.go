@@ -50,6 +50,9 @@ type BridgeState struct {
 	MumbleUsers      map[string]bool
 	MumbleUsersMutex sync.Mutex
 
+	// Total Number of Mumble users
+	MumbleUserCount int
+
 	// Kill the auto connect routine
 	AutoChanDie chan bool
 
@@ -95,6 +98,7 @@ func (b *BridgeState) startBridge() {
 
 	if err != nil {
 		log.Println(err)
+		b.DiscordVoice.Disconnect()
 		return
 	}
 	defer b.MumbleClient.Disconnect()
@@ -129,14 +133,21 @@ func (b *BridgeState) startBridge() {
 		ticker := time.NewTicker(500 * time.Millisecond)
 		for {
 			<-ticker.C
-			if b.MumbleClient.State() != 2 {
-				log.Println("Lost mumble connection " + strconv.Itoa(int(b.MumbleClient.State())))
+			if b.MumbleClient == nil || b.MumbleClient.State() != 2 {
+				if b.MumbleClient != nil {
+					log.Println("Lost mumble connection " + strconv.Itoa(int(b.MumbleClient.State())))
+				} else {
+					log.Println("Lost mumble connection due to bridge dieing")
+					return
+				}
 				select {
-				default:
-					close(b.BridgeDie)
 				case <-b.BridgeDie:
 					//die is already closed
+
+				default:
+					close(b.BridgeDie)
 				}
+
 			}
 		}
 	}()
@@ -150,6 +161,7 @@ func (b *BridgeState) startBridge() {
 		det.Detach()
 		close(toDiscord)
 		close(toMumble)
+		close(b.BridgeDie)
 		b.Connected = false
 		b.DiscordVoice = nil
 		b.MumbleClient = nil
@@ -170,17 +182,17 @@ func (b *BridgeState) discordStatusUpdate() {
 			b.DiscordSession.UpdateListeningStatus("an error pinging mumble")
 		} else {
 			b.MumbleUsersMutex.Lock()
-			userCount := resp.ConnectedUsers
+			b.MumbleUserCount = resp.ConnectedUsers
 			if b.Connected {
-				userCount = userCount - 1
+				b.MumbleUserCount = b.MumbleUserCount - 1
 			}
-			if userCount == 0 {
+			if b.MumbleUserCount == 0 {
 				status = "No users in Mumble"
 			} else {
 				if len(b.MumbleUsers) > 0 {
-					status = fmt.Sprintf("%v/%v users in Mumble\n", len(b.MumbleUsers), userCount)
+					status = fmt.Sprintf("%v/%v users in Mumble\n", len(b.MumbleUsers), b.MumbleUserCount)
 				} else {
-					status = fmt.Sprintf("%v users in Mumble\n", userCount)
+					status = fmt.Sprintf("%v users in Mumble\n", b.MumbleUserCount)
 				}
 			}
 			b.MumbleUsersMutex.Unlock()
@@ -207,14 +219,13 @@ func (b *BridgeState) AutoBridge() {
 		b.MumbleUsersMutex.Lock()
 		b.DiscordUsersMutex.Lock()
 
-		if !b.Connected && len(b.MumbleUsers) > 0 && len(b.DiscordUsers) > 0 {
+		if !b.Connected && b.MumbleUserCount > 0 && len(b.DiscordUsers) > 0 {
 			log.Println("users detected in mumble and discord, bridging")
 			go b.startBridge()
 		}
-		if b.Connected && len(b.MumbleUsers) == 0 && len(b.DiscordUsers) <= 1 {
+		if b.Connected && b.MumbleUserCount == 0 && len(b.DiscordUsers) <= 1 {
 			log.Println("no one online, killing bridge")
 			b.BridgeDie <- true
-			b.BridgeDie = nil
 		}
 
 		b.MumbleUsersMutex.Unlock()

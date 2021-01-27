@@ -15,25 +15,15 @@ type DiscordListener struct {
 	Bridge *BridgeState
 }
 
-func (l *DiscordListener) ready(s *discordgo.Session, event *discordgo.Ready) {
-	log.Println("READY event registered")
+func (l *DiscordListener) guildCreate(s *discordgo.Session, event *discordgo.GuildCreate) {
+	log.Println("CREATE event registered")
 
-	//Setup initial discord state
-	var g *discordgo.Guild
-	g = nil
-
-	for _, i := range event.Guilds {
-		if i.ID == l.Bridge.BridgeConfig.GID {
-			g = i
-		}
-	}
-
-	if g == nil {
-		log.Println("bad guild on READY")
+	if event.ID != l.Bridge.BridgeConfig.GID {
+		log.Println("received GuildCreate from a guild not in config")
 		return
 	}
 
-	for _, vs := range g.VoiceStates {
+	for _, vs := range event.VoiceStates {
 		if vs.ChannelID == l.Bridge.BridgeConfig.CID {
 			if s.State.User.ID == vs.UserID {
 				// Ignore bot
@@ -139,20 +129,6 @@ func (l *DiscordListener) messageCreate(s *discordgo.Session, m *discordgo.Messa
 		} else {
 			l.Bridge.AutoChanDie <- true
 			l.Bridge.Mode = bridgeModeManual
-		}
-	}
-}
-
-func (l *DiscordListener) guildCreate(s *discordgo.Session, event *discordgo.GuildCreate) {
-
-	if event.Guild.Unavailable {
-		return
-	}
-
-	for _, channel := range event.Guild.Channels {
-		if channel.ID == event.Guild.ID {
-			log.Println("Mumble-Discord bridge is active in new guild")
-			return
 		}
 	}
 }
