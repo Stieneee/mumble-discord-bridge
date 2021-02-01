@@ -7,8 +7,11 @@ before:
     # you may remove this if you don't need go generate
     # - go generate ./...
 builds:
-  - env:
+  - ldflags: '-s -w -linkmode external -extldflags "-static" -X main.version={{.Version}} -X main.commit={{.Commit}} -X main.date={{.Date}} -X main.builtBy=goreleaser'
+    env:
       - CGO_ENABLED=1
+    flags:
+      - -tags=netgo
     goos:
       - linux
       # - windows
