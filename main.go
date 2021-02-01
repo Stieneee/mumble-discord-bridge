@@ -112,17 +112,16 @@ func main() {
 	}
 
 	// MUMBLE SETUP
-	MumbleConfig := gumble.NewConfig()
-	Bridge.BridgeConfig.MumbleConfig = MumbleConfig
-	MumbleConfig.Username = *mumbleUsername
-	MumbleConfig.Password = *mumblePassword
-	MumbleConfig.AudioInterval = time.Millisecond * 10
+	Bridge.BridgeConfig.MumbleConfig = gumble.NewConfig()
+	Bridge.BridgeConfig.MumbleConfig.Username = *mumbleUsername
+	Bridge.BridgeConfig.MumbleConfig.Password = *mumblePassword
+	Bridge.BridgeConfig.MumbleConfig.AudioInterval = time.Millisecond * 10
 
 	Bridge.MumbleListener = &MumbleListener{
 		Bridge: Bridge,
 	}
 
-	MumbleConfig.Attach(gumbleutil.Listener{
+	Bridge.BridgeConfig.MumbleConfig.Attach(gumbleutil.Listener{
 		Connect:    Bridge.MumbleListener.mumbleConnect,
 		UserChange: Bridge.MumbleListener.mumbleUserChange,
 	})
@@ -171,7 +170,12 @@ func main() {
 	case "constant":
 		log.Println("bridge starting in constant mode")
 		Bridge.Mode = bridgeModeConstant
-		go Bridge.startBridge()
+		go func() {
+			for {
+				Bridge.startBridge()
+				log.Println("Bridge died. Restarting")
+			}
+		}()
 	default:
 		Bridge.DiscordSession.Close()
 		log.Fatalln("invalid bridge mode set")
@@ -179,8 +183,18 @@ func main() {
 
 	go Bridge.discordStatusUpdate()
 
+	// Shutdown on OS signal
 	sc := make(chan os.Signal, 1)
 	signal.Notify(sc, syscall.SIGINT, syscall.SIGTERM, os.Interrupt, os.Kill)
 	<-sc
-	log.Println("Bot shutting down")
+
+	// Signal the bridge to exit cleanly
+	Bridge.BridgeDie <- true
+
+	log.Println("OS Signal. Bot shutting down")
+
+	// Wait or the bridge to exit cleanly
+	if Bridge.Connected {
+		Bridge.WaitExit.Wait()
+	}
 }

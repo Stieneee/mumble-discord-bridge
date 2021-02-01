@@ -100,7 +100,6 @@ func (l *DiscordListener) messageCreate(s *discordgo.Session, m *discordgo.Messa
 			if vs.UserID == m.Author.ID {
 				log.Printf("Trying to leave GID %v and VID %v\n", g.ID, vs.ChannelID)
 				l.Bridge.BridgeDie <- true
-				l.Bridge.BridgeDie = nil
 				return
 			}
 		}
@@ -167,7 +166,7 @@ func (l *DiscordListener) voiceUpdate(s *discordgo.Session, event *discordgo.Voi
 						continue
 					}
 
-					println("User joined Discord " + u.Username)
+					log.Println("User joined Discord " + u.Username)
 					dm, err := s.UserChannelCreate(u.ID)
 					if err != nil {
 						log.Println("Error creating private channel for", u.Username)
@@ -194,7 +193,7 @@ func (l *DiscordListener) voiceUpdate(s *discordgo.Session, event *discordgo.Voi
 		// Remove users that are no longer connected
 		for id := range l.Bridge.DiscordUsers {
 			if l.Bridge.DiscordUsers[id].seen == false {
-				println("User left Discord channel " + l.Bridge.DiscordUsers[id].username)
+				log.Println("User left Discord channel " + l.Bridge.DiscordUsers[id].username)
 				if l.Bridge.Connected && !l.Bridge.BridgeConfig.MumbleDisableText {
 					l.Bridge.MumbleClient.Do(func() {
 						l.Bridge.MumbleClient.Self.Channel.Send(fmt.Sprintf("%v has left Discord channel\n", l.Bridge.DiscordUsers[id].username), false)

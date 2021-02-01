@@ -1,6 +1,7 @@
 package main
 
 import (
+	"log"
 	"strings"
 
 	"layeh.com/gumble/gumble"
@@ -38,6 +39,8 @@ func (l *MumbleListener) mumbleUserChange(e *gumble.UserChangeEvent) {
 
 	if e.Type.Has(gumble.UserChangeConnected) {
 
+		log.Println("User connected to mumble " + e.User.Name)
+
 		if !l.Bridge.BridgeConfig.MumbleDisableText {
 			e.User.Send("Mumble-Discord-Bridge v" + version)
 
@@ -63,7 +66,9 @@ func (l *MumbleListener) mumbleUserChange(e *gumble.UserChangeEvent) {
 		// Send discord a notice
 		l.Bridge.discordSendMessageAll(e.User.Name + " has joined mumble")
 	}
+
 	if e.Type.Has(gumble.UserChangeDisconnected) {
 		l.Bridge.discordSendMessageAll(e.User.Name + " has left mumble")
+		log.Println("User disconnected from mumble " + e.User.Name)
 	}
 }

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"sync"
@@ -25,8 +26,6 @@ type DiscordDuplex struct {
 	discordMutex      sync.Mutex
 	discordMixerMutex sync.Mutex
 	fromDiscordMap    map[uint32]fromDiscord
-
-	die chan bool
 }
 
 // OnError gets called by dgvoice when an error is encountered.
@@ -43,7 +42,7 @@ var OnError = func(str string, err error) {
 
 // SendPCM will receive on the provied channel encode
 // received PCM data into Opus then send that to Discordgo
-func (dd *DiscordDuplex) discordSendPCM(pcm <-chan []int16) {
+func (dd *DiscordDuplex) discordSendPCM(ctx context.Context, wg *sync.WaitGroup, cancel context.CancelFunc, pcm <-chan []int16) {
 	const channels int = 1
 	const frameRate int = 48000              // audio sampling rate
 	const frameSize int = 960                // uint16 size of each audio frame
@@ -62,10 +61,12 @@ func (dd *DiscordDuplex) discordSendPCM(pcm <-chan []int16) {
 	lastReady := true
 	var readyTimeout *time.Timer
 
+	wg.Add(1)
+
 	for {
 		select {
-		case <-dd.die:
-			log.Println("Killing discordSendPCM")
+		case <-ctx.Done():
+			wg.Done()
 			return
 		default:
 		}
@@ -90,7 +91,8 @@ func (dd *DiscordDuplex) discordSendPCM(pcm <-chan []int16) {
 				if lastReady == true {
 					OnError(fmt.Sprintf("Discordgo not ready for opus packets. %+v : %+v", dd.Bridge.DiscordVoice.Ready, dd.Bridge.DiscordVoice.OpusSend), nil)
 					readyTimeout = time.AfterFunc(30*time.Second, func() {
-						dd.die <- true
+						log.Println("set ready timeout")
+						cancel()
 					})
 					lastReady = false
 				}
@@ -112,11 +114,13 @@ func (dd *DiscordDuplex) discordSendPCM(pcm <-chan []int16) {
 
 // ReceivePCM will receive on the the Discordgo OpusRecv channel and decode
 // the opus audio into PCM then send it on the provided channel.
-func (dd *DiscordDuplex) discordReceivePCM() {
+func (dd *DiscordDuplex) discordReceivePCM(ctx context.Context, wg *sync.WaitGroup, cancel context.CancelFunc) {
 	var err error
 
 	lastReady := true
 	var readyTimeout *time.Timer
+
+	wg.Add(1)
 
 	for {
 		if dd.Bridge.DiscordVoice.Ready == false || dd.Bridge.DiscordVoice.OpusRecv == nil {
@@ -124,7 +128,7 @@ func (dd *DiscordDuplex) discordReceivePCM() {
 				OnError(fmt.Sprintf("Discordgo not to receive opus packets. %+v : %+v", dd.Bridge.DiscordVoice.Ready, dd.Bridge.DiscordVoice.OpusSend), nil)
 				readyTimeout = time.AfterFunc(30*time.Second, func() {
 					log.Println("set ready timeout")
-					dd.die <- true
+					cancel()
 				})
 				lastReady = false
 			}
@@ -139,10 +143,10 @@ func (dd *DiscordDuplex) discordReceivePCM() {
 		var p *discordgo.Packet
 
 		select {
-		case p, ok = <-dd.Bridge.DiscordVoice.OpusRecv:
-		case <-dd.die:
-			log.Println("killing discord ReceivePCM")
+		case <-ctx.Done():
+			wg.Done()
 			return
+		case p, ok = <-dd.Bridge.DiscordVoice.OpusRecv:
 		}
 
 		if !ok {
@@ -196,14 +200,15 @@ func (dd *DiscordDuplex) discordReceivePCM() {
 	}
 }
 
-func (dd *DiscordDuplex) fromDiscordMixer(toMumble chan<- gumble.AudioBuffer) {
+func (dd *DiscordDuplex) fromDiscordMixer(ctx context.Context, wg *sync.WaitGroup, toMumble chan<- gumble.AudioBuffer) {
 	ticker := time.NewTicker(10 * time.Millisecond)
 	sendAudio := false
+	wg.Add(1)
 
 	for {
 		select {
-		case <-dd.die:
-			log.Println("killing fromDiscordMixer")
+		case <-ctx.Done():
+			wg.Done()
 			return
 		case <-ticker.C:
 		}

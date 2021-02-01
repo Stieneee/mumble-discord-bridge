@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"fmt"
 	"log"
@@ -24,8 +25,14 @@ type BridgeState struct {
 	// The configuration data for this bridge
 	BridgeConfig *BridgeConfig
 
-	// TODO
+	// External requests to kill the bridge
 	BridgeDie chan bool
+
+	// Lock to only allow one bridge session at a time
+	lock sync.Mutex
+
+	// Wait for bridge to exit cleanly
+	WaitExit *sync.WaitGroup
 
 	// Bridge connection
 	Connected bool
@@ -67,33 +74,44 @@ type BridgeState struct {
 
 // startBridge established the voice connection
 func (b *BridgeState) startBridge() {
+	b.lock.Lock()
+	defer b.lock.Unlock()
 
 	b.BridgeDie = make(chan bool)
+	defer close(b.BridgeDie)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	wg := sync.WaitGroup{}
+	b.WaitExit = &wg
 
 	var err error
 
 	// DISCORD Connect Voice
-
+	log.Println("Attempting to join Discord voice channel")
 	b.DiscordVoice, err = b.DiscordSession.ChannelVoiceJoin(b.BridgeConfig.GID, b.BridgeConfig.CID, false, false)
 	if err != nil {
 		log.Println(err)
+		b.DiscordVoice.Disconnect()
 		return
 	}
+	defer b.DiscordVoice.Disconnect()
 	defer b.DiscordVoice.Speaking(false)
-	defer b.DiscordVoice.Close()
+	log.Println("Discord Voice Connected")
 
 	// MUMBLE Connect
 
-	b.MumbleStream = &MumbleDuplex{
-		die: b.BridgeDie,
-	}
+	b.MumbleStream = &MumbleDuplex{}
 	det := b.BridgeConfig.MumbleConfig.AudioListeners.Attach(b.MumbleStream)
+	defer det.Detach()
 
 	var tlsConfig tls.Config
 	if b.BridgeConfig.MumbleInsecure {
 		tlsConfig.InsecureSkipVerify = true
 	}
 
+	log.Println("Attempting to join Mumble")
 	b.MumbleClient, err = gumble.DialWithDialer(new(net.Dialer), b.BridgeConfig.MumbleAddr, b.BridgeConfig.MumbleConfig, &tlsConfig)
 
 	if err != nil {
@@ -102,6 +120,7 @@ func (b *BridgeState) startBridge() {
 		return
 	}
 	defer b.MumbleClient.Disconnect()
+	log.Println("Mumble Connected")
 
 	// Shared Channels
 	// Shared channels pass PCM information in 10ms chunks [480]int16
@@ -109,65 +128,66 @@ func (b *BridgeState) startBridge() {
 	var toMumble = b.MumbleClient.AudioOutgoing()
 	var toDiscord = make(chan []int16, 100)
 
-	log.Println("Mumble Connected")
+	defer close(toDiscord)
+	defer close(toMumble)
 
 	// Start Passing Between
 
 	// From Mumble
-	go b.MumbleStream.fromMumbleMixer(toDiscord, b.BridgeDie)
+	go b.MumbleStream.fromMumbleMixer(ctx, &wg, toDiscord)
 
 	// From Discord
 	b.DiscordStream = &DiscordDuplex{
 		Bridge:         b,
 		fromDiscordMap: make(map[uint32]fromDiscord),
-		die:            b.BridgeDie,
 	}
 
-	go b.DiscordStream.discordReceivePCM()
-	go b.DiscordStream.fromDiscordMixer(toMumble)
+	go b.DiscordStream.discordReceivePCM(ctx, &wg, cancel)
+	go b.DiscordStream.fromDiscordMixer(ctx, &wg, toMumble)
 
 	// To Discord
-	go b.DiscordStream.discordSendPCM(toDiscord)
+	go b.DiscordStream.discordSendPCM(ctx, &wg, cancel, toDiscord)
 
+	// Monitor Mumble
 	go func() {
+		wg.Add(1)
 		ticker := time.NewTicker(500 * time.Millisecond)
 		for {
-			<-ticker.C
-			if b.MumbleClient == nil || b.MumbleClient.State() != 2 {
-				if b.MumbleClient != nil {
-					log.Println("Lost mumble connection " + strconv.Itoa(int(b.MumbleClient.State())))
-				} else {
-					log.Println("Lost mumble connection due to bridge dieing")
-					return
+			select {
+			case <-ticker.C:
+				if b.MumbleClient == nil || b.MumbleClient.State() != 2 {
+					if b.MumbleClient != nil {
+						log.Println("Lost mumble connection " + strconv.Itoa(int(b.MumbleClient.State())))
+					} else {
+						log.Println("Lost mumble connection due to bridge dieing")
+					}
+					cancel()
 				}
-				select {
-				case <-b.BridgeDie:
-					//die is already closed
-
-				default:
-					close(b.BridgeDie)
-				}
-
+			case <-ctx.Done():
+				wg.Done()
+				return
 			}
 		}
 	}()
 
 	b.Connected = true
 
+	// Hold until cancelled or external die request
 	select {
+	case <-ctx.Done():
+		log.Println("Bridge internal context cancel")
 	case <-b.BridgeDie:
-		log.Println("\nGot internal die request. Terminating Mumble-Bridge")
-		b.DiscordVoice.Disconnect()
-		det.Detach()
-		close(toDiscord)
-		close(toMumble)
-		close(b.BridgeDie)
-		b.Connected = false
-		b.DiscordVoice = nil
-		b.MumbleClient = nil
-		b.MumbleUsers = make(map[string]bool)
-		b.DiscordUsers = make(map[string]discordUser)
+		log.Println("Bridge die request received")
+		cancel()
 	}
+
+	b.Connected = false
+	wg.Wait()
+	log.Println("Terminating Bridge")
+	b.MumbleUsersMutex.Lock()
+	b.MumbleUsers = make(map[string]bool)
+	b.MumbleUsersMutex.Unlock()
+	b.DiscordUsers = make(map[string]discordUser)
 }
 
 func (b *BridgeState) discordStatusUpdate() {
