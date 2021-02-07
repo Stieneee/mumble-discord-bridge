@@ -165,6 +165,7 @@ func main() {
 		log.Println("bridge starting in automatic mode")
 		Bridge.AutoChanDie = make(chan bool)
 		Bridge.Mode = bridgeModeAuto
+		Bridge.DiscordChannelID = Bridge.BridgeConfig.CID
 		go Bridge.AutoBridge()
 	case "manual":
 		log.Println("bridge starting in manual mode")
@@ -172,9 +173,10 @@ func main() {
 	case "constant":
 		log.Println("bridge starting in constant mode")
 		Bridge.Mode = bridgeModeConstant
+		Bridge.DiscordChannelID = Bridge.BridgeConfig.CID
 		go func() {
 			for {
-				Bridge.startBridge("")
+				Bridge.startBridge()
 				log.Println("Bridge died. Restarting")
 			}
 		}()

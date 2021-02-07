@@ -24,7 +24,7 @@ func (l *DiscordListener) guildCreate(s *discordgo.Session, event *discordgo.Gui
 	}
 
 	for _, vs := range event.VoiceStates {
-		if vs.ChannelID == l.Bridge.BridgeConfig.CID {
+		if vs.ChannelID == l.Bridge.DiscordChannelID {
 			if s.State.User.ID == vs.UserID {
 				// Ignore bot
 				continue
@@ -88,7 +88,8 @@ func (l *DiscordListener) messageCreate(s *discordgo.Session, m *discordgo.Messa
 		for _, vs := range g.VoiceStates {
 			if vs.UserID == m.Author.ID {
 				log.Printf("Trying to join GID %v and VID %v\n", g.ID, vs.ChannelID)
-				go l.Bridge.startBridge(vs.ChannelID)
+				l.Bridge.DiscordChannelID = vs.ChannelID
+				go l.Bridge.startBridge()
 				return
 			}
 		}
@@ -114,7 +115,7 @@ func (l *DiscordListener) messageCreate(s *discordgo.Session, m *discordgo.Messa
 
 				time.Sleep(5 * time.Second)
 
-				go l.Bridge.startBridge(vs.ChannelID)
+				go l.Bridge.startBridge()
 				return
 			}
 		}
@@ -124,10 +125,12 @@ func (l *DiscordListener) messageCreate(s *discordgo.Session, m *discordgo.Messa
 		if l.Bridge.Mode != bridgeModeAuto {
 			l.Bridge.DiscordSession.ChannelMessageSend(m.ChannelID, "Auto mode enabled")
 			l.Bridge.Mode = bridgeModeAuto
+			l.Bridge.DiscordChannelID = l.Bridge.BridgeConfig.CID
 			l.Bridge.AutoChanDie = make(chan bool)
 			go l.Bridge.AutoBridge()
 		} else {
 			l.Bridge.DiscordSession.ChannelMessageSend(m.ChannelID, "Auto mode disabled")
+			l.Bridge.DiscordChannelID = ""
 			l.Bridge.AutoChanDie <- true
 			l.Bridge.Mode = bridgeModeManual
 		}
@@ -154,7 +157,7 @@ func (l *DiscordListener) voiceUpdate(s *discordgo.Session, event *discordgo.Voi
 
 		// Sync the channel voice states to the local discordUsersMap
 		for _, vs := range g.VoiceStates {
-			if vs.ChannelID == l.Bridge.BridgeConfig.CID {
+			if vs.ChannelID == l.Bridge.DiscordChannelID {
 				if s.State.User.ID == vs.UserID {
 					// Ignore bot
 					continue

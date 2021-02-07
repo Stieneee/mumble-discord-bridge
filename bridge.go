@@ -70,11 +70,13 @@ type BridgeState struct {
 	// Mumble Duplex and Event Listener
 	MumbleStream   *MumbleDuplex
 	MumbleListener *MumbleListener
+
+	// Discord Voice channel to join
+	DiscordChannelID string
 }
 
 // startBridge established the voice connection
-// if channelID is empty, use channelID from config
-func (b *BridgeState) startBridge(channelID string) {
+func (b *BridgeState) startBridge() {
 	b.lock.Lock()
 	defer b.lock.Unlock()
 
@@ -91,11 +93,11 @@ func (b *BridgeState) startBridge(channelID string) {
 
 	// DISCORD Connect Voice
 	log.Println("Attempting to join Discord voice channel")
-	if channelID == "" {
-		b.DiscordVoice, err = b.DiscordSession.ChannelVoiceJoin(b.BridgeConfig.GID, b.BridgeConfig.CID, false, false)
-	} else {
-		b.DiscordVoice, err = b.DiscordSession.ChannelVoiceJoin(b.BridgeConfig.GID, channelID, false, false)
+	if b.DiscordChannelID == "" {
+		log.Println("Tried to start bridge but no Discord channel specified")
+		return
 	}
+	b.DiscordVoice, err = b.DiscordSession.ChannelVoiceJoin(b.BridgeConfig.GID, b.DiscordChannelID, false, false)
 
 	if err != nil {
 		log.Println(err)
@@ -247,7 +249,7 @@ func (b *BridgeState) AutoBridge() {
 
 		if !b.Connected && b.MumbleUserCount > 0 && len(b.DiscordUsers) > 0 {
 			log.Println("users detected in mumble and discord, bridging")
-			go b.startBridge("")
+			go b.startBridge()
 		}
 		if b.Connected && b.MumbleUserCount == 0 && len(b.DiscordUsers) <= 1 {
 			log.Println("no one online, killing bridge")
