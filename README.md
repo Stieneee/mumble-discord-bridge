@@ -83,7 +83,6 @@ The bot requires the following permissions:
 * Voice Channel Speak
 * Voice Channel Use Voice Activity
 
-
 ### Finding Discord CID and GID
 
 Discord GID is a unique ID linked to one Discord Server, also called Guild. CID is similarly a unique ID for a Discord Channel. To find these you need to set Discord into developer Mode.
@@ -147,7 +146,6 @@ go build -o mumble-discord-bridge *.go
 #or
 make mumble-discord-bridge
 ```
-
 
 ## Known Issues
 
