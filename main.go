@@ -174,7 +174,7 @@ func main() {
 		Bridge.Mode = bridgeModeConstant
 		go func() {
 			for {
-				Bridge.startBridge()
+				Bridge.startBridge("")
 				log.Println("Bridge died. Restarting")
 			}
 		}()

@@ -88,7 +88,7 @@ func (l *DiscordListener) messageCreate(s *discordgo.Session, m *discordgo.Messa
 		for _, vs := range g.VoiceStates {
 			if vs.UserID == m.Author.ID {
 				log.Printf("Trying to join GID %v and VID %v\n", g.ID, vs.ChannelID)
-				go l.Bridge.startBridge()
+				go l.Bridge.startBridge(vs.ChannelID)
 				return
 			}
 		}
@@ -114,7 +114,7 @@ func (l *DiscordListener) messageCreate(s *discordgo.Session, m *discordgo.Messa
 
 				time.Sleep(5 * time.Second)
 
-				go l.Bridge.startBridge()
+				go l.Bridge.startBridge(vs.ChannelID)
 				return
 			}
 		}
@@ -122,10 +122,12 @@ func (l *DiscordListener) messageCreate(s *discordgo.Session, m *discordgo.Messa
 
 	if strings.HasPrefix(m.Content, prefix+" auto") {
 		if l.Bridge.Mode != bridgeModeAuto {
+			l.Bridge.DiscordSession.ChannelMessageSend(m.ChannelID, "Auto mode enabled")
 			l.Bridge.Mode = bridgeModeAuto
 			l.Bridge.AutoChanDie = make(chan bool)
 			go l.Bridge.AutoBridge()
 		} else {
+			l.Bridge.DiscordSession.ChannelMessageSend(m.ChannelID, "Auto mode disabled")
 			l.Bridge.AutoChanDie <- true
 			l.Bridge.Mode = bridgeModeManual
 		}
