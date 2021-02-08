@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"log"
 	"strings"
 
@@ -41,7 +40,7 @@ func (l *MumbleListener) mumbleUserChange(e *gumble.UserChangeEvent) {
 		log.Println("User connected to mumble " + e.User.Name)
 
 		if !l.Bridge.BridgeConfig.MumbleDisableText {
-			e.User.Send(fmt.Sprintf("Mumble-Discord-Bridge %v", version))
+			e.User.Send("Mumble-Discord-Bridge v" + version)
 
 			// Tell the user who is connected to discord
 			if len(l.Bridge.DiscordUsers) == 0 {
