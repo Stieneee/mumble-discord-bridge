@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"strings"
 
@@ -13,12 +14,10 @@ type MumbleListener struct {
 }
 
 func (l *MumbleListener) mumbleConnect(e *gumble.ConnectEvent) {
-	if l.Bridge.BridgeConfig.MumbleChannel != "" {
-		//join specified channel
-		startingChannel := e.Client.Channels.Find(l.Bridge.BridgeConfig.MumbleChannel)
-		if startingChannel != nil {
-			e.Client.Self.Move(startingChannel)
-		}
+	//join specified channel
+	startingChannel := e.Client.Channels.Find(l.Bridge.BridgeConfig.MumbleChannel...)
+	if startingChannel != nil {
+		e.Client.Self.Move(startingChannel)
 	}
 }
 
@@ -42,7 +41,7 @@ func (l *MumbleListener) mumbleUserChange(e *gumble.UserChangeEvent) {
 		log.Println("User connected to mumble " + e.User.Name)
 
 		if !l.Bridge.BridgeConfig.MumbleDisableText {
-			e.User.Send("Mumble-Discord-Bridge v" + version)
+			e.User.Send(fmt.Sprintf("Mumble-Discord-Bridge %v", version))
 
 			// Tell the user who is connected to discord
 			if len(l.Bridge.DiscordUsers) == 0 {

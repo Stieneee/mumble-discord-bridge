@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"runtime/pprof"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -99,7 +100,7 @@ func main() {
 			// MumbleConfig:   config,
 			MumbleAddr:         *mumbleAddr + ":" + strconv.Itoa(*mumblePort),
 			MumbleInsecure:     *mumbleInsecure,
-			MumbleChannel:      *mumbleChannel,
+			MumbleChannel:      strings.Split(*mumbleChannel, "/"),
 			MumbleDisableText:  *mumbleDisableText,
 			Command:            *discordCommand,
 			GID:                *discordGID,
