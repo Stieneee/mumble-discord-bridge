@@ -74,7 +74,22 @@ The guide below provides information on how to setup a Discord bot.
 
 [Create a Discord Bot](https://discordpy.readthedocs.io/en/latest/discord.html)
 
-Individual Discord servers need to invite the bot before it can connect.
+Individual Discord servers need to invite the bot before it can connect.  
+The bot requires the following permissions:
+* View Channels
+* See Messages
+* Read Message History
+* Voice Channel Connect
+* Voice Channel Speak
+* Voice Channel Use Voice Activity
+
+### Finding Discord CID and GID
+
+Discord GID is a unique ID linked to one Discord Server, also called Guild. CID is similarly a unique ID for a Discord Channel. To find these you need to set Discord into developer Mode.
+
+[Instructions to enable Discord Developer Mode](https://discordia.me/en/developer-mode)
+
+Then you can get the GID by right-clicking your server and selecting Copy-ID. Similarly the CID can be found right clicking the voice channel and selecting Copy ID.
 
 ### Binary
 
