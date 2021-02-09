@@ -13,12 +13,10 @@ type MumbleListener struct {
 }
 
 func (l *MumbleListener) mumbleConnect(e *gumble.ConnectEvent) {
-	if l.Bridge.BridgeConfig.MumbleChannel != "" {
-		//join specified channel
-		startingChannel := e.Client.Channels.Find(l.Bridge.BridgeConfig.MumbleChannel)
-		if startingChannel != nil {
-			e.Client.Self.Move(startingChannel)
-		}
+	//join specified channel
+	startingChannel := e.Client.Channels.Find(l.Bridge.BridgeConfig.MumbleChannel...)
+	if startingChannel != nil {
+		e.Client.Self.Move(startingChannel)
 	}
 }
 

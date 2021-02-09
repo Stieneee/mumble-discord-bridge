@@ -27,7 +27,7 @@ Usage of ./mumble-discord-bridge:
   -mumble-address string
     	MUMBLE_ADDRESS, mumble server address, example example.com, required
   -mumble-channel string
-    	MUMBLE_CHANNEL, mumble channel to start in, optional
+    	MUMBLE_CHANNEL, mumble channel to start in, using '/' to seperate nested channels, optional
   -mumble-disable-text
     	MUMBLE_DISABLE_TEXT, disable sending text to mumble, (default false)
   -mumble-insecure
@@ -40,6 +40,8 @@ Usage of ./mumble-discord-bridge:
     	MUMBLE_USERNAME, mumble username, (default: discord) (default "Discord")
   -nice
     	NICE, whether the bridge should automatically try to 'nice' itself, (default false)
+  -debug
+        DEBUG_LEVEL,  DISCORD debug level, optional (default: 1)
 ```
 
 The bridge can be run with the follow modes:

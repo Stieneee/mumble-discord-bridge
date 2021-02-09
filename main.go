@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"runtime/pprof"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -38,7 +39,7 @@ func main() {
 	mumbleUsername := flag.String("mumble-username", lookupEnvOrString("MUMBLE_USERNAME", "Discord"), "MUMBLE_USERNAME, mumble username, (default: discord)")
 	mumblePassword := flag.String("mumble-password", lookupEnvOrString("MUMBLE_PASSWORD", ""), "MUMBLE_PASSWORD, mumble password, optional")
 	mumbleInsecure := flag.Bool("mumble-insecure", lookupEnvOrBool("MUMBLE_INSECURE", false), " MUMBLE_INSECURE, mumble insecure, optional")
-	mumbleChannel := flag.String("mumble-channel", lookupEnvOrString("MUMBLE_CHANNEL", ""), "MUMBLE_CHANNEL, mumble channel to start in, optional")
+	mumbleChannel := flag.String("mumble-channel", lookupEnvOrString("MUMBLE_CHANNEL", ""), "MUMBLE_CHANNEL, mumble channel to start in, using '/' to seperate nested channels, optional")
 	mumbleDisableText := flag.Bool("mumble-disable-text", lookupEnvOrBool("MUMBLE_DISABLE_TEXT", false), "MUMBLE_DISABLE_TEXT, disable sending text to mumble, (default false)")
 	discordToken := flag.String("discord-token", lookupEnvOrString("DISCORD_TOKEN", ""), "DISCORD_TOKEN, discord bot token, required")
 	discordGID := flag.String("discord-gid", lookupEnvOrString("DISCORD_GID", ""), "DISCORD_GID, discord gid, required")
@@ -47,6 +48,7 @@ func main() {
 	discordDisableText := flag.Bool("discord-disable-text", lookupEnvOrBool("DISCORD_DISABLE_TEXT", false), "DISCORD_DISABLE_TEXT, disable sending direct messages to discord, (default false)")
 	mode := flag.String("mode", lookupEnvOrString("MODE", "constant"), "MODE, [constant, manual, auto] determine which mode the bridge starts in, (default constant)")
 	nice := flag.Bool("nice", lookupEnvOrBool("NICE", false), "NICE, whether the bridge should automatically try to 'nice' itself, (default false)")
+	debug := flag.Int("debug-level", lookupEnvOrInt("DEBUG", 1), "DEBUG_LEVEL, Discord debug level, optional, (default 1)")
 
 	cpuprofile := flag.String("cpuprofile", "", "write cpu profile to `file`")
 
@@ -99,7 +101,7 @@ func main() {
 			// MumbleConfig:   config,
 			MumbleAddr:         *mumbleAddr + ":" + strconv.Itoa(*mumblePort),
 			MumbleInsecure:     *mumbleInsecure,
-			MumbleChannel:      *mumbleChannel,
+			MumbleChannel:      strings.Split(*mumbleChannel, "/"),
 			MumbleDisableText:  *mumbleDisableText,
 			Command:            *discordCommand,
 			GID:                *discordGID,
@@ -135,7 +137,7 @@ func main() {
 		return
 	}
 
-	Bridge.DiscordSession.LogLevel = 1
+	Bridge.DiscordSession.LogLevel = *debug
 	Bridge.DiscordSession.StateEnabled = true
 	Bridge.DiscordSession.Identify.Intents = discordgo.MakeIntent(discordgo.IntentsAllWithoutPrivileged)
 	Bridge.DiscordSession.ShouldReconnectOnError = true
