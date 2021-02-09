@@ -193,7 +193,7 @@ func main() {
 	<-sc
 
 	// Signal the bridge to exit cleanly
-	Bridge.BridgeDie <- true
+	close(Bridge.BridgeDie)
 
 	log.Println("OS Signal. Bot shutting down")
 

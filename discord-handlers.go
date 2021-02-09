@@ -61,10 +61,6 @@ func (l *DiscordListener) guildCreate(s *discordgo.Session, event *discordgo.Gui
 
 func (l *DiscordListener) messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 
-	if l.Bridge.Mode == bridgeModeConstant {
-		return
-	}
-
 	// Ignore all messages created by the bot itself
 	if m.Author.ID == s.State.User.ID {
 		return
@@ -83,9 +79,19 @@ func (l *DiscordListener) messageCreate(s *discordgo.Session, m *discordgo.Messa
 		return
 	}
 	prefix := "!" + l.Bridge.BridgeConfig.Command
+
+	if l.Bridge.Mode == bridgeModeConstant && strings.HasPrefix(m.Content, prefix) {
+		l.Bridge.DiscordSession.ChannelMessageSend(m.ChannelID, "Constant mode enabled, manual commands can not be entered")
+		return
+	}
+
 	if strings.HasPrefix(m.Content, prefix+" link") {
 		// Look for the message sender in that guild's current voice states.
 		for _, vs := range g.VoiceStates {
+			if l.Bridge.Connected {
+				l.Bridge.DiscordSession.ChannelMessageSend(m.ChannelID, "Bridge already running, unlink first")
+				return
+			}
 			if vs.UserID == m.Author.ID {
 				log.Printf("Trying to join GID %v and VID %v\n", g.ID, vs.ChannelID)
 				l.Bridge.DiscordChannelID = vs.ChannelID
@@ -97,8 +103,12 @@ func (l *DiscordListener) messageCreate(s *discordgo.Session, m *discordgo.Messa
 
 	if strings.HasPrefix(m.Content, prefix+" unlink") {
 		// Look for the message sender in that guild's current voice states.
+		if !l.Bridge.Connected {
+			l.Bridge.DiscordSession.ChannelMessageSend(m.ChannelID, "Bridge is not currently running")
+			return
+		}
 		for _, vs := range g.VoiceStates {
-			if vs.UserID == m.Author.ID {
+			if vs.UserID == m.Author.ID && vs.ChannelID == l.Bridge.DiscordChannelID {
 				log.Printf("Trying to leave GID %v and VID %v\n", g.ID, vs.ChannelID)
 				l.Bridge.BridgeDie <- true
 				return
@@ -108,6 +118,10 @@ func (l *DiscordListener) messageCreate(s *discordgo.Session, m *discordgo.Messa
 
 	if strings.HasPrefix(m.Content, prefix+" refresh") {
 		// Look for the message sender in that guild's current voice states.
+		if !l.Bridge.Connected {
+			l.Bridge.DiscordSession.ChannelMessageSend(m.ChannelID, "Bridge is not currently running")
+			return
+		}
 		for _, vs := range g.VoiceStates {
 			if vs.UserID == m.Author.ID {
 				log.Printf("Trying to refresh GID %v and VID %v\n", g.ID, vs.ChannelID)
