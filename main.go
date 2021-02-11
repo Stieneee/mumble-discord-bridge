@@ -192,13 +192,12 @@ func main() {
 	signal.Notify(sc, syscall.SIGINT, syscall.SIGTERM, os.Interrupt, os.Kill)
 	<-sc
 
-	// Signal the bridge to exit cleanly
-	close(Bridge.BridgeDie)
-
 	log.Println("OS Signal. Bot shutting down")
 
 	// Wait or the bridge to exit cleanly
 	if Bridge.Connected {
+		//TODO BridgeDie occasionally panics on send to closed channel
+		Bridge.BridgeDie <- true
 		Bridge.WaitExit.Wait()
 	}
 }
