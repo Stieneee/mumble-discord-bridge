@@ -70,6 +70,9 @@ type BridgeState struct {
 	// Mumble Duplex and Event Listener
 	MumbleStream   *MumbleDuplex
 	MumbleListener *MumbleListener
+
+	// Discord Voice channel to join
+	DiscordChannelID string
 }
 
 // startBridge established the voice connection
@@ -90,7 +93,12 @@ func (b *BridgeState) startBridge() {
 
 	// DISCORD Connect Voice
 	log.Println("Attempting to join Discord voice channel")
-	b.DiscordVoice, err = b.DiscordSession.ChannelVoiceJoin(b.BridgeConfig.GID, b.BridgeConfig.CID, false, false)
+	if b.DiscordChannelID == "" {
+		log.Println("Tried to start bridge but no Discord channel specified")
+		return
+	}
+	b.DiscordVoice, err = b.DiscordSession.ChannelVoiceJoin(b.BridgeConfig.GID, b.DiscordChannelID, false, false)
+
 	if err != nil {
 		log.Println(err)
 		b.DiscordVoice.Disconnect()

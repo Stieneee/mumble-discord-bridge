@@ -165,6 +165,7 @@ func main() {
 		log.Println("bridge starting in automatic mode")
 		Bridge.AutoChanDie = make(chan bool)
 		Bridge.Mode = bridgeModeAuto
+		Bridge.DiscordChannelID = Bridge.BridgeConfig.CID
 		go Bridge.AutoBridge()
 	case "manual":
 		log.Println("bridge starting in manual mode")
@@ -172,6 +173,7 @@ func main() {
 	case "constant":
 		log.Println("bridge starting in constant mode")
 		Bridge.Mode = bridgeModeConstant
+		Bridge.DiscordChannelID = Bridge.BridgeConfig.CID
 		go func() {
 			for {
 				Bridge.startBridge()
@@ -190,13 +192,12 @@ func main() {
 	signal.Notify(sc, syscall.SIGINT, syscall.SIGTERM, os.Interrupt, os.Kill)
 	<-sc
 
-	// Signal the bridge to exit cleanly
-	Bridge.BridgeDie <- true
-
 	log.Println("OS Signal. Bot shutting down")
 
 	// Wait or the bridge to exit cleanly
 	if Bridge.Connected {
+		//TODO BridgeDie occasionally panics on send to closed channel
+		Bridge.BridgeDie <- true
 		Bridge.WaitExit.Wait()
 	}
 }
