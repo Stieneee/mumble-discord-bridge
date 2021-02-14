@@ -21,19 +21,6 @@ func (l *MumbleListener) mumbleConnect(e *gumble.ConnectEvent) {
 }
 
 func (l *MumbleListener) mumbleUserChange(e *gumble.UserChangeEvent) {
-	l.Bridge.MumbleUsersMutex.Lock()
-	if e.Type.Has(gumble.UserChangeConnected) || e.Type.Has(gumble.UserChangeChannel) || e.Type.Has(gumble.UserChangeDisconnected) {
-		l.Bridge.MumbleUsers = make(map[string]bool)
-		for _, user := range l.Bridge.MumbleClient.Self.Channel.Users {
-			//note, this might be too slow for really really big channels?
-			//event listeners block while processing
-			//also probably bad to rebuild the set every user change.
-			if user.Name != l.Bridge.MumbleClient.Self.Name {
-				l.Bridge.MumbleUsers[user.Name] = true
-			}
-		}
-	}
-	l.Bridge.MumbleUsersMutex.Unlock()
 
 	if e.Type.Has(gumble.UserChangeConnected) {
 
@@ -54,7 +41,7 @@ func (l *MumbleListener) mumbleUserChange(e *gumble.UserChangeEvent) {
 					arr = append(arr, l.Bridge.DiscordUsers[u].username)
 				}
 
-				s = s + strings.Join(arr[:], ",")
+				s = s + strings.Join(arr[:], ", ")
 
 				l.Bridge.DiscordUsersMutex.Unlock()
 				e.User.Send(s)

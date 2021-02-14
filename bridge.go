@@ -53,10 +53,6 @@ type BridgeState struct {
 	DiscordUsers      map[string]discordUser
 	DiscordUsersMutex sync.Mutex
 
-	// Map of Mumble users tracked by this bridge
-	MumbleUsers      map[string]bool
-	MumbleUsersMutex sync.Mutex
-
 	// Total Number of Mumble users
 	MumbleUserCount int
 
@@ -184,9 +180,6 @@ func (b *BridgeState) startBridge() {
 	b.Connected = false
 	wg.Wait()
 	log.Println("Terminating Bridge")
-	b.MumbleUsersMutex.Lock()
-	b.MumbleUsers = make(map[string]bool)
-	b.MumbleUsersMutex.Unlock()
 	b.DiscordUsers = make(map[string]discordUser)
 }
 
@@ -199,25 +192,24 @@ func (b *BridgeState) discordStatusUpdate() {
 
 		if err != nil {
 			log.Printf("error pinging mumble server %v\n", err)
-			b.DiscordSession.UpdateListeningStatus("an error pinging mumble")
+			status = "an error polling mumble"
 		} else {
-			b.MumbleUsersMutex.Lock()
 			b.MumbleUserCount = resp.ConnectedUsers
 			if b.Connected {
 				b.MumbleUserCount = b.MumbleUserCount - 1
-			}
-			if b.MumbleUserCount == 0 {
-				status = "No users in Mumble"
-			} else {
-				if len(b.MumbleUsers) > 0 {
-					status = fmt.Sprintf("%v/%v users in Mumble\n", len(b.MumbleUsers), b.MumbleUserCount)
+
+				if b.MumbleUserCount == 0 {
+					status = "No users in Mumble"
 				} else {
-					status = fmt.Sprintf("%v users in Mumble\n", b.MumbleUserCount)
+					channelCount := len(b.MumbleClient.Self.Channel.Users) - 1
+					status = fmt.Sprintf("%v/%v users in Mumble\n", channelCount, b.MumbleUserCount)
 				}
+			} else {
+				status = fmt.Sprintf("%v users in Mumble\n", b.MumbleUserCount)
 			}
-			b.MumbleUsersMutex.Unlock()
-			b.DiscordSession.UpdateListeningStatus(status)
 		}
+
+		b.DiscordSession.UpdateListeningStatus(status)
 	}
 }
 
@@ -236,7 +228,6 @@ func (b *BridgeState) AutoBridge() {
 			return
 		}
 
-		b.MumbleUsersMutex.Lock()
 		b.DiscordUsersMutex.Lock()
 
 		if !b.Connected && b.MumbleUserCount > 0 && len(b.DiscordUsers) > 0 {
@@ -248,7 +239,6 @@ func (b *BridgeState) AutoBridge() {
 			b.BridgeDie <- true
 		}
 
-		b.MumbleUsersMutex.Unlock()
 		b.DiscordUsersMutex.Unlock()
 	}
 }
