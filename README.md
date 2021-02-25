@@ -32,6 +32,8 @@ Usage of ./mumble-discord-bridge:
     	MUMBLE_DISABLE_TEXT, disable sending text to mumble, (default false)
   -mumble-insecure
     	 MUMBLE_INSECURE, mumble insecure, optional
+  -mumble-certificate
+       MUMBLE_CERTIFICATE, mumble client certificate, optional
   -mumble-password string
     	MUMBLE_PASSWORD, mumble password, optional
   -mumble-port int
@@ -92,6 +94,12 @@ Discord GID is a unique ID linked to one Discord Server, also called Guild. CID 
 [Instructions to enable Discord Developer Mode](https://discordia.me/en/developer-mode)
 
 Then you can get the GID by right-clicking your server and selecting Copy-ID. Similarly the CID can be found right clicking the voice channel and selecting Copy ID.
+
+### Generating Client Certificate
+
+If you don't have a client certificate, you can generate one with this command:
+
+    openssl req -x509 -nodes -days 3650 -newkey rsa:2048 -keyout cert.pem -out cert.pem -subj "/CN=mumble-discord-bridge"
 
 ### Binary
 

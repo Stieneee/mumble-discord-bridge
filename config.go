@@ -24,6 +24,7 @@ type BridgeConfig struct {
 	MumbleConfig       *gumble.Config
 	MumbleAddr         string
 	MumbleInsecure     bool
+	MumbleCertificate  string
 	MumbleChannel      []string
 	MumbleDisableText  bool
 	Command            string
