@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net"
-  "os"
+	"os"
 	"strconv"
 	"sync"
 	"time"
@@ -121,7 +121,7 @@ func (b *BridgeState) startBridge() {
 	}
 
 	if b.BridgeConfig.MumbleCertificate != "" {
-    keyFile := ""
+		keyFile := ""
 		if keyFile == "" {
 			keyFile = b.BridgeConfig.MumbleCertificate
 		}
