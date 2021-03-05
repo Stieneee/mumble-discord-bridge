@@ -121,11 +121,8 @@ func (b *BridgeState) startBridge() {
 	}
 
 	if b.BridgeConfig.MumbleCertificate != "" {
-		keyFile := ""
-		if keyFile == "" {
-			keyFile = b.BridgeConfig.MumbleCertificate
-		}
-		if certificate, err := tls.LoadX509KeyPair(b.BridgeConfig.MumbleCertificate, keyFile); err != nil {
+		keyFile := b.BridgeConfig.MumbleCertificate
+		if certificate, err := tls.LoadX509KeyPair(keyFile, keyFile); err != nil {
 			fmt.Fprintf(os.Stderr, "%s: %s\n", os.Args[0], err)
 			os.Exit(1)
 		} else {
