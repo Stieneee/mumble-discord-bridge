@@ -27,7 +27,7 @@ Usage of ./mumble-discord-bridge:
   -mumble-address string
     	MUMBLE_ADDRESS, mumble server address, example example.com, required
   -mumble-channel string
-    	MUMBLE_CHANNEL, mumble channel to start in, using '/' to seperate nested channels, optional
+    	MUMBLE_CHANNEL, mumble channel to start in, using '/' to separate nested channels, optional
   -mumble-disable-text
     	MUMBLE_DISABLE_TEXT, disable sending text to mumble, (default false)
   -mumble-insecure
@@ -92,6 +92,15 @@ Discord GID is a unique ID linked to one Discord Server, also called Guild. CID 
 [Instructions to enable Discord Developer Mode](https://discordia.me/en/developer-mode)
 
 Then you can get the GID by right-clicking your server and selecting Copy-ID. Similarly the CID can be found right clicking the voice channel and selecting Copy ID.
+
+### Generating Mumble Client  (Optional)
+
+Optionally you can specify a client certificate for mumble [Mumble Certificates](https://wiki.mumble.info/wiki/Mumble_Certificates)
+If you don't have a client certificate, you can generate one with this command:
+
+``` bash
+openssl req -x509 -nodes -days 3650 -newkey rsa:2048 -keyout cert.pem -out cert.pem -subj "/CN=mumble-discord-bridge"
+```
 
 ### Binary
 
