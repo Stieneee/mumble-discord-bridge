@@ -39,6 +39,7 @@ func main() {
 	mumbleUsername := flag.String("mumble-username", lookupEnvOrString("MUMBLE_USERNAME", "Discord"), "MUMBLE_USERNAME, mumble username, (default: discord)")
 	mumblePassword := flag.String("mumble-password", lookupEnvOrString("MUMBLE_PASSWORD", ""), "MUMBLE_PASSWORD, mumble password, optional")
 	mumbleInsecure := flag.Bool("mumble-insecure", lookupEnvOrBool("MUMBLE_INSECURE", false), " MUMBLE_INSECURE, mumble insecure, optional")
+	mumbleCertificate := flag.String("mumble-certificate", lookupEnvOrString("MUMBLE_CERTIFICATE", ""), "MUMBLE_CERTIFICATE, client certificate to use when connecting to the Mumble server")
 	mumbleChannel := flag.String("mumble-channel", lookupEnvOrString("MUMBLE_CHANNEL", ""), "MUMBLE_CHANNEL, mumble channel to start in, using '/' to seperate nested channels, optional")
 	mumbleDisableText := flag.Bool("mumble-disable-text", lookupEnvOrBool("MUMBLE_DISABLE_TEXT", false), "MUMBLE_DISABLE_TEXT, disable sending text to mumble, (default false)")
 	discordToken := flag.String("discord-token", lookupEnvOrString("DISCORD_TOKEN", ""), "DISCORD_TOKEN, discord bot token, required")
@@ -101,6 +102,7 @@ func main() {
 			// MumbleConfig:   config,
 			MumbleAddr:         *mumbleAddr + ":" + strconv.Itoa(*mumblePort),
 			MumbleInsecure:     *mumbleInsecure,
+			MumbleCertificate:  *mumbleCertificate,
 			MumbleChannel:      strings.Split(*mumbleChannel, "/"),
 			MumbleDisableText:  *mumbleDisableText,
 			Command:            *discordCommand,
