@@ -32,6 +32,8 @@ Usage of ./mumble-discord-bridge:
     	MUMBLE_DISABLE_TEXT, disable sending text to mumble, (default false)
   -mumble-insecure
     	 MUMBLE_INSECURE, mumble insecure, optional
+  -mumble-certificate
+       MUMBLE_CERTIFICATE, mumble client certificate, optional
   -mumble-password string
     	MUMBLE_PASSWORD, mumble password, optional
   -mumble-port int

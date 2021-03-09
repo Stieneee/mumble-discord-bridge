@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"os"
 	"strconv"
 	"sync"
 	"time"
@@ -117,6 +118,16 @@ func (b *BridgeState) startBridge() {
 	var tlsConfig tls.Config
 	if b.BridgeConfig.MumbleInsecure {
 		tlsConfig.InsecureSkipVerify = true
+	}
+
+	if b.BridgeConfig.MumbleCertificate != "" {
+		keyFile := b.BridgeConfig.MumbleCertificate
+		if certificate, err := tls.LoadX509KeyPair(keyFile, keyFile); err != nil {
+			fmt.Fprintf(os.Stderr, "%s: %s\n", os.Args[0], err)
+			os.Exit(1)
+		} else {
+			tlsConfig.Certificates = append(tlsConfig.Certificates, certificate)
+		}
 	}
 
 	log.Println("Attempting to join Mumble")
