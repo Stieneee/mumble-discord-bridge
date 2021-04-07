@@ -35,6 +35,9 @@ type BridgeState struct {
 	// Wait for bridge to exit cleanly
 	WaitExit *sync.WaitGroup
 
+	// Bridge State Mutex
+	BridgeMutex sync.Mutex
+
 	// Bridge connection
 	Connected bool
 
@@ -189,7 +192,9 @@ func (b *BridgeState) startBridge() {
 		}
 	}()
 
+	b.BridgeMutex.Lock()
 	b.Connected = true
+	b.BridgeMutex.Unlock()
 
 	// Hold until cancelled or external die request
 	select {
@@ -200,7 +205,10 @@ func (b *BridgeState) startBridge() {
 		cancel()
 	}
 
+	b.BridgeMutex.Lock()
 	b.Connected = false
+	b.BridgeMutex.Unlock()
+
 	wg.Wait()
 	log.Println("Terminating Bridge")
 	b.MumbleUsersMutex.Lock()
@@ -221,6 +229,7 @@ func (b *BridgeState) discordStatusUpdate() {
 			b.DiscordSession.UpdateListeningStatus("an error pinging mumble")
 		} else {
 			b.MumbleUsersMutex.Lock()
+			b.BridgeMutex.Lock()
 			b.MumbleUserCount = resp.ConnectedUsers
 			if b.Connected {
 				b.MumbleUserCount = b.MumbleUserCount - 1
@@ -234,6 +243,7 @@ func (b *BridgeState) discordStatusUpdate() {
 					status = fmt.Sprintf("%v users in Mumble\n", b.MumbleUserCount)
 				}
 			}
+			b.BridgeMutex.Unlock()
 			b.MumbleUsersMutex.Unlock()
 			b.DiscordSession.UpdateListeningStatus(status)
 		}
@@ -257,6 +267,7 @@ func (b *BridgeState) AutoBridge() {
 
 		b.MumbleUsersMutex.Lock()
 		b.DiscordUsersMutex.Lock()
+		b.BridgeMutex.Lock()
 
 		if !b.Connected && b.MumbleUserCount > 0 && len(b.DiscordUsers) > 0 {
 			log.Println("users detected in mumble and discord, bridging")
@@ -267,6 +278,7 @@ func (b *BridgeState) AutoBridge() {
 			b.BridgeDie <- true
 		}
 
+		b.BridgeMutex.Unlock()
 		b.MumbleUsersMutex.Unlock()
 		b.DiscordUsersMutex.Unlock()
 	}

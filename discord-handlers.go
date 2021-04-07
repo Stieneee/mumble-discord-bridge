@@ -49,11 +49,13 @@ func (l *DiscordListener) guildCreate(s *discordgo.Session, event *discordgo.Gui
 			l.Bridge.DiscordUsersMutex.Unlock()
 
 			// If connected to mumble inform users of Discord users
+			l.Bridge.BridgeMutex.Lock()
 			if l.Bridge.Connected && !l.Bridge.BridgeConfig.MumbleDisableText {
 				l.Bridge.MumbleClient.Do(func() {
 					l.Bridge.MumbleClient.Self.Channel.Send(fmt.Sprintf("%v has joined Discord\n", u.Username), false)
 				})
 			}
+			l.Bridge.BridgeMutex.Unlock()
 
 		}
 	}
@@ -85,10 +87,14 @@ func (l *DiscordListener) messageCreate(s *discordgo.Session, m *discordgo.Messa
 		return
 	}
 
+	l.Bridge.BridgeMutex.Lock()
+	bridgeConnected := l.Bridge.Connected
+	l.Bridge.BridgeMutex.Unlock()
+
 	if strings.HasPrefix(m.Content, prefix+" link") {
 		// Look for the message sender in that guild's current voice states.
 		for _, vs := range g.VoiceStates {
-			if l.Bridge.Connected {
+			if bridgeConnected {
 				l.Bridge.DiscordSession.ChannelMessageSend(m.ChannelID, "Bridge already running, unlink first")
 				return
 			}
@@ -103,7 +109,7 @@ func (l *DiscordListener) messageCreate(s *discordgo.Session, m *discordgo.Messa
 
 	if strings.HasPrefix(m.Content, prefix+" unlink") {
 		// Look for the message sender in that guild's current voice states.
-		if !l.Bridge.Connected {
+		if !bridgeConnected {
 			l.Bridge.DiscordSession.ChannelMessageSend(m.ChannelID, "Bridge is not currently running")
 			return
 		}
@@ -118,7 +124,7 @@ func (l *DiscordListener) messageCreate(s *discordgo.Session, m *discordgo.Messa
 
 	if strings.HasPrefix(m.Content, prefix+" refresh") {
 		// Look for the message sender in that guild's current voice states.
-		if !l.Bridge.Connected {
+		if !bridgeConnected {
 			l.Bridge.DiscordSession.ChannelMessageSend(m.ChannelID, "Bridge is not currently running")
 			return
 		}
@@ -195,11 +201,13 @@ func (l *DiscordListener) voiceUpdate(s *discordgo.Session, event *discordgo.Voi
 						seen:     true,
 						dm:       dm,
 					}
+					l.Bridge.BridgeMutex.Lock()
 					if l.Bridge.Connected && !l.Bridge.BridgeConfig.MumbleDisableText {
 						l.Bridge.MumbleClient.Do(func() {
 							l.Bridge.MumbleClient.Self.Channel.Send(fmt.Sprintf("%v has joined Discord\n", u.Username), false)
 						})
 					}
+					l.Bridge.BridgeMutex.Unlock()
 				} else {
 					du := l.Bridge.DiscordUsers[vs.UserID]
 					du.seen = true
@@ -213,11 +221,13 @@ func (l *DiscordListener) voiceUpdate(s *discordgo.Session, event *discordgo.Voi
 		for id := range l.Bridge.DiscordUsers {
 			if !l.Bridge.DiscordUsers[id].seen {
 				log.Println("User left Discord channel " + l.Bridge.DiscordUsers[id].username)
+				l.Bridge.BridgeMutex.Lock()
 				if l.Bridge.Connected && !l.Bridge.BridgeConfig.MumbleDisableText {
 					l.Bridge.MumbleClient.Do(func() {
 						l.Bridge.MumbleClient.Self.Channel.Send(fmt.Sprintf("%v has left Discord channel\n", l.Bridge.DiscordUsers[id].username), false)
 					})
 				}
+				l.Bridge.BridgeMutex.Unlock()
 				delete(l.Bridge.DiscordUsers, id)
 			}
 		}

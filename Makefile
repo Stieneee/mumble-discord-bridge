@@ -6,6 +6,9 @@ mumble-discord-bridge: $(GOFILES)
 dev: $(GOFILES)
 	goreleaser build --skip-validate --rm-dist && sudo ./dist/mumble-discord-bridge_linux_amd64/mumble-discord-bridge
 
+dev-race: $(GOFILES)
+	go run -race *.go
+
 dev-profile: $(GOFILES)
 	goreleaser build --skip-validate --rm-dist && sudo ./dist/mumble-discord-bridge_linux_amd64/mumble-discord-bridge -cpuprofile cpu.prof
 

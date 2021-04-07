@@ -23,9 +23,8 @@ type fromDiscord struct {
 type DiscordDuplex struct {
 	Bridge *BridgeState
 
-	discordMutex      sync.Mutex
-	discordMixerMutex sync.Mutex
-	fromDiscordMap    map[uint32]fromDiscord
+	discordMutex   sync.Mutex
+	fromDiscordMap map[uint32]fromDiscord
 }
 
 // OnError gets called by dgvoice when an error is encountered.
@@ -87,6 +86,7 @@ func (dd *DiscordDuplex) discordSendPCM(ctx context.Context, wg *sync.WaitGroup,
 				continue
 			}
 
+			dd.Bridge.DiscordVoice.RWMutex.RLock()
 			if !dd.Bridge.DiscordVoice.Ready || dd.Bridge.DiscordVoice.OpusSend == nil {
 				if lastReady {
 					OnError(fmt.Sprintf("Discordgo not ready for opus packets. %+v : %+v", dd.Bridge.DiscordVoice.Ready, dd.Bridge.DiscordVoice.OpusSend), nil)
@@ -96,13 +96,15 @@ func (dd *DiscordDuplex) discordSendPCM(ctx context.Context, wg *sync.WaitGroup,
 					})
 					lastReady = false
 				}
-				continue
 			} else if !lastReady {
 				fmt.Println("Discordgo ready to send opus packets")
 				lastReady = true
 				readyTimeout.Stop()
+			} else {
+				dd.Bridge.DiscordVoice.OpusSend <- opus
 			}
-			dd.Bridge.DiscordVoice.OpusSend <- opus
+			dd.Bridge.DiscordVoice.RWMutex.RUnlock()
+
 		} else {
 			if streaming {
 				dd.Bridge.DiscordVoice.Speaking(false)
@@ -123,6 +125,7 @@ func (dd *DiscordDuplex) discordReceivePCM(ctx context.Context, wg *sync.WaitGro
 	wg.Add(1)
 
 	for {
+		dd.Bridge.DiscordVoice.RWMutex.RLock()
 		if !dd.Bridge.DiscordVoice.Ready || dd.Bridge.DiscordVoice.OpusRecv == nil {
 			if lastReady {
 				OnError(fmt.Sprintf("Discordgo not to receive opus packets. %+v : %+v", dd.Bridge.DiscordVoice.Ready, dd.Bridge.DiscordVoice.OpusSend), nil)
@@ -138,6 +141,7 @@ func (dd *DiscordDuplex) discordReceivePCM(ctx context.Context, wg *sync.WaitGro
 			lastReady = true
 			readyTimeout.Stop()
 		}
+		dd.Bridge.DiscordVoice.RWMutex.RUnlock()
 
 		var ok bool
 		var p *discordgo.Packet

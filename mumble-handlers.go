@@ -43,22 +43,23 @@ func (l *MumbleListener) mumbleUserChange(e *gumble.UserChangeEvent) {
 			e.User.Send("Mumble-Discord-Bridge v" + version)
 
 			// Tell the user who is connected to discord
+			l.Bridge.DiscordUsersMutex.Lock()
 			if len(l.Bridge.DiscordUsers) == 0 {
 				e.User.Send("No users connected to Discord")
 			} else {
 				s := "Connected to Discord: "
 
 				arr := []string{}
-				l.Bridge.DiscordUsersMutex.Lock()
 				for u := range l.Bridge.DiscordUsers {
 					arr = append(arr, l.Bridge.DiscordUsers[u].username)
 				}
 
 				s = s + strings.Join(arr[:], ",")
 
-				l.Bridge.DiscordUsersMutex.Unlock()
 				e.User.Send(s)
 			}
+			l.Bridge.DiscordUsersMutex.Unlock()
+
 		}
 
 		// Send discord a notice
