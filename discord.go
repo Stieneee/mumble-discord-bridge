@@ -87,8 +87,8 @@ func (dd *DiscordDuplex) discordSendPCM(ctx context.Context, wg *sync.WaitGroup,
 				continue
 			}
 
-			if dd.Bridge.DiscordVoice.Ready == false || dd.Bridge.DiscordVoice.OpusSend == nil {
-				if lastReady == true {
+			if !dd.Bridge.DiscordVoice.Ready || dd.Bridge.DiscordVoice.OpusSend == nil {
+				if lastReady {
 					OnError(fmt.Sprintf("Discordgo not ready for opus packets. %+v : %+v", dd.Bridge.DiscordVoice.Ready, dd.Bridge.DiscordVoice.OpusSend), nil)
 					readyTimeout = time.AfterFunc(30*time.Second, func() {
 						log.Println("set ready timeout")
@@ -97,7 +97,7 @@ func (dd *DiscordDuplex) discordSendPCM(ctx context.Context, wg *sync.WaitGroup,
 					lastReady = false
 				}
 				continue
-			} else if lastReady == false {
+			} else if !lastReady {
 				fmt.Println("Discordgo ready to send opus packets")
 				lastReady = true
 				readyTimeout.Stop()
@@ -123,8 +123,8 @@ func (dd *DiscordDuplex) discordReceivePCM(ctx context.Context, wg *sync.WaitGro
 	wg.Add(1)
 
 	for {
-		if dd.Bridge.DiscordVoice.Ready == false || dd.Bridge.DiscordVoice.OpusRecv == nil {
-			if lastReady == true {
+		if !dd.Bridge.DiscordVoice.Ready || dd.Bridge.DiscordVoice.OpusRecv == nil {
+			if lastReady {
 				OnError(fmt.Sprintf("Discordgo not to receive opus packets. %+v : %+v", dd.Bridge.DiscordVoice.Ready, dd.Bridge.DiscordVoice.OpusSend), nil)
 				readyTimeout = time.AfterFunc(30*time.Second, func() {
 					log.Println("set ready timeout")
@@ -133,7 +133,7 @@ func (dd *DiscordDuplex) discordReceivePCM(ctx context.Context, wg *sync.WaitGro
 				lastReady = false
 			}
 			continue
-		} else if lastReady == false {
+		} else if !lastReady {
 			fmt.Println("Discordgo ready to receive packets")
 			lastReady = true
 			readyTimeout.Stop()
@@ -222,7 +222,7 @@ func (dd *DiscordDuplex) fromDiscordMixer(ctx context.Context, wg *sync.WaitGrou
 		for i := range dd.fromDiscordMap {
 			if len(dd.fromDiscordMap[i].pcm) > 0 {
 				sendAudio = true
-				if dd.fromDiscordMap[i].streaming == false {
+				if !dd.fromDiscordMap[i].streaming {
 					x := dd.fromDiscordMap[i]
 					x.streaming = true
 					dd.fromDiscordMap[i] = x
@@ -231,7 +231,7 @@ func (dd *DiscordDuplex) fromDiscordMixer(ctx context.Context, wg *sync.WaitGrou
 				x1 := (<-dd.fromDiscordMap[i].pcm)
 				internalMixerArr = append(internalMixerArr, x1)
 			} else {
-				if dd.fromDiscordMap[i].streaming == true {
+				if dd.fromDiscordMap[i].streaming {
 					x := dd.fromDiscordMap[i]
 					x.streaming = false
 					dd.fromDiscordMap[i] = x

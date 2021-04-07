@@ -168,8 +168,8 @@ func (b *BridgeState) startBridge() {
 	go b.DiscordStream.discordSendPCM(ctx, &wg, cancel, toDiscord)
 
 	// Monitor Mumble
+	wg.Add(1)
 	go func() {
-		wg.Add(1)
 		ticker := time.NewTicker(500 * time.Millisecond)
 		for {
 			select {

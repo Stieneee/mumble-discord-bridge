@@ -29,21 +29,18 @@ func (m MumbleDuplex) OnAudioStream(e *gumble.AudioStreamEvent) {
 	mutex.Unlock()
 
 	go func() {
-		// TODO kill go routine on cleanup
-		log.Println("new mumble audio stream", e.User.Name)
-		for {
-			select {
-			case p := <-e.C:
-				// log.Println("audio packet", p.Sender.Name, len(p.AudioBuffer))
+		name := e.User.Name
+		log.Println("new mumble audio stream", name)
+		for p := range e.C {
+			// log.Println("audio packet", p.Sender.Name, len(p.AudioBuffer))
 
-				// 480 per 10ms
-				for i := 0; i < len(p.AudioBuffer)/480; i++ {
-					localMumbleArray <- p.AudioBuffer[480*i : 480*(i+1)]
-				}
+			// 480 per 10ms
+			for i := 0; i < len(p.AudioBuffer)/480; i++ {
+				localMumbleArray <- p.AudioBuffer[480*i : 480*(i+1)]
 			}
 		}
+		log.Println("mumble audio stream ended", name)
 	}()
-	return
 }
 
 func (m MumbleDuplex) fromMumbleMixer(ctx context.Context, wg *sync.WaitGroup, toDiscord chan []int16) {
@@ -70,7 +67,7 @@ func (m MumbleDuplex) fromMumbleMixer(ctx context.Context, wg *sync.WaitGroup, t
 		for i := 0; i < len(fromMumbleArr); i++ {
 			if len(fromMumbleArr[i]) > 0 {
 				sendAudio = true
-				if mumbleStreamingArr[i] == false {
+				if !mumbleStreamingArr[i] {
 					mumbleStreamingArr[i] = true
 					// log.Println("mumble starting", i)
 				}
@@ -78,7 +75,7 @@ func (m MumbleDuplex) fromMumbleMixer(ctx context.Context, wg *sync.WaitGroup, t
 				x1 := (<-fromMumbleArr[i])
 				internalMixerArr = append(internalMixerArr, x1)
 			} else {
-				if mumbleStreamingArr[i] == true {
+				if mumbleStreamingArr[i] {
 					mumbleStreamingArr[i] = false
 					// log.Println("mumble stopping", i)
 				}

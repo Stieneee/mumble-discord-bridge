@@ -211,7 +211,7 @@ func (l *DiscordListener) voiceUpdate(s *discordgo.Session, event *discordgo.Voi
 
 		// Remove users that are no longer connected
 		for id := range l.Bridge.DiscordUsers {
-			if l.Bridge.DiscordUsers[id].seen == false {
+			if !l.Bridge.DiscordUsers[id].seen {
 				log.Println("User left Discord channel " + l.Bridge.DiscordUsers[id].username)
 				if l.Bridge.Connected && !l.Bridge.BridgeConfig.MumbleDisableText {
 					l.Bridge.MumbleClient.Do(func() {
