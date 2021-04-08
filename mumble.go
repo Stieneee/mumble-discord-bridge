@@ -92,6 +92,10 @@ func (m MumbleDuplex) fromMumbleMixer(ctx context.Context, wg *sync.WaitGroup, t
 			}
 		}
 
+		if len(toDiscord) > 20 {
+			log.Println("Debug: Warning Discord buffer size")
+		}
+
 		if sendAudio {
 			select {
 			case toDiscord <- outBuf:

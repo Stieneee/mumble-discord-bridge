@@ -59,6 +59,7 @@ func (dd *DiscordDuplex) discordSendPCM(ctx context.Context, wg *sync.WaitGroup,
 
 	lastReady := true
 	var readyTimeout *time.Timer
+	var speakingStart time.Time
 
 	wg.Add(1)
 
@@ -72,7 +73,8 @@ func (dd *DiscordDuplex) discordSendPCM(ctx context.Context, wg *sync.WaitGroup,
 		<-ticker.C
 		if len(pcm) > 1 {
 			if !streaming {
-				log.Panicln("Debug: Discord start speaking")
+				log.Println("Debug: Discord start speaking")
+				speakingStart = time.Now()
 				dd.Bridge.DiscordVoice.Speaking(true)
 				streaming = true
 			}
@@ -108,7 +110,7 @@ func (dd *DiscordDuplex) discordSendPCM(ctx context.Context, wg *sync.WaitGroup,
 
 		} else {
 			if streaming {
-				log.Panicln("Debug: Discord stop speaking")
+				log.Println("Debug: Discord stop speaking", time.Since(speakingStart).Milliseconds(), "ms")
 				dd.Bridge.DiscordVoice.Speaking(false)
 				streaming = false
 			}
