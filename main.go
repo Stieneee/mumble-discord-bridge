@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"math"
 	"os"
 	"os/signal"
 	"runtime/pprof"
@@ -45,6 +46,7 @@ func main() {
 	discordToken := flag.String("discord-token", lookupEnvOrString("DISCORD_TOKEN", ""), "DISCORD_TOKEN, discord bot token, required")
 	discordGID := flag.String("discord-gid", lookupEnvOrString("DISCORD_GID", ""), "DISCORD_GID, discord gid, required")
 	discordCID := flag.String("discord-cid", lookupEnvOrString("DISCORD_CID", ""), "DISCORD_CID, discord cid, required")
+	discordSendBuffer := flag.Int("to-discord-buffer", lookupEnvOrInt("TO_DISCORD_BUFFER", 50), "TO_DISCORD_BUFFER, Delay buffer from Mumble to Discord to absorb timing issues related to network and hardware quality. (Increments of 10ms)")
 	discordCommand := flag.String("discord-command", lookupEnvOrString("DISCORD_COMMAND", "mumble-discord"), "DISCORD_COMMAND, Discord command string, env alt DISCORD_COMMAND, optional, (defaults mumble-discord)")
 	discordDisableText := flag.Bool("discord-disable-text", lookupEnvOrBool("DISCORD_DISABLE_TEXT", false), "DISCORD_DISABLE_TEXT, disable sending direct messages to discord, (default false)")
 	mode := flag.String("mode", lookupEnvOrString("MODE", "constant"), "MODE, [constant, manual, auto] determine which mode the bridge starts in, (default constant)")
@@ -95,20 +97,29 @@ func main() {
 		defer pprof.StopCPUProfile()
 	}
 
+	// Buffer Math
+	if *discordSendBuffer < 10 {
+		*discordSendBuffer = 10
+	}
+
+	var discordStartStreamingCount int = int(math.Round(float64(*discordSendBuffer) / 10.0))
+	log.Println("Discord Streaming Buffer: ", discordStartStreamingCount*10, " ms")
+
 	// BRIDGE SETUP
 
 	Bridge := &BridgeState{
 		BridgeConfig: &BridgeConfig{
 			// MumbleConfig:   config,
-			MumbleAddr:         *mumbleAddr + ":" + strconv.Itoa(*mumblePort),
-			MumbleInsecure:     *mumbleInsecure,
-			MumbleCertificate:  *mumbleCertificate,
-			MumbleChannel:      strings.Split(*mumbleChannel, "/"),
-			MumbleDisableText:  *mumbleDisableText,
-			Command:            *discordCommand,
-			GID:                *discordGID,
-			CID:                *discordCID,
-			DiscordDisableText: *discordDisableText,
+			MumbleAddr:                 *mumbleAddr + ":" + strconv.Itoa(*mumblePort),
+			MumbleInsecure:             *mumbleInsecure,
+			MumbleCertificate:          *mumbleCertificate,
+			MumbleChannel:              strings.Split(*mumbleChannel, "/"),
+			MumbleDisableText:          *mumbleDisableText,
+			Command:                    *discordCommand,
+			GID:                        *discordGID,
+			CID:                        *discordCID,
+			DiscordStartStreamingCount: discordStartStreamingCount,
+			DiscordDisableText:         *discordDisableText,
 		},
 		Connected:    false,
 		DiscordUsers: make(map[string]discordUser),

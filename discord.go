@@ -55,6 +55,12 @@ func (dd *DiscordDuplex) discordSendPCM(ctx context.Context, wg *sync.WaitGroup,
 		panic(err)
 	}
 
+	// Generate Opus Silence Frame
+	opusSilence := []byte{0xf8, 0xff, 0xfe}
+	for i := 3; i < frameSize; i++ {
+		opusSilence = append(opusSilence, 0x00)
+	}
+
 	ticker := time.NewTicker(20 * time.Millisecond)
 
 	lastReady := true
@@ -62,6 +68,27 @@ func (dd *DiscordDuplex) discordSendPCM(ctx context.Context, wg *sync.WaitGroup,
 	var speakingStart time.Time
 
 	wg.Add(1)
+
+	internalSend := func(opus []byte) {
+		dd.Bridge.DiscordVoice.RWMutex.RLock()
+		if !dd.Bridge.DiscordVoice.Ready || dd.Bridge.DiscordVoice.OpusSend == nil {
+			if lastReady {
+				OnError(fmt.Sprintf("Discordgo not ready for opus packets. %+v : %+v", dd.Bridge.DiscordVoice.Ready, dd.Bridge.DiscordVoice.OpusSend), nil)
+				readyTimeout = time.AfterFunc(30*time.Second, func() {
+					log.Println("set ready timeout")
+					cancel()
+				})
+				lastReady = false
+			}
+		} else if !lastReady {
+			fmt.Println("Discordgo ready to send opus packets")
+			lastReady = true
+			readyTimeout.Stop()
+		} else {
+			dd.Bridge.DiscordVoice.OpusSend <- opus
+		}
+		dd.Bridge.DiscordVoice.RWMutex.RUnlock()
+	}
 
 	for {
 		select {
@@ -71,7 +98,7 @@ func (dd *DiscordDuplex) discordSendPCM(ctx context.Context, wg *sync.WaitGroup,
 		default:
 		}
 		<-ticker.C
-		if len(pcm) > 1 {
+		if (len(pcm) > 1 && streaming) || (len(pcm) > dd.Bridge.BridgeConfig.DiscordStartStreamingCount && !streaming) {
 			if !streaming {
 				log.Println("Debug: Discord start speaking")
 				speakingStart = time.Now()
@@ -89,28 +116,27 @@ func (dd *DiscordDuplex) discordSendPCM(ctx context.Context, wg *sync.WaitGroup,
 				continue
 			}
 
-			dd.Bridge.DiscordVoice.RWMutex.RLock()
-			if !dd.Bridge.DiscordVoice.Ready || dd.Bridge.DiscordVoice.OpusSend == nil {
-				if lastReady {
-					OnError(fmt.Sprintf("Discordgo not ready for opus packets. %+v : %+v", dd.Bridge.DiscordVoice.Ready, dd.Bridge.DiscordVoice.OpusSend), nil)
-					readyTimeout = time.AfterFunc(30*time.Second, func() {
-						log.Println("set ready timeout")
-						cancel()
-					})
-					lastReady = false
-				}
-			} else if !lastReady {
-				fmt.Println("Discordgo ready to send opus packets")
-				lastReady = true
-				readyTimeout.Stop()
-			} else {
-				dd.Bridge.DiscordVoice.OpusSend <- opus
-			}
-			dd.Bridge.DiscordVoice.RWMutex.RUnlock()
+			internalSend(opus)
 
 		} else {
 			if streaming {
-				log.Println("Debug: Discord stop speaking", time.Since(speakingStart).Milliseconds(), "ms")
+				// Check to see if there is a short speaking cycle.
+				// It is possible that short speaking cycle is the result of a short input to mumble (Not a problem). ie a quick tap of push to talk button.
+				// Or when timing delays are introduced via network, hardware or kernel delays (Problem).
+				// The problem delays result in choppy or stuttering sounds, especially when the silence frames are introduced into the opus frames below.
+				// Multiple short cycle delays can result in a Discrod rate limiter being trigger due to of multiple JSON speaking/not-speaking state changes
+				log.Println("Debug: Discord stop speaking", time.Since(speakingStart).Milliseconds(), "ms") // remove before merge
+				if time.Since(speakingStart).Milliseconds() < 100 {
+					log.Println("Warning: Short Mumble to Discord speaking cycle. Consider increaseing the size of the TO_DISCORD_BUFFER")
+				}
+
+				// Send silence as suggested by Discord Documentation.
+				// We want to do this after alerting the user of possible short speaking cycles
+				for i := 0; i < 5; i++ {
+					internalSend(opusSilence)
+					<-ticker.C
+				}
+
 				dd.Bridge.DiscordVoice.Speaking(false)
 				streaming = false
 			}
