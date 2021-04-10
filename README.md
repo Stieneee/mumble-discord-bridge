@@ -169,6 +169,9 @@ Audio leveling from Discord needs to be improved.
 
 Delays in connecting to Mumble (such as from external authentication plugins) may result in extra error messages on initial connection.
 
+There is an issue seen with Mumble-Server (murmur) 1.3.0 in which the bridge will loose the ability to send messages client after prolonged periods of connectivity.
+This issue has been appears to be resolved by murmur 1.3.4.
+
 ## License
 
 Distributed under the MIT License. See LICENSE for more information.
