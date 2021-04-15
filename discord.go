@@ -61,7 +61,7 @@ func (dd *DiscordDuplex) discordSendPCM(ctx context.Context, wg *sync.WaitGroup,
 		opusSilence = append(opusSilence, 0x00)
 	}
 
-	ticker := time.NewTicker(20 * time.Millisecond)
+	ticker := NewTickerCT(20 * time.Millisecond)
 
 	lastReady := true
 	var readyTimeout *time.Timer
@@ -235,7 +235,7 @@ func (dd *DiscordDuplex) discordReceivePCM(ctx context.Context, wg *sync.WaitGro
 }
 
 func (dd *DiscordDuplex) fromDiscordMixer(ctx context.Context, wg *sync.WaitGroup, toMumble chan<- gumble.AudioBuffer) {
-	ticker := time.NewTicker(10 * time.Millisecond)
+	ticker := NewTickerCT(10 * time.Millisecond)
 	sendAudio := false
 	wg.Add(1)
 

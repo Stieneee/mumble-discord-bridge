@@ -44,8 +44,10 @@ func (m MumbleDuplex) OnAudioStream(e *gumble.AudioStreamEvent) {
 }
 
 func (m MumbleDuplex) fromMumbleMixer(ctx context.Context, wg *sync.WaitGroup, toDiscord chan []int16) {
-	ticker := time.NewTicker(10 * time.Millisecond)
+	ticker := NewTickerCT(10 * time.Millisecond)
 	sendAudio := false
+	bufferWarning := false
+
 	wg.Add(1)
 
 	for {
@@ -93,14 +95,22 @@ func (m MumbleDuplex) fromMumbleMixer(ctx context.Context, wg *sync.WaitGroup, t
 		}
 
 		if len(toDiscord) > 20 {
-			log.Println("Debug: Warning Discord buffer size")
+			if !bufferWarning {
+				log.Println("Warning: toDiscord buffer size")
+				bufferWarning = true
+			}
+		} else {
+			if bufferWarning {
+				log.Println("Resolved: toDiscord buffer size")
+				bufferWarning = false
+			}
 		}
 
 		if sendAudio {
 			select {
 			case toDiscord <- outBuf:
 			default:
-				log.Println("toDiscord buffer full. Dropping packet")
+				log.Println("Error: toDiscord buffer full. Dropping packet")
 			}
 		}
 	}
