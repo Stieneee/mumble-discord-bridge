@@ -16,7 +16,7 @@ test-chart: SHELL:=/bin/bash
 test-chart:
 	go test &
 	until pidof mumble-discord-bridge.test; do continue; done;
-	psrecord --plot test-cpu-memory.png $$(pidof mumble-discord-bridge.test)
+	psrecord --plot docs/test-cpu-memory.png $$(pidof mumble-discord-bridge.test)
 
 docker-latest:
 	docker build -t stieneee/mumble-discord-bridge:latest .

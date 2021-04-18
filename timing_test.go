@@ -2,7 +2,9 @@ package main
 
 import (
 	"fmt"
+	"math"
 	"math/rand"
+	"sort"
 	"sync"
 	"testing"
 	"time"
@@ -97,6 +99,43 @@ func TestSleepCT(t *testing.T) {
 	wg := sync.WaitGroup{}
 
 	testSleepCT(&wg)
+
+	wg.Wait()
+}
+
+func TestIdleJitter(t *testing.T) {
+	wg := sync.WaitGroup{}
+
+	const testSize = 100000
+	const sleepTarget = time.Millisecond
+
+	res := make([]time.Duration, testSize)
+
+	for i := 0; i < testSize; i++ {
+		start := time.Now()
+		target := start.Add(sleepTarget)
+
+		time.Sleep(sleepTarget)
+
+		res[i] = time.Since(target)
+	}
+
+	sort.Slice(res, func(i, j int) bool {
+		return res[i] < res[j]
+	})
+
+	var total float64 = 0
+	for i := 0; i < testSize; i++ {
+		total += float64(res[i])
+	}
+	avg := time.Duration(total / testSize)
+
+	nineFive := int64(math.Round(testSize * 0.95))
+	nineNine := int64(math.Round(testSize * 0.99))
+	nineNineNine := int64(math.Round(testSize * 0.999))
+
+	fmt.Println("IdleJitter test", testSize, sleepTarget)
+	fmt.Println("IdleJitter results min/avg/95/99/99.9/max", res[0], avg, res[nineFive], res[nineNine], res[nineNineNine], res[testSize-1])
 
 	wg.Wait()
 }
