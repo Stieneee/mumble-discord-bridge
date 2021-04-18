@@ -61,7 +61,11 @@ func (dd *DiscordDuplex) discordSendPCM(ctx context.Context, wg *sync.WaitGroup,
 		opusSilence = append(opusSilence, 0x00)
 	}
 
-	ticker := NewTickerCT(20 * time.Millisecond)
+	// ticker := NewTickerCT(20 * time.Millisecond)
+	sleepTick := SleepCT{
+		d: 20 * time.Millisecond,
+		t: time.Now(),
+	}
 
 	lastReady := true
 	var readyTimeout *time.Timer
@@ -97,7 +101,10 @@ func (dd *DiscordDuplex) discordSendPCM(ctx context.Context, wg *sync.WaitGroup,
 			return
 		default:
 		}
-		<-ticker.C
+
+		// <-ticker.C
+		sleepTick.SleepNextTarget()
+
 		if (len(pcm) > 1 && streaming) || (len(pcm) > dd.Bridge.BridgeConfig.DiscordStartStreamingCount && !streaming) {
 			if !streaming {
 				log.Println("Debug: Discord start speaking")
@@ -134,7 +141,8 @@ func (dd *DiscordDuplex) discordSendPCM(ctx context.Context, wg *sync.WaitGroup,
 				// We want to do this after alerting the user of possible short speaking cycles
 				for i := 0; i < 5; i++ {
 					internalSend(opusSilence)
-					<-ticker.C
+					// <-ticker.C
+					sleepTick.SleepNextTarget()
 				}
 
 				dd.Bridge.DiscordVoice.Speaking(false)
@@ -235,7 +243,10 @@ func (dd *DiscordDuplex) discordReceivePCM(ctx context.Context, wg *sync.WaitGro
 }
 
 func (dd *DiscordDuplex) fromDiscordMixer(ctx context.Context, wg *sync.WaitGroup, toMumble chan<- gumble.AudioBuffer) {
-	ticker := NewTickerCT(10 * time.Millisecond)
+	sleepTick := SleepCT{
+		d: 10 * time.Millisecond,
+		t: time.Now(),
+	}
 	sendAudio := false
 	wg.Add(1)
 
@@ -244,8 +255,10 @@ func (dd *DiscordDuplex) fromDiscordMixer(ctx context.Context, wg *sync.WaitGrou
 		case <-ctx.Done():
 			wg.Done()
 			return
-		case <-ticker.C:
+		default:
 		}
+
+		sleepTick.SleepNextTarget()
 
 		dd.discordMutex.Lock()
 

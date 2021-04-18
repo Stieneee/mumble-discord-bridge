@@ -12,6 +12,12 @@ dev-race: $(GOFILES)
 dev-profile: $(GOFILES)
 	goreleaser build --skip-validate --rm-dist && sudo ./dist/mumble-discord-bridge_linux_amd64/mumble-discord-bridge -cpuprofile cpu.prof
 
+test-chart: SHELL:=/bin/bash 
+test-chart:
+	go test &
+	until pidof mumble-discord-bridge.test; do continue; done;
+	psrecord --plot test-cpu-memory.png $$(pidof mumble-discord-bridge.test)
+
 docker-latest:
 	docker build -t stieneee/mumble-discord-bridge:latest .
 

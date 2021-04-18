@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-// A Ticker holds a channel that delivers ``ticks'' of a clock
+// A Ticker holds a channel that delivers ``ticks'' of a clockinter
 // at intervals.
 type TickerCT struct {
 	sync.Mutex

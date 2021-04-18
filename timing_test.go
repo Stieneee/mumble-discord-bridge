@@ -70,3 +70,33 @@ func TestTickerCT(t *testing.T) {
 
 	wg.Wait()
 }
+
+func testSleepCT(wg *sync.WaitGroup) {
+	wg.Add(1)
+	go func(interval time.Duration) {
+		now := time.Now()
+		start := now
+		// start the ticker
+		s := SleepCT{
+			d: interval,
+			t: time.Now(),
+		}
+		var i int64
+		for i = 0; i < testCount; i++ {
+			if i+1 < testCount {
+				time.Sleep(time.Duration(float64(maxSleepInterval) * rand.Float64()))
+			}
+			s.SleepNextTarget()
+		}
+		fmt.Println("SleepCT after", testDuration, "drifts", time.Since(start)-testDuration)
+		wg.Done()
+	}(tickerInterval)
+}
+
+func TestSleepCT(t *testing.T) {
+	wg := sync.WaitGroup{}
+
+	testSleepCT(&wg)
+
+	wg.Wait()
+}

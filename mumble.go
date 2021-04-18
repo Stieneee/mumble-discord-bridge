@@ -44,7 +44,10 @@ func (m MumbleDuplex) OnAudioStream(e *gumble.AudioStreamEvent) {
 }
 
 func (m MumbleDuplex) fromMumbleMixer(ctx context.Context, wg *sync.WaitGroup, toDiscord chan []int16) {
-	ticker := NewTickerCT(10 * time.Millisecond)
+	sleepTick := SleepCT{
+		d: 10 * time.Millisecond,
+		t: time.Now(),
+	}
 	sendAudio := false
 	bufferWarning := false
 
@@ -58,7 +61,7 @@ func (m MumbleDuplex) fromMumbleMixer(ctx context.Context, wg *sync.WaitGroup, t
 		default:
 		}
 
-		<-ticker.C
+		sleepTick.SleepNextTarget()
 
 		mutex.Lock()
 
@@ -86,27 +89,28 @@ func (m MumbleDuplex) fromMumbleMixer(ctx context.Context, wg *sync.WaitGroup, t
 
 		mutex.Unlock()
 
-		outBuf := make([]int16, 480)
-
-		for i := 0; i < len(outBuf); i++ {
-			for j := 0; j < len(internalMixerArr); j++ {
-				outBuf[i] += (internalMixerArr[j])[i]
-			}
-		}
-
-		if len(toDiscord) > 20 {
-			if !bufferWarning {
-				log.Println("Warning: toDiscord buffer size")
-				bufferWarning = true
-			}
-		} else {
-			if bufferWarning {
-				log.Println("Resolved: toDiscord buffer size")
-				bufferWarning = false
-			}
-		}
-
 		if sendAudio {
+
+			outBuf := make([]int16, 480)
+
+			for i := 0; i < len(outBuf); i++ {
+				for j := 0; j < len(internalMixerArr); j++ {
+					outBuf[i] += (internalMixerArr[j])[i]
+				}
+			}
+
+			if len(toDiscord) > 20 {
+				if !bufferWarning {
+					log.Println("Warning: toDiscord buffer size")
+					bufferWarning = true
+				}
+			} else {
+				if bufferWarning {
+					log.Println("Resolved: toDiscord buffer size")
+					bufferWarning = false
+				}
+			}
+
 			select {
 			case toDiscord <- outBuf:
 			default:
