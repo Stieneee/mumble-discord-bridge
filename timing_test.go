@@ -15,7 +15,33 @@ const maxSleepInterval time.Duration = 15 * time.Millisecond
 const tickerInterval time.Duration = 10 * time.Millisecond
 const testDuration time.Duration = time.Duration(testCount * 10 * int64(time.Millisecond))
 
-func Testticker(wg *sync.WaitGroup) {
+func testTickerBaseCase(wg *sync.WaitGroup) {
+	wg.Add(1)
+	go func(interval time.Duration) {
+		now := time.Now()
+		start := now
+		// start the ticker
+		t := time.NewTicker(interval)
+		var i int64
+		for i = 0; i < testCount; i++ {
+			now = <-t.C
+			// fmt.Println(now)
+		}
+		t.Stop()
+		fmt.Println("Ticker (unloaded) after", testDuration, "drifts", time.Since(start)-testDuration)
+		wg.Done()
+	}(tickerInterval)
+}
+
+func TestTickerBaseCase(t *testing.T) {
+	wg := sync.WaitGroup{}
+
+	testTickerBaseCase(&wg)
+
+	wg.Wait()
+}
+
+func testTickerLoaded(wg *sync.WaitGroup) {
 	wg.Add(1)
 	go func(interval time.Duration) {
 		now := time.Now()
@@ -31,7 +57,7 @@ func Testticker(wg *sync.WaitGroup) {
 			// fmt.Println(now)
 		}
 		t.Stop()
-		fmt.Println("Ticker after", testDuration, "drifts", time.Since(start)-testDuration)
+		fmt.Println("Ticker (loaded) after", testDuration, "drifts", time.Since(start)-testDuration)
 		wg.Done()
 	}(tickerInterval)
 }
@@ -39,12 +65,12 @@ func Testticker(wg *sync.WaitGroup) {
 func TestTicker(t *testing.T) {
 	wg := sync.WaitGroup{}
 
-	Testticker(&wg)
+	testTickerLoaded(&wg)
 
 	wg.Wait()
 }
 
-func TesttickerCT(wg *sync.WaitGroup) {
+func testTickerCT(wg *sync.WaitGroup) {
 	wg.Add(1)
 	go func(interval time.Duration) {
 		now := time.Now()
@@ -60,7 +86,7 @@ func TesttickerCT(wg *sync.WaitGroup) {
 			// fmt.Println(now)
 		}
 		t.Stop()
-		fmt.Println("TickerCT after", testDuration, "drifts", time.Since(start)-testDuration)
+		fmt.Println("TickerCT (loaded) after", testDuration, "drifts", time.Since(start)-testDuration)
 		wg.Done()
 	}(tickerInterval)
 }
@@ -68,7 +94,7 @@ func TesttickerCT(wg *sync.WaitGroup) {
 func TestTickerCT(t *testing.T) {
 	wg := sync.WaitGroup{}
 
-	TesttickerCT(&wg)
+	testTickerCT(&wg)
 
 	wg.Wait()
 }
@@ -90,7 +116,7 @@ func testSleepCT(wg *sync.WaitGroup) {
 			}
 			s.SleepNextTarget()
 		}
-		fmt.Println("SleepCT after", testDuration, "drifts", time.Since(start)-testDuration)
+		fmt.Println("SleepCT (loaded) after", testDuration, "drifts", time.Since(start)-testDuration)
 		wg.Done()
 	}(tickerInterval)
 }
