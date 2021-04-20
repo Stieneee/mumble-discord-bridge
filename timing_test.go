@@ -8,6 +8,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/stieneee/tickerct"
 )
 
 const testCount int64 = 10000
@@ -76,7 +78,7 @@ func testTickerCT(wg *sync.WaitGroup) {
 		now := time.Now()
 		start := now
 		// start the ticker
-		t := NewTickerCT(interval)
+		t := tickerct.NewTickerCT(interval)
 		var i int64
 		for i = 0; i < testCount; i++ {
 			if i+1 < testCount {
