@@ -7,7 +7,7 @@ require (
 	github.com/golang/protobuf v1.4.3 // indirect
 	github.com/gorilla/websocket v1.4.2 // indirect
 	github.com/joho/godotenv v1.3.0
-	github.com/stieneee/tickerct v0.0.0-20210420020607-d1b092aa40e9 // indirect
+	github.com/stieneee/tickerct v0.0.0-20210420020607-d1b092aa40e9
 	golang.org/x/crypto v0.0.0-20201221181555-eec23a3978ad // indirect
 	golang.org/x/sys v0.0.0-20210108172913-0df2131ae363 // indirect
 	google.golang.org/protobuf v1.25.0 // indirect

@@ -107,7 +107,6 @@ func (dd *DiscordDuplex) discordSendPCM(ctx context.Context, wg *sync.WaitGroup,
 
 		if (len(pcm) > 1 && streaming) || (len(pcm) > dd.Bridge.BridgeConfig.DiscordStartStreamingCount && !streaming) {
 			if !streaming {
-				log.Println("Debug: Discord start speaking")
 				speakingStart = time.Now()
 				dd.Bridge.DiscordVoice.Speaking(true)
 				streaming = true
@@ -132,7 +131,6 @@ func (dd *DiscordDuplex) discordSendPCM(ctx context.Context, wg *sync.WaitGroup,
 				// Or when timing delays are introduced via network, hardware or kernel delays (Problem).
 				// The problem delays result in choppy or stuttering sounds, especially when the silence frames are introduced into the opus frames below.
 				// Multiple short cycle delays can result in a Discrod rate limiter being trigger due to of multiple JSON speaking/not-speaking state changes
-				log.Println("Debug: Discord stop speaking", time.Since(speakingStart).Milliseconds(), "ms") // remove before merge
 				if time.Since(speakingStart).Milliseconds() < 100 {
 					log.Println("Warning: Short Mumble to Discord speaking cycle. Consider increaseing the size of the TO_DISCORD_BUFFER")
 				}
