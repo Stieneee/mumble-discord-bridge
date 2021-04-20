@@ -26,6 +26,7 @@ type BridgeConfig struct {
 	MumbleInsecure             bool
 	MumbleCertificate          string
 	MumbleChannel              []string
+	mumbleStartStreamCount     int
 	MumbleDisableText          bool
 	Command                    string
 	GID                        string
