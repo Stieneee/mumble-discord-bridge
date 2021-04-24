@@ -1,4 +1,4 @@
-GOFILES=main.go mumble.go discord.go bridge.go config.go mumble-handlers.go discord-handlers.go
+GOFILES=main.go mumble.go discord.go bridge.go config.go mumble-handlers.go discord-handlers.go sleepct.go
 
 mumble-discord-bridge: $(GOFILES)
 	goreleaser build --skip-validate --rm-dist
@@ -7,10 +7,16 @@ dev: $(GOFILES)
 	goreleaser build --skip-validate --rm-dist && sudo ./dist/mumble-discord-bridge_linux_amd64/mumble-discord-bridge
 
 dev-race: $(GOFILES)
-	go run -race *.go
+	go run -race $(GOFILES)
 
 dev-profile: $(GOFILES)
 	goreleaser build --skip-validate --rm-dist && sudo ./dist/mumble-discord-bridge_linux_amd64/mumble-discord-bridge -cpuprofile cpu.prof
+
+test-chart: SHELL:=/bin/bash 
+test-chart:
+	go test &
+	until pidof mumble-discord-bridge.test; do continue; done;
+	psrecord --plot docs/test-cpu-memory.png $$(pidof mumble-discord-bridge.test)
 
 docker-latest:
 	docker build -t stieneee/mumble-discord-bridge:latest .

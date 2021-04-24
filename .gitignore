@@ -3,5 +3,7 @@ main
 mumble-discord-bridge
 dist
 bridge
-.prof
+*.prof
+*.out
+*.test
 cert.pem

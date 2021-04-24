@@ -55,12 +55,44 @@ func (dd *DiscordDuplex) discordSendPCM(ctx context.Context, wg *sync.WaitGroup,
 		panic(err)
 	}
 
-	ticker := time.NewTicker(20 * time.Millisecond)
+	// Generate Opus Silence Frame
+	opusSilence := []byte{0xf8, 0xff, 0xfe}
+	for i := 3; i < frameSize; i++ {
+		opusSilence = append(opusSilence, 0x00)
+	}
+
+	// ticker := NewTickerCT(20 * time.Millisecond)
+	sleepTick := SleepCT{
+		d: 20 * time.Millisecond,
+		t: time.Now(),
+	}
 
 	lastReady := true
 	var readyTimeout *time.Timer
+	var speakingStart time.Time
 
 	wg.Add(1)
+
+	internalSend := func(opus []byte) {
+		dd.Bridge.DiscordVoice.RWMutex.RLock()
+		if !dd.Bridge.DiscordVoice.Ready || dd.Bridge.DiscordVoice.OpusSend == nil {
+			if lastReady {
+				OnError(fmt.Sprintf("Discordgo not ready for opus packets. %+v : %+v", dd.Bridge.DiscordVoice.Ready, dd.Bridge.DiscordVoice.OpusSend), nil)
+				readyTimeout = time.AfterFunc(30*time.Second, func() {
+					log.Println("set ready timeout")
+					cancel()
+				})
+				lastReady = false
+			}
+		} else if !lastReady {
+			fmt.Println("Discordgo ready to send opus packets")
+			lastReady = true
+			readyTimeout.Stop()
+		} else {
+			dd.Bridge.DiscordVoice.OpusSend <- opus
+		}
+		dd.Bridge.DiscordVoice.RWMutex.RUnlock()
+	}
 
 	for {
 		select {
@@ -69,9 +101,12 @@ func (dd *DiscordDuplex) discordSendPCM(ctx context.Context, wg *sync.WaitGroup,
 			return
 		default:
 		}
-		<-ticker.C
-		if len(pcm) > 1 {
+
+		sleepTick.SleepNextTarget()
+
+		if (len(pcm) > 1 && streaming) || (len(pcm) > dd.Bridge.BridgeConfig.DiscordStartStreamingCount && !streaming) {
 			if !streaming {
+				speakingStart = time.Now()
 				dd.Bridge.DiscordVoice.Speaking(true)
 				streaming = true
 			}
@@ -86,27 +121,26 @@ func (dd *DiscordDuplex) discordSendPCM(ctx context.Context, wg *sync.WaitGroup,
 				continue
 			}
 
-			dd.Bridge.DiscordVoice.RWMutex.RLock()
-			if !dd.Bridge.DiscordVoice.Ready || dd.Bridge.DiscordVoice.OpusSend == nil {
-				if lastReady {
-					OnError(fmt.Sprintf("Discordgo not ready for opus packets. %+v : %+v", dd.Bridge.DiscordVoice.Ready, dd.Bridge.DiscordVoice.OpusSend), nil)
-					readyTimeout = time.AfterFunc(30*time.Second, func() {
-						log.Println("set ready timeout")
-						cancel()
-					})
-					lastReady = false
-				}
-			} else if !lastReady {
-				fmt.Println("Discordgo ready to send opus packets")
-				lastReady = true
-				readyTimeout.Stop()
-			} else {
-				dd.Bridge.DiscordVoice.OpusSend <- opus
-			}
-			dd.Bridge.DiscordVoice.RWMutex.RUnlock()
+			internalSend(opus)
 
 		} else {
 			if streaming {
+				// Check to see if there is a short speaking cycle.
+				// It is possible that short speaking cycle is the result of a short input to mumble (Not a problem). ie a quick tap of push to talk button.
+				// Or when timing delays are introduced via network, hardware or kernel delays (Problem).
+				// The problem delays result in choppy or stuttering sounds, especially when the silence frames are introduced into the opus frames below.
+				// Multiple short cycle delays can result in a Discrod rate limiter being trigger due to of multiple JSON speaking/not-speaking state changes
+				if time.Since(speakingStart).Milliseconds() < 100 {
+					log.Println("Warning: Short Mumble to Discord speaking cycle. Consider increaseing the size of the to Discord jitter buffer.")
+				}
+
+				// Send silence as suggested by Discord Documentation.
+				// We want to do this after alerting the user of possible short speaking cycles
+				for i := 0; i < 5; i++ {
+					internalSend(opusSilence)
+					sleepTick.SleepNextTarget()
+				}
+
 				dd.Bridge.DiscordVoice.Speaking(false)
 				streaming = false
 			}
@@ -205,8 +239,17 @@ func (dd *DiscordDuplex) discordReceivePCM(ctx context.Context, wg *sync.WaitGro
 }
 
 func (dd *DiscordDuplex) fromDiscordMixer(ctx context.Context, wg *sync.WaitGroup, toMumble chan<- gumble.AudioBuffer) {
-	ticker := time.NewTicker(10 * time.Millisecond)
+	mumbleSilence := gumble.AudioBuffer{}
+	for i := 3; i < 480; i++ {
+		mumbleSilence = append(mumbleSilence, 0x00)
+	}
+	var speakingStart time.Time
+	sleepTick := SleepCT{
+		d: 10 * time.Millisecond,
+		t: time.Now(),
+	}
 	sendAudio := false
+	toMumbleStreaming := false
 	wg.Add(1)
 
 	for {
@@ -214,8 +257,10 @@ func (dd *DiscordDuplex) fromDiscordMixer(ctx context.Context, wg *sync.WaitGrou
 		case <-ctx.Done():
 			wg.Done()
 			return
-		case <-ticker.C:
+		default:
 		}
+
+		sleepTick.SleepNextTarget()
 
 		dd.discordMutex.Lock()
 
@@ -224,9 +269,16 @@ func (dd *DiscordDuplex) fromDiscordMixer(ctx context.Context, wg *sync.WaitGrou
 
 		// Work through each channel
 		for i := range dd.fromDiscordMap {
-			if len(dd.fromDiscordMap[i].pcm) > 0 {
+			bufferLength := len(dd.fromDiscordMap[i].pcm)
+			isStreaming := dd.fromDiscordMap[i].streaming
+			if (bufferLength > 0 && isStreaming) || (bufferLength > dd.Bridge.BridgeConfig.mumbleStartStreamCount && !isStreaming) {
+				if !toMumbleStreaming {
+					speakingStart = time.Now()
+					toMumbleStreaming = true
+				}
 				sendAudio = true
-				if !dd.fromDiscordMap[i].streaming {
+
+				if !isStreaming {
 					x := dd.fromDiscordMap[i]
 					x.streaming = true
 					dd.fromDiscordMap[i] = x
@@ -245,21 +297,44 @@ func (dd *DiscordDuplex) fromDiscordMixer(ctx context.Context, wg *sync.WaitGrou
 
 		dd.discordMutex.Unlock()
 
-		outBuf := make([]int16, 480)
+		mumbleTimeoutSend := func(outBuf []int16) {
+			timeout := make(chan bool, 1)
+			go func() {
+				time.Sleep(10 * time.Millisecond)
+				timeout <- true
+			}()
 
-		for i := 0; i < len(outBuf); i++ {
-			for j := 0; j < len(internalMixerArr); j++ {
-				outBuf[i] += (internalMixerArr[j])[i]
+			select {
+			case toMumble <- outBuf:
+			case <-timeout:
+				log.Println("toMumble timeout. Dropping packet")
 			}
 		}
 
 		if sendAudio {
-			select {
-			case toMumble <- outBuf:
-			default:
-				log.Println("toMumble buffer full. Dropping packet")
+			// Regular send mixed audio
+			outBuf := make([]int16, 480)
+
+			for i := 0; i < len(outBuf); i++ {
+				for j := 0; j < len(internalMixerArr); j++ {
+					outBuf[i] += (internalMixerArr[j])[i]
+				}
 			}
 
+			mumbleTimeoutSend(outBuf)
+		} else if !sendAudio && toMumbleStreaming {
+			// Send opus silence to mumble
+			// See note above about jitter buffer warning
+			if time.Since(speakingStart).Milliseconds() < 100 {
+				log.Println("Warning: Short Discord to Mumble speaking cycle. Consider increaseing the size of the to Mumble jitter buffer.")
+			}
+
+			for i := 0; i < 5; i++ {
+				mumbleTimeoutSend(mumbleSilence)
+				sleepTick.SleepNextTarget()
+			}
+
+			toMumbleStreaming = false
 		}
 	}
 }

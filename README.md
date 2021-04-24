@@ -12,41 +12,48 @@ The binary will also attempt to load .env file located in the working directory.
 
 ```bash
 Usage of ./mumble-discord-bridge:
+  -cpuprofile file
+     write cpu profile to file
+  -debug-level int
+     DEBUG_LEVEL, Discord debug level, optional, (default 1) (default 1)
   -discord-cid string
-    	DISCORD_CID, discord cid, required
+     DISCORD_CID, discord cid, required
   -discord-command string
-    	DISCORD_COMMAND, Discord command string, env alt DISCORD_COMMAND, optional, (defaults mumble-discord) (default "mumble-discord")
+     DISCORD_COMMAND, Discord command string, env alt DISCORD_COMMAND, optional, (defaults mumble-discord) (default "mumble-discord")
   -discord-disable-text
-    	DISCORD_DISABLE_TEXT, disable sending direct messages to discord, (default false)
+     DISCORD_DISABLE_TEXT, disable sending direct messages to discord, (default false)
   -discord-gid string
-    	DISCORD_GID, discord gid, required
+     DISCORD_GID, discord gid, required
   -discord-token string
-    	DISCORD_TOKEN, discord bot token, required
+     DISCORD_TOKEN, discord bot token, required
   -mode string
-    	MODE, [constant, manual, auto] determine which mode the bridge starts in, (default constant) (default "constant")
+     MODE, [constant, manual, auto] determine which mode the bridge starts in, (default constant) (default "constant")
   -mumble-address string
-    	MUMBLE_ADDRESS, mumble server address, example example.com, required
+     MUMBLE_ADDRESS, mumble server address, example example.com, required
+  -mumble-certificate string
+     MUMBLE_CERTIFICATE, client certificate to use when connecting to the Mumble server
   -mumble-channel string
-    	MUMBLE_CHANNEL, mumble channel to start in, using '/' to separate nested channels, optional
+     MUMBLE_CHANNEL, mumble channel to start in, using '/' to separate nested channels, optional
   -mumble-disable-text
-    	MUMBLE_DISABLE_TEXT, disable sending text to mumble, (default false)
+     MUMBLE_DISABLE_TEXT, disable sending text to mumble, (default false)
   -mumble-insecure
-    	 MUMBLE_INSECURE, mumble insecure, optional
-  -mumble-certificate
-       MUMBLE_CERTIFICATE, mumble client certificate, optional
+      MUMBLE_INSECURE, mumble insecure, optional
   -mumble-password string
-    	MUMBLE_PASSWORD, mumble password, optional
+     MUMBLE_PASSWORD, mumble password, optional
   -mumble-port int
-    	MUMBLE_PORT, mumble port, (default 64738) (default 64738)
+     MUMBLE_PORT, mumble port, (default 64738) (default 64738)
   -mumble-username string
-    	MUMBLE_USERNAME, mumble username, (default: discord) (default "Discord")
+     MUMBLE_USERNAME, mumble username, (default: discord) (default "Discord")
   -nice
-    	NICE, whether the bridge should automatically try to 'nice' itself, (default false)
-  -debug
-        DEBUG_LEVEL,  DISCORD debug level, optional (default: 1)
+     NICE, whether the bridge should automatically try to 'nice' itself, (default false)
+  -to-discord-buffer int
+     TO_DISCORD_BUFFER, Jitter buffer from Mumble to Discord to absorb timing issues related to network, OS and hardware quality. (Increments of 10ms) (default 50)
+  -to-mumble-buffer int
+     TO_MUMBLE_BUFFER, Jitter buffer from Discord to Mumble to absorb timing issues related to network, OS and hardware quality. (Increments of 10ms) (default 50)
 ```
 
 The bridge can be run with the follow modes:
+
 ```bash
    auto
        The bridge starts up but does not connect immediately. It can be either manually linked (see below) or will join the voice channels when there's at least one person on each side.
@@ -61,14 +68,18 @@ In "auto" or "manual" modes, the bridge can be controlled in Discord with the fo
 
 ```bash
 !DISCORD_COMMAND link
-	Commands the bridge to join the Discord channel the user is in and the Mumble server
+ Commands the bridge to join the Discord channel the user is in and the Mumble server
+
 !DISCORD_COMMAND unlink
-	Commands the bridge to leave the Discord channel the user is in and the Mumble server
+ Commands the bridge to leave the Discord channel the user is in and the Mumble server
+
 !DISCORD_COMMAND refresh
-	Commands the bridge to unlink, then link again.
+ Commands the bridge to unlink, then link again.
+
 !DISCORD_COMMAND auto
-	Toggle between manual and auto mode
+ Toggle between manual and auto mode
 ```
+
 ## Setup
 
 ### Creating a Discord Bot
@@ -80,6 +91,7 @@ The guide below provides information on how to setup a Discord bot.
 
 Individual Discord servers need to invite the bot before it can connect.  
 The bot requires the following permissions:
+
 * View Channels
 * See Messages
 * Read Message History
@@ -160,6 +172,21 @@ go build -o mumble-discord-bridge *.go
 make mumble-discord-bridge
 ```
 
+### OpenBSD Users
+
+OpenBSD users should consider compiling a custom kernel to use 1000 ticks for the best possible performance.
+See [issue 20](https://github.com/Stieneee/mumble-discord-bridge/issues/20) for the latest discussion about this topic.
+
+## Jitter Buffer
+
+The bridge implements simple jitter buffers that attempt to compensate for network, OS and hardware related jitter.
+These jitter buffers are configurable in both directions.
+A jitter buffer will slightly the delay the transmission of audio in order to have audio packets buffered for the next time step.
+The Mumble client itself includes a jitter buffer for similar reasons.
+A default jitter of 50ms should be adequate for most scenarios.
+A warning will be logged if short burst or audio are seen.
+A single warning can be ignored multiple warnings in short time spans would suggest the need for a larger jitter buffer.
+
 ## Known Issues
 
 Currently there is an issue opening the discord voice channel.
@@ -185,5 +212,5 @@ Please consider opening an issue to discuss features and ideas.
 
 The project would not have been possible without:
 
-- [gumble](https://github.com/layeh/gumble)
-- [discordgo](https://github.com/bwmarrin/discordgo)
+* [gumble](https://github.com/layeh/gumble)
+* [discordgo](https://github.com/bwmarrin/discordgo)
