@@ -197,9 +197,16 @@ func main() {
 		Bridge.Mode = bridgeModeConstant
 		Bridge.DiscordChannelID = Bridge.BridgeConfig.CID
 		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					fmt.Println("Bridge paniced", r)
+				}
+			}()
 			for {
 				Bridge.startBridge()
-				log.Println("Bridge died. Restarting")
+				log.Println("Bridge died")
+				time.Sleep(5 * time.Second)
+				log.Println("Restarting")
 			}
 		}()
 	default:
@@ -211,7 +218,7 @@ func main() {
 
 	// Shutdown on OS signal
 	sc := make(chan os.Signal, 1)
-	signal.Notify(sc, syscall.SIGINT, syscall.SIGTERM, os.Interrupt, os.Kill)
+	signal.Notify(sc, syscall.SIGINT, syscall.SIGTERM, os.Interrupt)
 	<-sc
 
 	log.Println("OS Signal. Bot shutting down")
