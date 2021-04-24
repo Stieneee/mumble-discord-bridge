@@ -172,6 +172,11 @@ go build -o mumble-discord-bridge *.go
 make mumble-discord-bridge
 ```
 
+### OpenBSD Users
+
+OpenBSD users should consider compiling a custom kernel to use 1000 ticks for the best possible performance.
+See [issue 20](https://github.com/Stieneee/mumble-discord-bridge/issues/20) for the latest discussion about this topic.
+
 ## Jitter Buffer
 
 The bridge implements simple jitter buffers that attempt to compensate for network, OS and hardware related jitter.
