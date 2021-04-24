@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/bwmarrin/discordgo"
-	"layeh.com/gumble/gumble"
+	"github.com/stieneee/gumble/gumble"
 )
 
 type DiscordUser struct {

@@ -6,9 +6,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/stieneee/gumble/gumble"
+	_ "github.com/stieneee/gumble/opus"
 	"github.com/stieneee/mumble-discord-bridge/pkg/sleepct"
-	"layeh.com/gumble/gumble"
-	_ "layeh.com/gumble/opus"
 )
 
 var mutex sync.Mutex

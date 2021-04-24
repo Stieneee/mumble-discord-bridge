@@ -8,10 +8,9 @@ import (
 	"time"
 
 	"github.com/bwmarrin/discordgo"
+	"github.com/stieneee/gopus"
+	"github.com/stieneee/gumble/gumble"
 	"github.com/stieneee/mumble-discord-bridge/pkg/sleepct"
-	"layeh.com/gopus"
-	"layeh.com/gumble/gumble"
-	_ "layeh.com/gumble/opus"
 )
 
 type fromDiscord struct {

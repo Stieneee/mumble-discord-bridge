@@ -4,7 +4,7 @@ import (
 	"log"
 	"strings"
 
-	"layeh.com/gumble/gumble"
+	"github.com/stieneee/gumble/gumble"
 )
 
 // MumbleListener Handle mumble events
