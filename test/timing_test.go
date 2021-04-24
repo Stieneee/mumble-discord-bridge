@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stieneee/mumble-discord-bridge/pkg/sleepct"
 	"github.com/stieneee/tickerct"
 )
 
@@ -107,10 +108,8 @@ func testSleepCT(wg *sync.WaitGroup) {
 		now := time.Now()
 		start := now
 		// start the ticker
-		s := SleepCT{
-			d: interval,
-			t: time.Now(),
-		}
+		s := sleepct.SleepCT{}
+		s.Start(interval)
 		var i int64
 		for i = 0; i < testCount; i++ {
 			if i+1 < testCount {

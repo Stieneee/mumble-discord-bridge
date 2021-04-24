@@ -1,4 +1,4 @@
-package main
+package bridge
 
 import (
 	"context"
@@ -15,10 +15,34 @@ import (
 	"layeh.com/gumble/gumble"
 )
 
-type discordUser struct {
+type DiscordUser struct {
 	username string
 	seen     bool
 	dm       *discordgo.Channel
+}
+
+type BridgeMode int
+
+const (
+	BridgeModeAuto BridgeMode = iota
+	BridgeModeManual
+	BridgeModeConstant
+)
+
+type BridgeConfig struct {
+	MumbleConfig               *gumble.Config
+	MumbleAddr                 string
+	MumbleInsecure             bool
+	MumbleCertificate          string
+	MumbleChannel              []string
+	MumbleStartStreamCount     int
+	MumbleDisableText          bool
+	Command                    string
+	GID                        string
+	CID                        string
+	DiscordStartStreamingCount int
+	DiscordDisableText         bool
+	Version                    string
 }
 
 //BridgeState manages dynamic information about the bridge during runtime
@@ -42,7 +66,7 @@ type BridgeState struct {
 	Connected bool
 
 	// The bridge mode constant, auto, manual. Default is constant.
-	Mode bridgeMode
+	Mode BridgeMode
 
 	// Discord session. This is created and outside the bridge state
 	DiscordSession *discordgo.Session
@@ -54,7 +78,7 @@ type BridgeState struct {
 	MumbleClient *gumble.Client
 
 	// Map of Discord users tracked by this bridge.
-	DiscordUsers      map[string]discordUser
+	DiscordUsers      map[string]DiscordUser
 	DiscordUsersMutex sync.Mutex
 
 	// Map of Mumble users tracked by this bridge
@@ -80,7 +104,7 @@ type BridgeState struct {
 }
 
 // startBridge established the voice connection
-func (b *BridgeState) startBridge() {
+func (b *BridgeState) StartBridge() {
 	b.lock.Lock()
 	defer b.lock.Unlock()
 
@@ -214,10 +238,10 @@ func (b *BridgeState) startBridge() {
 	b.MumbleUsersMutex.Lock()
 	b.MumbleUsers = make(map[string]bool)
 	b.MumbleUsersMutex.Unlock()
-	b.DiscordUsers = make(map[string]discordUser)
+	b.DiscordUsers = make(map[string]DiscordUser)
 }
 
-func (b *BridgeState) discordStatusUpdate() {
+func (b *BridgeState) DiscordStatusUpdate() {
 	m, _ := time.ParseDuration("30s")
 	for {
 		time.Sleep(3 * time.Second)
@@ -254,14 +278,14 @@ func (b *BridgeState) discordStatusUpdate() {
 // when there is at least one user on both, starts up the bridge
 // when there are no users on either side, kills the bridge
 func (b *BridgeState) AutoBridge() {
-	log.Println("beginning auto mode")
+	log.Println("Beginning auto mode")
 	ticker := time.NewTicker(3 * time.Second)
 
 	for {
 		select {
 		case <-ticker.C:
 		case <-b.AutoChanDie:
-			log.Println("ending automode")
+			log.Println("Ending automode")
 			return
 		}
 
@@ -270,11 +294,11 @@ func (b *BridgeState) AutoBridge() {
 		b.BridgeMutex.Lock()
 
 		if !b.Connected && b.MumbleUserCount > 0 && len(b.DiscordUsers) > 0 {
-			log.Println("users detected in mumble and discord, bridging")
-			go b.startBridge()
+			log.Println("Users detected in mumble and discord, bridging")
+			go b.StartBridge()
 		}
 		if b.Connected && b.MumbleUserCount == 0 && len(b.DiscordUsers) <= 1 {
-			log.Println("no one online, killing bridge")
+			log.Println("No one online, killing bridge")
 			b.BridgeDie <- true
 		}
 

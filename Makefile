@@ -1,4 +1,4 @@
-GOFILES=main.go mumble.go discord.go bridge.go config.go mumble-handlers.go discord-handlers.go sleepct.go
+GOFILES=$(shell find ./ -type f -name '*.go')
 
 mumble-discord-bridge: $(GOFILES)
 	goreleaser build --skip-validate --rm-dist

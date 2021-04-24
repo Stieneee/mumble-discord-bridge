@@ -1,4 +1,4 @@
-package main
+package bridge
 
 import (
 	"context"
@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/bwmarrin/discordgo"
+	"github.com/stieneee/mumble-discord-bridge/pkg/sleepct"
 	"layeh.com/gopus"
 	"layeh.com/gumble/gumble"
 	_ "layeh.com/gumble/opus"
@@ -61,11 +62,8 @@ func (dd *DiscordDuplex) discordSendPCM(ctx context.Context, wg *sync.WaitGroup,
 		opusSilence = append(opusSilence, 0x00)
 	}
 
-	// ticker := NewTickerCT(20 * time.Millisecond)
-	sleepTick := SleepCT{
-		d: 20 * time.Millisecond,
-		t: time.Now(),
-	}
+	sleepTick := sleepct.SleepCT{}
+	sleepTick.Start(20 * time.Millisecond)
 
 	lastReady := true
 	var readyTimeout *time.Timer
@@ -79,7 +77,7 @@ func (dd *DiscordDuplex) discordSendPCM(ctx context.Context, wg *sync.WaitGroup,
 			if lastReady {
 				OnError(fmt.Sprintf("Discordgo not ready for opus packets. %+v : %+v", dd.Bridge.DiscordVoice.Ready, dd.Bridge.DiscordVoice.OpusSend), nil)
 				readyTimeout = time.AfterFunc(30*time.Second, func() {
-					log.Println("set ready timeout")
+					log.Println("Debug: Set ready timeout")
 					cancel()
 				})
 				lastReady = false
@@ -164,7 +162,7 @@ func (dd *DiscordDuplex) discordReceivePCM(ctx context.Context, wg *sync.WaitGro
 			if lastReady {
 				OnError(fmt.Sprintf("Discordgo not to receive opus packets. %+v : %+v", dd.Bridge.DiscordVoice.Ready, dd.Bridge.DiscordVoice.OpusSend), nil)
 				readyTimeout = time.AfterFunc(30*time.Second, func() {
-					log.Println("set ready timeout")
+					log.Println("Debug: Set ready timeout")
 					cancel()
 				})
 				lastReady = false
@@ -225,14 +223,14 @@ func (dd *DiscordDuplex) discordReceivePCM(ctx context.Context, wg *sync.WaitGro
 		select {
 		case dd.fromDiscordMap[p.SSRC].pcm <- p.PCM[0:480]:
 		default:
-			log.Println("fromDiscordMap buffer full. Dropping packet")
+			log.Println("From Discord buffer full. Dropping packet")
 			dd.discordMutex.Unlock()
 			continue
 		}
 		select {
 		case dd.fromDiscordMap[p.SSRC].pcm <- p.PCM[480:960]:
 		default:
-			log.Println("fromDiscordMap buffer full. Dropping packet")
+			log.Println("From Discord buffer full. Dropping packet")
 		}
 		dd.discordMutex.Unlock()
 	}
@@ -244,10 +242,10 @@ func (dd *DiscordDuplex) fromDiscordMixer(ctx context.Context, wg *sync.WaitGrou
 		mumbleSilence = append(mumbleSilence, 0x00)
 	}
 	var speakingStart time.Time
-	sleepTick := SleepCT{
-		d: 10 * time.Millisecond,
-		t: time.Now(),
-	}
+
+	sleepTick := sleepct.SleepCT{}
+	sleepTick.Start(10 * time.Millisecond)
+
 	sendAudio := false
 	toMumbleStreaming := false
 	wg.Add(1)
@@ -271,7 +269,7 @@ func (dd *DiscordDuplex) fromDiscordMixer(ctx context.Context, wg *sync.WaitGrou
 		for i := range dd.fromDiscordMap {
 			bufferLength := len(dd.fromDiscordMap[i].pcm)
 			isStreaming := dd.fromDiscordMap[i].streaming
-			if (bufferLength > 0 && isStreaming) || (bufferLength > dd.Bridge.BridgeConfig.mumbleStartStreamCount && !isStreaming) {
+			if (bufferLength > 0 && isStreaming) || (bufferLength > dd.Bridge.BridgeConfig.MumbleStartStreamCount && !isStreaming) {
 				if !toMumbleStreaming {
 					speakingStart = time.Now()
 					toMumbleStreaming = true
@@ -307,7 +305,7 @@ func (dd *DiscordDuplex) fromDiscordMixer(ctx context.Context, wg *sync.WaitGrou
 			select {
 			case toMumble <- outBuf:
 			case <-timeout:
-				log.Println("toMumble timeout. Dropping packet")
+				log.Println("To Mumble timeout. Dropping packet")
 			}
 		}
 

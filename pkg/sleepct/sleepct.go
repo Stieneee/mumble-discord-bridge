@@ -1,4 +1,4 @@
-package main
+package sleepct
 
 import (
 	"fmt"
@@ -12,6 +12,15 @@ type SleepCT struct {
 	sync.Mutex
 	d time.Duration // duration
 	t time.Time     // last time target
+}
+
+func (s *SleepCT) Start(d time.Duration) {
+	if s.t.IsZero() {
+		s.d = d
+		s.t = time.Now()
+	} else {
+		panic("SleepCT already started")
+	}
 }
 
 func (s *SleepCT) SleepNextTarget() {
