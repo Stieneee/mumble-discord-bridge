@@ -127,7 +127,7 @@ func (dd *DiscordDuplex) discordSendPCM(ctx context.Context, wg *sync.WaitGroup,
 				// Or when timing delays are introduced via network, hardware or kernel delays (Problem).
 				// The problem delays result in choppy or stuttering sounds, especially when the silence frames are introduced into the opus frames below.
 				// Multiple short cycle delays can result in a Discrod rate limiter being trigger due to of multiple JSON speaking/not-speaking state changes
-				if time.Since(speakingStart).Milliseconds() < 100 {
+				if time.Since(speakingStart).Milliseconds() < 50 {
 					log.Println("Warning: Short Mumble to Discord speaking cycle. Consider increaseing the size of the to Discord jitter buffer.")
 				}
 
@@ -152,6 +152,11 @@ func (dd *DiscordDuplex) discordReceivePCM(ctx context.Context, wg *sync.WaitGro
 
 	lastReady := true
 	var readyTimeout *time.Timer
+
+	var zeros [480]int16
+	for i := 0; i < 480; i++ {
+		zeros[i] = 0
+	}
 
 	wg.Add(1)
 
@@ -216,9 +221,9 @@ func (dd *DiscordDuplex) discordReceivePCM(ctx context.Context, wg *sync.WaitGro
 
 		// oldReceiving := s.receiving
 
-		if !s.receiving || deltaT < 1 || deltaT > 960*25 {
+		if !s.receiving || deltaT < 1 || deltaT > 960*10 {
 			// First packet assume deltaT
-			fmt.Println("replacing", deltaT, deltaT, 960)
+			// fmt.Println("replacing", deltaT, 960)
 			deltaT = 960
 			s.receiving = true
 		}
@@ -229,7 +234,7 @@ func (dd *DiscordDuplex) discordReceivePCM(ctx context.Context, wg *sync.WaitGro
 		dd.fromDiscordMap[p.SSRC] = s
 		dd.discordMutex.Unlock()
 
-		p.PCM, err = s.decoder.Decode(p.Opus, deltaT*5, false)
+		p.PCM, err = s.decoder.Decode(p.Opus, deltaT*2, false)
 		if err != nil {
 			OnError("Error decoding opus data", err)
 			continue
@@ -237,25 +242,12 @@ func (dd *DiscordDuplex) discordReceivePCM(ctx context.Context, wg *sync.WaitGro
 
 		// fmt.Println(p.SSRC, p.Type, deltaT, p.Sequence, p.Sequence-s.lastSequence, oldReceiving, s.streaming, len(p.Opus), len(p.PCM))
 
-		// Stereo to Mono - Testing
-		// if len(p.PCM) != 0 {
-		// 	mono := make([]int16, len(p.PCM)/2)
-		// 	x := 0
-		// 	for i := 0; i < len(p.PCM); i = i + 2 {
-		// 		mono[x] = (p.PCM[i] / 2) + (p.PCM[i+1] / 2)
-		// 		x++
-		// 	}
-		// 	p.PCM = mono[:]
-		// 	// fmt.Println("mono resample", len(p.PCM))
-		// } else if len(p.PCM) == 0 {
-		// 	p.PCM = zeros[:]
-		// }
-
 		// Push data into pcm channel in 10ms chunks of mono pcm data
 		dd.discordMutex.Lock()
-		for l := 0; l < deltaT; l = l + 480 {
+		for l := 0; l < len(p.PCM); l = l + 480 {
 			var next []int16
 			u := l + 480
+
 			next = p.PCM[l:u]
 
 			select {
@@ -356,8 +348,8 @@ func (dd *DiscordDuplex) fromDiscordMixer(ctx context.Context, wg *sync.WaitGrou
 		} else if !sendAudio && toMumbleStreaming {
 			// Send opus silence to mumble
 			// See note above about jitter buffer warning
-			if time.Since(speakingStart).Milliseconds() < 100 {
-				log.Println("Warning: Short Discord to Mumble speaking cycle. Consider increaseing the size of the to Mumble jitter buffer.")
+			if time.Since(speakingStart).Milliseconds() < 50 {
+				log.Println("Warning: Short Discord to Mumble speaking cycle. Consider increaseing the size of the to Mumble jitter buffer.", time.Since(speakingStart).Milliseconds())
 			}
 
 			for i := 0; i < 5; i++ {
