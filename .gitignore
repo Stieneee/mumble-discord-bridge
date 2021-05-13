@@ -2,8 +2,8 @@
 main
 mumble-discord-bridge
 dist
-bridge
 *.prof
 *.out
 *.test
 cert.pem
+*.gob

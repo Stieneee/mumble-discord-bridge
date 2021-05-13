@@ -1,4 +1,4 @@
-package main
+package bridge
 
 import (
 	"context"
@@ -8,15 +8,18 @@ import (
 	"time"
 
 	"github.com/bwmarrin/discordgo"
-	"layeh.com/gopus"
-	"layeh.com/gumble/gumble"
-	_ "layeh.com/gumble/opus"
+	"github.com/stieneee/gopus"
+	"github.com/stieneee/gumble/gumble"
+	"github.com/stieneee/mumble-discord-bridge/pkg/sleepct"
 )
 
 type fromDiscord struct {
-	decoder   *gopus.Decoder
-	pcm       chan []int16
-	streaming bool
+	decoder       *gopus.Decoder
+	pcm           chan []int16
+	receiving     bool // is used to to track the assumption that we are streaming a continuos stream form discord
+	streaming     bool // The buffer streaming is streaming out
+	lastSequence  uint16
+	lastTimeStamp uint32
 }
 
 // DiscordDuplex Handle discord voice stream
@@ -57,15 +60,9 @@ func (dd *DiscordDuplex) discordSendPCM(ctx context.Context, wg *sync.WaitGroup,
 
 	// Generate Opus Silence Frame
 	opusSilence := []byte{0xf8, 0xff, 0xfe}
-	for i := 3; i < frameSize; i++ {
-		opusSilence = append(opusSilence, 0x00)
-	}
 
-	// ticker := NewTickerCT(20 * time.Millisecond)
-	sleepTick := SleepCT{
-		d: 20 * time.Millisecond,
-		t: time.Now(),
-	}
+	sleepTick := sleepct.SleepCT{}
+	sleepTick.Start(20 * time.Millisecond)
 
 	lastReady := true
 	var readyTimeout *time.Timer
@@ -79,7 +76,7 @@ func (dd *DiscordDuplex) discordSendPCM(ctx context.Context, wg *sync.WaitGroup,
 			if lastReady {
 				OnError(fmt.Sprintf("Discordgo not ready for opus packets. %+v : %+v", dd.Bridge.DiscordVoice.Ready, dd.Bridge.DiscordVoice.OpusSend), nil)
 				readyTimeout = time.AfterFunc(30*time.Second, func() {
-					log.Println("set ready timeout")
+					log.Println("Debug: Set ready timeout")
 					cancel()
 				})
 				lastReady = false
@@ -164,7 +161,7 @@ func (dd *DiscordDuplex) discordReceivePCM(ctx context.Context, wg *sync.WaitGro
 			if lastReady {
 				OnError(fmt.Sprintf("Discordgo not to receive opus packets. %+v : %+v", dd.Bridge.DiscordVoice.Ready, dd.Bridge.DiscordVoice.OpusSend), nil)
 				readyTimeout = time.AfterFunc(30*time.Second, func() {
-					log.Println("set ready timeout")
+					log.Println("Debug: Set ready timeout")
 					cancel()
 				})
 				lastReady = false
@@ -193,46 +190,79 @@ func (dd *DiscordDuplex) discordReceivePCM(ctx context.Context, wg *sync.WaitGro
 		}
 
 		dd.discordMutex.Lock()
+
 		_, ok = dd.fromDiscordMap[p.SSRC]
-		dd.discordMutex.Unlock()
 		if !ok {
 			newStream := fromDiscord{}
 			newStream.pcm = make(chan []int16, 100)
+			newStream.receiving = false
 			newStream.streaming = false
-			newStream.decoder, err = gopus.NewDecoder(48000, 1)
+			newStream.decoder, err = gopus.NewDecoder(48000, 1) // Decode into mono
 			if err != nil {
 				OnError("error creating opus decoder", err)
+				dd.discordMutex.Unlock()
 				continue
 			}
-			dd.discordMutex.Lock()
+
 			dd.fromDiscordMap[p.SSRC] = newStream
-			dd.discordMutex.Unlock()
 		}
 
-		dd.discordMutex.Lock()
-		p.PCM, err = dd.fromDiscordMap[p.SSRC].decoder.Decode(p.Opus, 960, false)
+		s := dd.fromDiscordMap[p.SSRC]
+
+		deltaT := int(p.Timestamp - s.lastTimeStamp)
+		if p.Sequence-s.lastSequence != 1 {
+			s.decoder.ResetState()
+		}
+
+		// oldReceiving := s.receiving
+
+		if !s.receiving || deltaT < 1 || deltaT > 960*25 {
+			// First packet assume deltaT
+			fmt.Println("replacing", deltaT, deltaT, 960)
+			deltaT = 960
+			s.receiving = true
+		}
+
+		s.lastTimeStamp = p.Timestamp
+		s.lastSequence = p.Sequence
+
+		dd.fromDiscordMap[p.SSRC] = s
 		dd.discordMutex.Unlock()
+
+		p.PCM, err = s.decoder.Decode(p.Opus, deltaT*5, false)
 		if err != nil {
 			OnError("Error decoding opus data", err)
 			continue
 		}
-		if len(p.PCM) != 960 {
-			log.Println("Opus size error")
-			continue
-		}
 
+		// fmt.Println(p.SSRC, p.Type, deltaT, p.Sequence, p.Sequence-s.lastSequence, oldReceiving, s.streaming, len(p.Opus), len(p.PCM))
+
+		// Stereo to Mono - Testing
+		// if len(p.PCM) != 0 {
+		// 	mono := make([]int16, len(p.PCM)/2)
+		// 	x := 0
+		// 	for i := 0; i < len(p.PCM); i = i + 2 {
+		// 		mono[x] = (p.PCM[i] / 2) + (p.PCM[i+1] / 2)
+		// 		x++
+		// 	}
+		// 	p.PCM = mono[:]
+		// 	// fmt.Println("mono resample", len(p.PCM))
+		// } else if len(p.PCM) == 0 {
+		// 	p.PCM = zeros[:]
+		// }
+
+		// Push data into pcm channel in 10ms chunks of mono pcm data
 		dd.discordMutex.Lock()
-		select {
-		case dd.fromDiscordMap[p.SSRC].pcm <- p.PCM[0:480]:
-		default:
-			log.Println("fromDiscordMap buffer full. Dropping packet")
-			dd.discordMutex.Unlock()
-			continue
-		}
-		select {
-		case dd.fromDiscordMap[p.SSRC].pcm <- p.PCM[480:960]:
-		default:
-			log.Println("fromDiscordMap buffer full. Dropping packet")
+		for l := 0; l < deltaT; l = l + 480 {
+			var next []int16
+			u := l + 480
+			next = p.PCM[l:u]
+
+			select {
+			case dd.fromDiscordMap[p.SSRC].pcm <- next:
+			default:
+				log.Println("From Discord buffer full. Dropping packet")
+			}
 		}
 		dd.discordMutex.Unlock()
 	}
@@ -244,10 +274,10 @@ func (dd *DiscordDuplex) fromDiscordMixer(ctx context.Context, wg *sync.WaitGrou
 		mumbleSilence = append(mumbleSilence, 0x00)
 	}
 	var speakingStart time.Time
-	sleepTick := SleepCT{
-		d: 10 * time.Millisecond,
-		t: time.Now(),
-	}
+
+	sleepTick := sleepct.SleepCT{}
+	sleepTick.Start(10 * time.Millisecond)
+
 	sendAudio := false
 	toMumbleStreaming := false
 	wg.Add(1)
@@ -271,7 +301,7 @@ func (dd *DiscordDuplex) fromDiscordMixer(ctx context.Context, wg *sync.WaitGrou
 		for i := range dd.fromDiscordMap {
 			bufferLength := len(dd.fromDiscordMap[i].pcm)
 			isStreaming := dd.fromDiscordMap[i].streaming
-			if (bufferLength > 0 && isStreaming) || (bufferLength > dd.Bridge.BridgeConfig.mumbleStartStreamCount && !isStreaming) {
+			if (bufferLength > 0 && isStreaming) || (bufferLength > dd.Bridge.BridgeConfig.MumbleStartStreamCount && !isStreaming) {
 				if !toMumbleStreaming {
 					speakingStart = time.Now()
 					toMumbleStreaming = true
@@ -290,6 +320,7 @@ func (dd *DiscordDuplex) fromDiscordMixer(ctx context.Context, wg *sync.WaitGrou
 				if dd.fromDiscordMap[i].streaming {
 					x := dd.fromDiscordMap[i]
 					x.streaming = false
+					x.receiving = false // toggle this here is not optimal but there is no better location atm.
 					dd.fromDiscordMap[i] = x
 				}
 			}
@@ -307,7 +338,7 @@ func (dd *DiscordDuplex) fromDiscordMixer(ctx context.Context, wg *sync.WaitGrou
 			select {
 			case toMumble <- outBuf:
 			case <-timeout:
-				log.Println("toMumble timeout. Dropping packet")
+				log.Println("To Mumble timeout. Dropping packet")
 			}
 		}
 
@@ -315,8 +346,8 @@ func (dd *DiscordDuplex) fromDiscordMixer(ctx context.Context, wg *sync.WaitGrou
 			// Regular send mixed audio
 			outBuf := make([]int16, 480)
 
-			for i := 0; i < len(outBuf); i++ {
-				for j := 0; j < len(internalMixerArr); j++ {
+			for j := 0; j < len(internalMixerArr); j++ {
+				for i := 0; i < len(internalMixerArr[j]); i++ {
 					outBuf[i] += (internalMixerArr[j])[i]
 				}
 			}

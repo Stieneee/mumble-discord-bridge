@@ -1,10 +1,10 @@
-package main
+package bridge
 
 import (
 	"log"
 	"strings"
 
-	"layeh.com/gumble/gumble"
+	"github.com/stieneee/gumble/gumble"
 )
 
 // MumbleListener Handle mumble events
@@ -12,7 +12,7 @@ type MumbleListener struct {
 	Bridge *BridgeState
 }
 
-func (l *MumbleListener) mumbleConnect(e *gumble.ConnectEvent) {
+func (l *MumbleListener) MumbleConnect(e *gumble.ConnectEvent) {
 	//join specified channel
 	startingChannel := e.Client.Channels.Find(l.Bridge.BridgeConfig.MumbleChannel...)
 	if startingChannel != nil {
@@ -20,7 +20,7 @@ func (l *MumbleListener) mumbleConnect(e *gumble.ConnectEvent) {
 	}
 }
 
-func (l *MumbleListener) mumbleUserChange(e *gumble.UserChangeEvent) {
+func (l *MumbleListener) MumbleUserChange(e *gumble.UserChangeEvent) {
 	l.Bridge.MumbleUsersMutex.Lock()
 	if e.Type.Has(gumble.UserChangeConnected) || e.Type.Has(gumble.UserChangeChannel) || e.Type.Has(gumble.UserChangeDisconnected) {
 		l.Bridge.MumbleUsers = make(map[string]bool)
@@ -40,7 +40,7 @@ func (l *MumbleListener) mumbleUserChange(e *gumble.UserChangeEvent) {
 		log.Println("User connected to mumble " + e.User.Name)
 
 		if !l.Bridge.BridgeConfig.MumbleDisableText {
-			e.User.Send("Mumble-Discord-Bridge v" + version)
+			e.User.Send("Mumble-Discord-Bridge v" + l.Bridge.BridgeConfig.Version)
 
 			// Tell the user who is connected to discord
 			l.Bridge.DiscordUsersMutex.Lock()

@@ -1,4 +1,4 @@
-package main
+package bridge
 
 import (
 	"context"
@@ -6,8 +6,9 @@ import (
 	"sync"
 	"time"
 
-	"layeh.com/gumble/gumble"
-	_ "layeh.com/gumble/opus"
+	"github.com/stieneee/gumble/gumble"
+	_ "github.com/stieneee/gumble/opus"
+	"github.com/stieneee/mumble-discord-bridge/pkg/sleepct"
 )
 
 var mutex sync.Mutex
@@ -30,7 +31,7 @@ func (m MumbleDuplex) OnAudioStream(e *gumble.AudioStreamEvent) {
 
 	go func() {
 		name := e.User.Name
-		log.Println("new mumble audio stream", name)
+		log.Println("New mumble audio stream", name)
 		for p := range e.C {
 			// log.Println("audio packet", p.Sender.Name, len(p.AudioBuffer))
 
@@ -39,15 +40,14 @@ func (m MumbleDuplex) OnAudioStream(e *gumble.AudioStreamEvent) {
 				localMumbleArray <- p.AudioBuffer[480*i : 480*(i+1)]
 			}
 		}
-		log.Println("mumble audio stream ended", name)
+		log.Println("Mumble audio stream ended", name)
 	}()
 }
 
 func (m MumbleDuplex) fromMumbleMixer(ctx context.Context, wg *sync.WaitGroup, toDiscord chan []int16) {
-	sleepTick := SleepCT{
-		d: 10 * time.Millisecond,
-		t: time.Now(),
-	}
+	sleepTick := sleepct.SleepCT{}
+	sleepTick.Start(10 * time.Millisecond)
+
 	sendAudio := false
 	bufferWarning := false
 
@@ -74,7 +74,7 @@ func (m MumbleDuplex) fromMumbleMixer(ctx context.Context, wg *sync.WaitGroup, t
 				sendAudio = true
 				if !mumbleStreamingArr[i] {
 					mumbleStreamingArr[i] = true
-					// log.Println("mumble starting", i)
+					// log.Println("Mumble starting", i)
 				}
 
 				x1 := (<-fromMumbleArr[i])
@@ -82,7 +82,7 @@ func (m MumbleDuplex) fromMumbleMixer(ctx context.Context, wg *sync.WaitGroup, t
 			} else {
 				if mumbleStreamingArr[i] {
 					mumbleStreamingArr[i] = false
-					// log.Println("mumble stopping", i)
+					// log.Println("Mumble stopping", i)
 				}
 			}
 		}

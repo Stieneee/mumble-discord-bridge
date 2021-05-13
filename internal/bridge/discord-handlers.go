@@ -1,4 +1,4 @@
-package main
+package bridge
 
 import (
 	"fmt"
@@ -15,11 +15,11 @@ type DiscordListener struct {
 	Bridge *BridgeState
 }
 
-func (l *DiscordListener) guildCreate(s *discordgo.Session, event *discordgo.GuildCreate) {
+func (l *DiscordListener) GuildCreate(s *discordgo.Session, event *discordgo.GuildCreate) {
 	log.Println("CREATE event registered")
 
 	if event.ID != l.Bridge.BridgeConfig.GID {
-		log.Println("received GuildCreate from a guild not in config")
+		log.Println("Received GuildCreate from a guild not in config")
 		return
 	}
 
@@ -32,7 +32,7 @@ func (l *DiscordListener) guildCreate(s *discordgo.Session, event *discordgo.Gui
 
 			u, err := s.User(vs.UserID)
 			if err != nil {
-				log.Println("error looking up username")
+				log.Println("Error looking up username")
 			}
 
 			dm, err := s.UserChannelCreate(u.ID)
@@ -41,7 +41,7 @@ func (l *DiscordListener) guildCreate(s *discordgo.Session, event *discordgo.Gui
 			}
 
 			l.Bridge.DiscordUsersMutex.Lock()
-			l.Bridge.DiscordUsers[vs.UserID] = discordUser{
+			l.Bridge.DiscordUsers[vs.UserID] = DiscordUser{
 				username: u.Username,
 				seen:     true,
 				dm:       dm,
@@ -61,7 +61,7 @@ func (l *DiscordListener) guildCreate(s *discordgo.Session, event *discordgo.Gui
 	}
 }
 
-func (l *DiscordListener) messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
+func (l *DiscordListener) MessageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 
 	// Ignore all messages created by the bot itself
 	if m.Author.ID == s.State.User.ID {
@@ -82,7 +82,7 @@ func (l *DiscordListener) messageCreate(s *discordgo.Session, m *discordgo.Messa
 	}
 	prefix := "!" + l.Bridge.BridgeConfig.Command
 
-	if l.Bridge.Mode == bridgeModeConstant && strings.HasPrefix(m.Content, prefix) {
+	if l.Bridge.Mode == BridgeModeConstant && strings.HasPrefix(m.Content, prefix) {
 		l.Bridge.DiscordSession.ChannelMessageSend(m.ChannelID, "Constant mode enabled, manual commands can not be entered")
 		return
 	}
@@ -101,7 +101,7 @@ func (l *DiscordListener) messageCreate(s *discordgo.Session, m *discordgo.Messa
 			if vs.UserID == m.Author.ID {
 				log.Printf("Trying to join GID %v and VID %v\n", g.ID, vs.ChannelID)
 				l.Bridge.DiscordChannelID = vs.ChannelID
-				go l.Bridge.startBridge()
+				go l.Bridge.StartBridge()
 				return
 			}
 		}
@@ -135,16 +135,16 @@ func (l *DiscordListener) messageCreate(s *discordgo.Session, m *discordgo.Messa
 
 				time.Sleep(5 * time.Second)
 
-				go l.Bridge.startBridge()
+				go l.Bridge.StartBridge()
 				return
 			}
 		}
 	}
 
 	if strings.HasPrefix(m.Content, prefix+" auto") {
-		if l.Bridge.Mode != bridgeModeAuto {
+		if l.Bridge.Mode != BridgeModeAuto {
 			l.Bridge.DiscordSession.ChannelMessageSend(m.ChannelID, "Auto mode enabled")
-			l.Bridge.Mode = bridgeModeAuto
+			l.Bridge.Mode = BridgeModeAuto
 			l.Bridge.DiscordChannelID = l.Bridge.BridgeConfig.CID
 			l.Bridge.AutoChanDie = make(chan bool)
 			go l.Bridge.AutoBridge()
@@ -152,12 +152,12 @@ func (l *DiscordListener) messageCreate(s *discordgo.Session, m *discordgo.Messa
 			l.Bridge.DiscordSession.ChannelMessageSend(m.ChannelID, "Auto mode disabled")
 			l.Bridge.DiscordChannelID = ""
 			l.Bridge.AutoChanDie <- true
-			l.Bridge.Mode = bridgeModeManual
+			l.Bridge.Mode = BridgeModeManual
 		}
 	}
 }
 
-func (l *DiscordListener) voiceUpdate(s *discordgo.Session, event *discordgo.VoiceStateUpdate) {
+func (l *DiscordListener) VoiceUpdate(s *discordgo.Session, event *discordgo.VoiceStateUpdate) {
 	l.Bridge.DiscordUsersMutex.Lock()
 	defer l.Bridge.DiscordUsersMutex.Unlock()
 
@@ -165,7 +165,7 @@ func (l *DiscordListener) voiceUpdate(s *discordgo.Session, event *discordgo.Voi
 
 		g, err := s.State.Guild(l.Bridge.BridgeConfig.GID)
 		if err != nil {
-			log.Println("error finding guild")
+			log.Println("Error finding guild")
 			panic(err)
 		}
 
@@ -187,7 +187,7 @@ func (l *DiscordListener) voiceUpdate(s *discordgo.Session, event *discordgo.Voi
 
 					u, err := s.User(vs.UserID)
 					if err != nil {
-						log.Println("error looking up username")
+						log.Println("Error looking up username")
 						continue
 					}
 
@@ -196,7 +196,7 @@ func (l *DiscordListener) voiceUpdate(s *discordgo.Session, event *discordgo.Voi
 					if err != nil {
 						log.Println("Error creating private channel for", u.Username)
 					}
-					l.Bridge.DiscordUsers[vs.UserID] = discordUser{
+					l.Bridge.DiscordUsers[vs.UserID] = DiscordUser{
 						username: u.Username,
 						seen:     true,
 						dm:       dm,
