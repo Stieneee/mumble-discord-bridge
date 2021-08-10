@@ -99,6 +99,8 @@ The bot requires the following permissions:
 * Voice Channel Speak
 * Voice Channel Use Voice Activity
 
+Permission integer 36768768.
+
 ### Finding Discord CID and GID
 
 Discord GID is a unique ID linked to one Discord Server, also called Guild. CID is similarly a unique ID for a Discord Channel. To find these you need to set Discord into developer Mode.

@@ -61,7 +61,7 @@ func (m MumbleDuplex) fromMumbleMixer(ctx context.Context, wg *sync.WaitGroup, t
 		default:
 		}
 
-		sleepTick.SleepNextTarget()
+		sleepTick.SleepNextTarget(true)
 
 		mutex.Lock()
 
