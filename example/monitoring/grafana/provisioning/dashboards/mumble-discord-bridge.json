@@ -221,7 +221,24 @@
           },
           "unit": "pps"
         },
-        "overrides": []
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "C"
+            },
+            "properties": [
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              },
+              {
+                "id": "unit",
+                "value": "none"
+              }
+            ]
+          }
+        ]
       },
       "gridPos": {
         "h": 8,
@@ -1150,5 +1167,5 @@
   "timezone": "",
   "title": "Mumble-Discord-Bridge",
   "uid": "QYiiu_77z",
-  "version": 5
+  "version": 2
 }
