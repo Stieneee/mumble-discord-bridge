@@ -6,3 +6,4 @@ dist
 *.test
 cert.pem
 *.gob
+docker-compose.yml

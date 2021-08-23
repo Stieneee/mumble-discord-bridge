@@ -87,6 +87,7 @@ func (dd *DiscordDuplex) discordSendPCM(ctx context.Context, wg *sync.WaitGroup,
 			readyTimeout.Stop()
 		} else {
 			dd.Bridge.DiscordVoice.OpusSend <- opus
+			promDiscordSentPackets.Inc()
 		}
 		dd.Bridge.DiscordVoice.RWMutex.RUnlock()
 	}
@@ -99,7 +100,7 @@ func (dd *DiscordDuplex) discordSendPCM(ctx context.Context, wg *sync.WaitGroup,
 		default:
 		}
 
-		sleepTick.SleepNextTarget()
+		promTimerDiscordSend.Observe(float64(sleepTick.SleepNextTarget()))
 
 		if (len(pcm) > 1 && streaming) || (len(pcm) > dd.Bridge.BridgeConfig.DiscordStartStreamingCount && !streaming) {
 			if !streaming {
@@ -135,7 +136,7 @@ func (dd *DiscordDuplex) discordSendPCM(ctx context.Context, wg *sync.WaitGroup,
 				// We want to do this after alerting the user of possible short speaking cycles
 				for i := 0; i < 5; i++ {
 					internalSend(opusSilence)
-					sleepTick.SleepNextTarget()
+					promTimerDiscordSend.Observe(float64(sleepTick.SleepNextTarget()))
 				}
 
 				dd.Bridge.DiscordVoice.Speaking(false)
@@ -242,6 +243,8 @@ func (dd *DiscordDuplex) discordReceivePCM(ctx context.Context, wg *sync.WaitGro
 
 		// fmt.Println(p.SSRC, p.Type, deltaT, p.Sequence, p.Sequence-s.lastSequence, oldReceiving, s.streaming, len(p.Opus), len(p.PCM))
 
+		promDiscordReceivedPackets.Inc()
+
 		// Push data into pcm channel in 10ms chunks of mono pcm data
 		dd.discordMutex.Lock()
 		for l := 0; l < len(p.PCM); l = l + 480 {
@@ -282,12 +285,13 @@ func (dd *DiscordDuplex) fromDiscordMixer(ctx context.Context, wg *sync.WaitGrou
 		default:
 		}
 
-		sleepTick.SleepNextTarget()
+		promTimerDiscordMixer.Observe(float64(sleepTick.SleepNextTarget()))
 
 		dd.discordMutex.Lock()
 
 		sendAudio = false
 		internalMixerArr := make([][]int16, 0)
+		streamingCount := 0
 
 		// Work through each channel
 		for i := range dd.fromDiscordMap {
@@ -306,6 +310,7 @@ func (dd *DiscordDuplex) fromDiscordMixer(ctx context.Context, wg *sync.WaitGrou
 					dd.fromDiscordMap[i] = x
 				}
 
+				streamingCount++
 				x1 := (<-dd.fromDiscordMap[i].pcm)
 				internalMixerArr = append(internalMixerArr, x1)
 			} else {
@@ -318,6 +323,9 @@ func (dd *DiscordDuplex) fromDiscordMixer(ctx context.Context, wg *sync.WaitGrou
 			}
 		}
 
+		promDiscordArraySize.Set(float64(len(dd.fromDiscordMap)))
+		promDiscordStreaming.Set(float64(streamingCount))
+
 		dd.discordMutex.Unlock()
 
 		mumbleTimeoutSend := func(outBuf []int16) {
@@ -329,8 +337,10 @@ func (dd *DiscordDuplex) fromDiscordMixer(ctx context.Context, wg *sync.WaitGrou
 
 			select {
 			case toMumble <- outBuf:
+				promSentMumblePackets.Inc()
 			case <-timeout:
 				log.Println("To Mumble timeout. Dropping packet")
+				promToMumbleDropped.Inc()
 			}
 		}
 
@@ -354,7 +364,7 @@ func (dd *DiscordDuplex) fromDiscordMixer(ctx context.Context, wg *sync.WaitGrou
 
 			for i := 0; i < 5; i++ {
 				mumbleTimeoutSend(mumbleSilence)
-				sleepTick.SleepNextTarget()
+				promTimerDiscordMixer.Observe(float64(sleepTick.SleepNextTarget()))
 			}
 
 			toMumbleStreaming = false

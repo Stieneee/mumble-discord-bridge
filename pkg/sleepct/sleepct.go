@@ -23,7 +23,7 @@ func (s *SleepCT) Start(d time.Duration) {
 	}
 }
 
-func (s *SleepCT) SleepNextTarget() {
+func (s *SleepCT) SleepNextTarget() int64 {
 	s.Lock()
 
 	now := time.Now()
@@ -47,4 +47,6 @@ func (s *SleepCT) SleepNextTarget() {
 	// fmt.Println("delta", delta, d, time.Since(s.t))
 
 	s.Unlock()
+
+	return now.Sub(s.t).Microseconds()
 }

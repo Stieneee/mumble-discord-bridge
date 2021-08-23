@@ -119,6 +119,9 @@ func (b *BridgeState) StartBridge() {
 
 	var err error
 
+	promBridgeStarts.Inc()
+	promBridgeStartTime.SetToCurrentTime()
+
 	// DISCORD Connect Voice
 	log.Println("Attempting to join Discord voice channel")
 	if b.DiscordChannelID == "" {
@@ -252,6 +255,9 @@ func (b *BridgeState) DiscordStatusUpdate() {
 			log.Printf("error pinging mumble server %v\n", err)
 			b.DiscordSession.UpdateListeningStatus("an error pinging mumble")
 		} else {
+
+			promMumblePing.Set(float64(resp.Ping.Milliseconds()))
+
 			b.MumbleUsersMutex.Lock()
 			b.BridgeMutex.Lock()
 			b.MumbleUserCount = resp.ConnectedUsers
@@ -271,6 +277,12 @@ func (b *BridgeState) DiscordStatusUpdate() {
 			b.MumbleUsersMutex.Unlock()
 			b.DiscordSession.UpdateListeningStatus(status)
 		}
+
+		discordHeartBeat := b.DiscordSession.LastHeartbeatAck.Sub(b.DiscordSession.LastHeartbeatSent).Milliseconds()
+		if discordHeartBeat > 0 {
+			promDiscordHeartBeat.Set(float64(discordHeartBeat))
+		}
+
 	}
 }
 

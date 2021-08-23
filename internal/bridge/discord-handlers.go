@@ -227,9 +227,13 @@ func (l *DiscordListener) VoiceUpdate(s *discordgo.Session, event *discordgo.Voi
 						l.Bridge.MumbleClient.Self.Channel.Send(fmt.Sprintf("%v has left Discord channel\n", l.Bridge.DiscordUsers[id].username), false)
 					})
 				}
-				l.Bridge.BridgeMutex.Unlock()
 				delete(l.Bridge.DiscordUsers, id)
+				l.Bridge.BridgeMutex.Unlock()
 			}
 		}
+
+		l.Bridge.BridgeMutex.Lock()
+		promDiscordUsers.Set(float64(len(l.Bridge.DiscordUsers)))
+		l.Bridge.BridgeMutex.Unlock()
 	}
 }

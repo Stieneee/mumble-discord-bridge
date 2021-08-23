@@ -1,0 +1,69 @@
+# This docker compose file contians an exmaple of staring Mumble-Discord-Bridge with Prometheus and Grafana
+# The monitoring folder is need to provide the nesscary default configs for Promethus and Grafana
+# Prometheus port 9090
+# Grafana port 3030
+
+version: '3.8'
+
+volumes:
+    prometheus_data: {}
+    grafana_data: {}
+
+services:
+
+  services:
+  mumble-discord-bridge:
+    image: stieneee/mumble-discord-bridge
+    restart: unless-stopped
+    networks:
+      - mdb
+    environment:
+      - MUMBLE_ADDRESS=example.com"
+      - MUMBLE_USERNAME=discord-bridge
+      - MUMBLE_PASSWORD=password
+      - DISCORD_TOKEN=token
+      - DISCORD_GID=gid
+      - DISCORD_CID=cid
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    volumes:
+      - ./prometheus:/etc/prometheus
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=200h'
+      - '--web.enable-lifecycle'
+    restart: unless-stopped
+    expose:
+      - 9090
+    ports:
+      - 9090:9090
+    depends_on: 
+      - mumble-discord-bridge
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    volumes:
+      # - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards
+      - ./grafana/provisioning/datasources:/etc/grafana/provisioning/datasources
+    environment:
+      # - GF_SECURITY_ADMIN_USER=${ADMIN_USER:-admin}
+      # - GF_SECURITY_ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_NAME=Main Org.
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Editor
+    restart: unless-stopped
+    expose:
+      - 3000
+    ports:
+      - 3030:3000
+    depends_on: 
+      - prometheus

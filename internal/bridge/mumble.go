@@ -29,6 +29,8 @@ func (m MumbleDuplex) OnAudioStream(e *gumble.AudioStreamEvent) {
 	mumbleStreamingArr = append(mumbleStreamingArr, false)
 	mutex.Unlock()
 
+	promMumbleArraySize.Set(float64(len(fromMumbleArr)))
+
 	go func() {
 		name := e.User.Name
 		log.Println("New mumble audio stream", name)
@@ -39,6 +41,7 @@ func (m MumbleDuplex) OnAudioStream(e *gumble.AudioStreamEvent) {
 			for i := 0; i < len(p.AudioBuffer)/480; i++ {
 				localMumbleArray <- p.AudioBuffer[480*i : 480*(i+1)]
 			}
+			promReceivedMumblePackets.Inc()
 		}
 		log.Println("Mumble audio stream ended", name)
 	}()
@@ -61,12 +64,13 @@ func (m MumbleDuplex) fromMumbleMixer(ctx context.Context, wg *sync.WaitGroup, t
 		default:
 		}
 
-		sleepTick.SleepNextTarget()
+		promTimerMumbleMixer.Observe(float64(sleepTick.SleepNextTarget()))
 
 		mutex.Lock()
 
 		sendAudio = false
 		internalMixerArr := make([]gumble.AudioBuffer, 0)
+		streamingCount := 0
 
 		// Work through each channel
 		for i := 0; i < len(fromMumbleArr); i++ {
@@ -74,6 +78,7 @@ func (m MumbleDuplex) fromMumbleMixer(ctx context.Context, wg *sync.WaitGroup, t
 				sendAudio = true
 				if !mumbleStreamingArr[i] {
 					mumbleStreamingArr[i] = true
+					streamingCount++
 					// log.Println("Mumble starting", i)
 				}
 
@@ -88,6 +93,8 @@ func (m MumbleDuplex) fromMumbleMixer(ctx context.Context, wg *sync.WaitGroup, t
 		}
 
 		mutex.Unlock()
+
+		promMumbleStreaming.Set(float64(streamingCount))
 
 		if sendAudio {
 
@@ -111,10 +118,12 @@ func (m MumbleDuplex) fromMumbleMixer(ctx context.Context, wg *sync.WaitGroup, t
 				}
 			}
 
+			promToDiscordBufferSize.Set(float64(len(toDiscord)))
 			select {
 			case toDiscord <- outBuf:
 			default:
 				log.Println("Error: toDiscord buffer full. Dropping packet")
+				promToDiscordDropped.Inc()
 			}
 		}
 	}
