@@ -100,7 +100,7 @@ func (dd *DiscordDuplex) discordSendPCM(ctx context.Context, wg *sync.WaitGroup,
 		default:
 		}
 
-		promTimerDiscordSend.Observe(float64(sleepTick.SleepNextTarget()))
+		promTimerDiscordSend.Observe(float64(sleepTick.SleepNextTarget(true)))
 
 		if (len(pcm) > 1 && streaming) || (len(pcm) > dd.Bridge.BridgeConfig.DiscordStartStreamingCount && !streaming) {
 			if !streaming {
@@ -136,7 +136,7 @@ func (dd *DiscordDuplex) discordSendPCM(ctx context.Context, wg *sync.WaitGroup,
 				// We want to do this after alerting the user of possible short speaking cycles
 				for i := 0; i < 5; i++ {
 					internalSend(opusSilence)
-					promTimerDiscordSend.Observe(float64(sleepTick.SleepNextTarget()))
+					promTimerDiscordSend.Observe(float64(sleepTick.SleepNextTarget(true)))
 				}
 
 				dd.Bridge.DiscordVoice.Speaking(false)
@@ -235,7 +235,7 @@ func (dd *DiscordDuplex) discordReceivePCM(ctx context.Context, wg *sync.WaitGro
 		dd.fromDiscordMap[p.SSRC] = s
 		dd.discordMutex.Unlock()
 
-		p.PCM, err = s.decoder.Decode(p.Opus, deltaT*2, false)
+		p.PCM, err = s.decoder.Decode(p.Opus, deltaT, false)
 		if err != nil {
 			OnError("Error decoding opus data", err)
 			continue
@@ -285,7 +285,7 @@ func (dd *DiscordDuplex) fromDiscordMixer(ctx context.Context, wg *sync.WaitGrou
 		default:
 		}
 
-		promTimerDiscordMixer.Observe(float64(sleepTick.SleepNextTarget()))
+		promTimerDiscordMixer.Observe(float64(sleepTick.SleepNextTarget(true)))
 
 		dd.discordMutex.Lock()
 
@@ -364,7 +364,7 @@ func (dd *DiscordDuplex) fromDiscordMixer(ctx context.Context, wg *sync.WaitGrou
 
 			for i := 0; i < 5; i++ {
 				mumbleTimeoutSend(mumbleSilence)
-				promTimerDiscordMixer.Observe(float64(sleepTick.SleepNextTarget()))
+				promTimerDiscordMixer.Observe(float64(sleepTick.SleepNextTarget(false)))
 			}
 
 			toMumbleStreaming = false
