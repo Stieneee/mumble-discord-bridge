@@ -18,6 +18,8 @@ var mumbleStreamingArr []bool
 // MumbleDuplex - listenera and outgoing
 type MumbleDuplex struct{}
 
+var mumbleSleepTick sleepct.SleepCT = sleepct.SleepCT{}
+
 // OnAudioStream - Spawn routines to handle incoming packets
 func (m MumbleDuplex) OnAudioStream(e *gumble.AudioStreamEvent) {
 
@@ -42,14 +44,14 @@ func (m MumbleDuplex) OnAudioStream(e *gumble.AudioStreamEvent) {
 				localMumbleArray <- p.AudioBuffer[480*i : 480*(i+1)]
 			}
 			promReceivedMumblePackets.Inc()
+			mumbleSleepTick.Notify()
 		}
 		log.Println("Mumble audio stream ended", name)
 	}()
 }
 
 func (m MumbleDuplex) fromMumbleMixer(ctx context.Context, wg *sync.WaitGroup, toDiscord chan []int16) {
-	sleepTick := sleepct.SleepCT{}
-	sleepTick.Start(10 * time.Millisecond)
+	mumbleSleepTick.Start(10 * time.Millisecond)
 
 	sendAudio := false
 	bufferWarning := false
@@ -64,7 +66,8 @@ func (m MumbleDuplex) fromMumbleMixer(ctx context.Context, wg *sync.WaitGroup, t
 		default:
 		}
 
-		promTimerMumbleMixer.Observe(float64(sleepTick.SleepNextTarget(true)))
+		// if we sent audio on the last pass attempt to pause
+		promTimerMumbleMixer.Observe(float64(mumbleSleepTick.SleepNextTarget(ctx, !sendAudio)))
 
 		mutex.Lock()
 
@@ -125,6 +128,8 @@ func (m MumbleDuplex) fromMumbleMixer(ctx context.Context, wg *sync.WaitGroup, t
 				log.Println("Error: toDiscord buffer full. Dropping packet")
 				promToDiscordDropped.Inc()
 			}
+
+			discrodSendSleepTick.Notify()
 		}
 	}
 }

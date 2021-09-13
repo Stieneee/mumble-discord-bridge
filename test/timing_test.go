@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"math/rand"
@@ -13,7 +14,7 @@ import (
 	"github.com/stieneee/tickerct"
 )
 
-const testCount int64 = 1000
+const testCount int64 = 10000
 const maxSleepInterval time.Duration = 15 * time.Millisecond
 const tickerInterval time.Duration = 10 * time.Millisecond
 const testDuration time.Duration = time.Duration(testCount * 10 * int64(time.Millisecond))
@@ -115,7 +116,7 @@ func testSleepCT(wg *sync.WaitGroup) {
 			if i+1 < testCount {
 				time.Sleep(time.Duration(float64(maxSleepInterval) * rand.Float64()))
 			}
-			s.SleepNextTarget(false)
+			s.SleepNextTarget(context.TODO(), false)
 		}
 		fmt.Println("SleepCT (loaded) after", testDuration, "drifts", time.Since(start)-testDuration)
 		wg.Done()
@@ -144,7 +145,7 @@ func testSleepCTPause(wg *sync.WaitGroup) {
 				time.Sleep(time.Duration(float64(maxSleepInterval) * rand.Float64()))
 			}
 			s.Notify()
-			s.SleepNextTarget(true)
+			s.SleepNextTarget(context.TODO(), true)
 		}
 		fmt.Println("SleepCT Pause (loaded) after", testDuration, "drifts", time.Since(start)-testDuration)
 		wg.Done()

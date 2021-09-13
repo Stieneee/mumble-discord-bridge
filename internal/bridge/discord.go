@@ -30,6 +30,9 @@ type DiscordDuplex struct {
 	fromDiscordMap map[uint32]fromDiscord
 }
 
+var discrodSendSleepTick sleepct.SleepCT = sleepct.SleepCT{}
+var discrodReceiveSleepTick sleepct.SleepCT = sleepct.SleepCT{}
+
 // OnError gets called by dgvoice when an error is encountered.
 // By default logs to STDERR
 var OnError = func(str string, err error) {
@@ -61,8 +64,7 @@ func (dd *DiscordDuplex) discordSendPCM(ctx context.Context, wg *sync.WaitGroup,
 	// Generate Opus Silence Frame
 	opusSilence := []byte{0xf8, 0xff, 0xfe}
 
-	sleepTick := sleepct.SleepCT{}
-	sleepTick.Start(20 * time.Millisecond)
+	discrodSendSleepTick.Start(20 * time.Millisecond)
 
 	lastReady := true
 	var readyTimeout *time.Timer
@@ -100,7 +102,8 @@ func (dd *DiscordDuplex) discordSendPCM(ctx context.Context, wg *sync.WaitGroup,
 		default:
 		}
 
-		promTimerDiscordSend.Observe(float64(sleepTick.SleepNextTarget(true)))
+		// if we are not streaming try to pause
+		promTimerDiscordSend.Observe(float64(discrodSendSleepTick.SleepNextTarget(ctx, !streaming)))
 
 		if (len(pcm) > 1 && streaming) || (len(pcm) > dd.Bridge.BridgeConfig.DiscordStartStreamingCount && !streaming) {
 			if !streaming {
@@ -136,7 +139,7 @@ func (dd *DiscordDuplex) discordSendPCM(ctx context.Context, wg *sync.WaitGroup,
 				// We want to do this after alerting the user of possible short speaking cycles
 				for i := 0; i < 5; i++ {
 					internalSend(opusSilence)
-					promTimerDiscordSend.Observe(float64(sleepTick.SleepNextTarget(true)))
+					promTimerDiscordSend.Observe(float64(discrodSendSleepTick.SleepNextTarget(ctx, true)))
 				}
 
 				dd.Bridge.DiscordVoice.Speaking(false)
@@ -260,6 +263,8 @@ func (dd *DiscordDuplex) discordReceivePCM(ctx context.Context, wg *sync.WaitGro
 			}
 		}
 		dd.discordMutex.Unlock()
+
+		discrodReceiveSleepTick.Notify()
 	}
 }
 
@@ -270,8 +275,7 @@ func (dd *DiscordDuplex) fromDiscordMixer(ctx context.Context, wg *sync.WaitGrou
 	}
 	var speakingStart time.Time
 
-	sleepTick := sleepct.SleepCT{}
-	sleepTick.Start(10 * time.Millisecond)
+	discrodReceiveSleepTick.Start(10 * time.Millisecond)
 
 	sendAudio := false
 	toMumbleStreaming := false
@@ -285,7 +289,8 @@ func (dd *DiscordDuplex) fromDiscordMixer(ctx context.Context, wg *sync.WaitGrou
 		default:
 		}
 
-		promTimerDiscordMixer.Observe(float64(sleepTick.SleepNextTarget(true)))
+		// if didn't send audio try to pause
+		promTimerDiscordMixer.Observe(float64(discrodReceiveSleepTick.SleepNextTarget(ctx, !sendAudio)))
 
 		dd.discordMutex.Lock()
 
@@ -364,7 +369,7 @@ func (dd *DiscordDuplex) fromDiscordMixer(ctx context.Context, wg *sync.WaitGrou
 
 			for i := 0; i < 5; i++ {
 				mumbleTimeoutSend(mumbleSilence)
-				promTimerDiscordMixer.Observe(float64(sleepTick.SleepNextTarget(false)))
+				promTimerDiscordMixer.Observe(float64(discrodReceiveSleepTick.SleepNextTarget(ctx, false)))
 			}
 
 			toMumbleStreaming = false
