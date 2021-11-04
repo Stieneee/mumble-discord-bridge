@@ -36,8 +36,8 @@ Usage of ./mumble-discord-bridge:
      MUMBLE_CHANNEL, mumble channel to start in, using '/' to separate nested channels, optional
   -mumble-disable-text
      MUMBLE_DISABLE_TEXT, disable sending text to mumble, (default false)
-  -mumble-insecure
-      MUMBLE_INSECURE, mumble insecure, optional
+  -mumble-insecure bool ("true" or "false")
+      MUMBLE_INSECURE, mumble insecure, optional, (default false)
   -mumble-password string
      MUMBLE_PASSWORD, mumble password, optional
   -mumble-port int
