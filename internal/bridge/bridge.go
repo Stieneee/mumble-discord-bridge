@@ -183,7 +183,7 @@ func (b *BridgeState) StartBridge() {
 	// Start Passing Between
 
 	// From Mumble
-	go b.MumbleStream.fromMumbleMixer(ctx, &wg, toDiscord)
+	go b.MumbleStream.fromMumbleMixer(ctx, &wg, cancel, toDiscord)
 
 	// From Discord
 	b.DiscordStream = &DiscordDuplex{

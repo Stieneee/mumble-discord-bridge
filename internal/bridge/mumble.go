@@ -3,6 +3,7 @@ package bridge
 import (
 	"context"
 	"log"
+	"strconv"
 	"sync"
 	"time"
 
@@ -50,11 +51,14 @@ func (m MumbleDuplex) OnAudioStream(e *gumble.AudioStreamEvent) {
 	}()
 }
 
-func (m MumbleDuplex) fromMumbleMixer(ctx context.Context, wg *sync.WaitGroup, toDiscord chan []int16) {
+func (m MumbleDuplex) fromMumbleMixer(ctx context.Context, wg *sync.WaitGroup, cancel context.CancelFunc, toDiscord chan []int16) {
 	mumbleSleepTick.Start(10 * time.Millisecond)
 
 	sendAudio := false
 	bufferWarning := false
+
+	droppingPackets := false
+	droppingPacketCount := 0
 
 	wg.Add(1)
 
@@ -124,9 +128,24 @@ func (m MumbleDuplex) fromMumbleMixer(ctx context.Context, wg *sync.WaitGroup, t
 			promToDiscordBufferSize.Set(float64(len(toDiscord)))
 			select {
 			case toDiscord <- outBuf:
+				{
+					if droppingPackets {
+						log.Println("Discord buffer ok, total packets dropped " + strconv.Itoa(droppingPacketCount))
+						droppingPackets = false
+					}
+				}
 			default:
-				log.Println("Error: toDiscord buffer full. Dropping packet")
+				if !droppingPackets {
+					log.Println("Error: toDiscord buffer full. Dropping packets")
+					droppingPackets = true
+					droppingPacketCount = 0
+				}
+				droppingPacketCount++
 				promToDiscordDropped.Inc()
+				if droppingPacketCount > 250 {
+					log.Println("Discord Timeout")
+					cancel()
+				}
 			}
 
 			discrodSendSleepTick.Notify()
