@@ -47,7 +47,7 @@ var OnError = func(str string, err error) {
 
 // SendPCM will receive on the provied channel encode
 // received PCM data into Opus then send that to Discordgo
-func (dd *DiscordDuplex) discordSendPCM(ctx context.Context, wg *sync.WaitGroup, cancel context.CancelFunc, pcm <-chan []int16) {
+func (dd *DiscordDuplex) discordSendPCM(ctx context.Context, cancel context.CancelFunc, pcm <-chan []int16) {
 	const channels int = 1
 	const frameRate int = 48000              // audio sampling rate
 	const frameSize int = 960                // uint16 size of each audio frame
@@ -69,8 +69,6 @@ func (dd *DiscordDuplex) discordSendPCM(ctx context.Context, wg *sync.WaitGroup,
 	lastReady := true
 	var readyTimeout *time.Timer
 	var speakingStart time.Time
-
-	wg.Add(1)
 
 	internalSend := func(opus []byte) {
 		dd.Bridge.DiscordVoice.RWMutex.RLock()
@@ -97,7 +95,7 @@ func (dd *DiscordDuplex) discordSendPCM(ctx context.Context, wg *sync.WaitGroup,
 	for {
 		select {
 		case <-ctx.Done():
-			wg.Done()
+			log.Println("Stopping Discord send PCM")
 			return
 		default:
 		}
@@ -151,7 +149,7 @@ func (dd *DiscordDuplex) discordSendPCM(ctx context.Context, wg *sync.WaitGroup,
 
 // ReceivePCM will receive on the the Discordgo OpusRecv channel and decode
 // the opus audio into PCM then send it on the provided channel.
-func (dd *DiscordDuplex) discordReceivePCM(ctx context.Context, wg *sync.WaitGroup, cancel context.CancelFunc) {
+func (dd *DiscordDuplex) discordReceivePCM(ctx context.Context, cancel context.CancelFunc) {
 	var err error
 
 	lastReady := true
@@ -161,8 +159,6 @@ func (dd *DiscordDuplex) discordReceivePCM(ctx context.Context, wg *sync.WaitGro
 	for i := 0; i < 480; i++ {
 		zeros[i] = 0
 	}
-
-	wg.Add(1)
 
 	for {
 		dd.Bridge.DiscordVoice.RWMutex.RLock()
@@ -188,7 +184,7 @@ func (dd *DiscordDuplex) discordReceivePCM(ctx context.Context, wg *sync.WaitGro
 
 		select {
 		case <-ctx.Done():
-			wg.Done()
+			log.Println("Stopping Discord receive PCM")
 			return
 		case p, ok = <-dd.Bridge.DiscordVoice.OpusRecv:
 		}
@@ -268,7 +264,7 @@ func (dd *DiscordDuplex) discordReceivePCM(ctx context.Context, wg *sync.WaitGro
 	}
 }
 
-func (dd *DiscordDuplex) fromDiscordMixer(ctx context.Context, wg *sync.WaitGroup, toMumble chan<- gumble.AudioBuffer) {
+func (dd *DiscordDuplex) fromDiscordMixer(ctx context.Context, toMumble chan<- gumble.AudioBuffer) {
 	mumbleSilence := gumble.AudioBuffer{}
 	for i := 3; i < 480; i++ {
 		mumbleSilence = append(mumbleSilence, 0x00)
@@ -279,12 +275,11 @@ func (dd *DiscordDuplex) fromDiscordMixer(ctx context.Context, wg *sync.WaitGrou
 
 	sendAudio := false
 	toMumbleStreaming := false
-	wg.Add(1)
 
 	for {
 		select {
 		case <-ctx.Done():
-			wg.Done()
+			log.Println("Stopping from Discord mixer")
 			return
 		default:
 		}

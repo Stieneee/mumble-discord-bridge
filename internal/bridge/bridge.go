@@ -183,7 +183,11 @@ func (b *BridgeState) StartBridge() {
 	// Start Passing Between
 
 	// From Mumble
-	go b.MumbleStream.fromMumbleMixer(ctx, &wg, cancel, toDiscord)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		b.MumbleStream.fromMumbleMixer(ctx, cancel, toDiscord)
+	}()
 
 	// From Discord
 	b.DiscordStream = &DiscordDuplex{
@@ -191,15 +195,28 @@ func (b *BridgeState) StartBridge() {
 		fromDiscordMap: make(map[uint32]fromDiscord),
 	}
 
-	go b.DiscordStream.discordReceivePCM(ctx, &wg, cancel)
-	go b.DiscordStream.fromDiscordMixer(ctx, &wg, toMumble)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		b.DiscordStream.discordReceivePCM(ctx, cancel)
+	}()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		b.DiscordStream.fromDiscordMixer(ctx, toMumble)
+	}()
 
 	// To Discord
-	go b.DiscordStream.discordSendPCM(ctx, &wg, cancel, toDiscord)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		b.DiscordStream.discordSendPCM(ctx, cancel, toDiscord)
+	}()
 
 	// Monitor Mumble
 	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		ticker := time.NewTicker(500 * time.Millisecond)
 		for {
 			select {
@@ -213,7 +230,6 @@ func (b *BridgeState) StartBridge() {
 					cancel()
 				}
 			case <-ctx.Done():
-				wg.Done()
 				return
 			}
 		}

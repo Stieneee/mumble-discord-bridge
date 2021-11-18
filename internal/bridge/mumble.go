@@ -51,7 +51,7 @@ func (m MumbleDuplex) OnAudioStream(e *gumble.AudioStreamEvent) {
 	}()
 }
 
-func (m MumbleDuplex) fromMumbleMixer(ctx context.Context, wg *sync.WaitGroup, cancel context.CancelFunc, toDiscord chan []int16) {
+func (m MumbleDuplex) fromMumbleMixer(ctx context.Context, cancel context.CancelFunc, toDiscord chan []int16) {
 	mumbleSleepTick.Start(10 * time.Millisecond)
 
 	sendAudio := false
@@ -60,12 +60,10 @@ func (m MumbleDuplex) fromMumbleMixer(ctx context.Context, wg *sync.WaitGroup, c
 	droppingPackets := false
 	droppingPacketCount := 0
 
-	wg.Add(1)
-
 	for {
 		select {
 		case <-ctx.Done():
-			wg.Done()
+			log.Println("Stopping From Mumble Mixer")
 			return
 		default:
 		}
