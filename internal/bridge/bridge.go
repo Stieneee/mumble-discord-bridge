@@ -141,7 +141,7 @@ func (b *BridgeState) StartBridge() {
 
 	// MUMBLE Connect
 
-	b.MumbleStream = &MumbleDuplex{}
+	b.MumbleStream = NewMumbleDuplex()
 	det := b.BridgeConfig.MumbleConfig.AudioListeners.Attach(b.MumbleStream)
 	defer det.Detach()
 
@@ -180,6 +180,9 @@ func (b *BridgeState) StartBridge() {
 	defer close(toDiscord)
 	defer close(toMumble)
 
+	// From Discord
+	b.DiscordStream = NewDiscordDuplex(b)
+
 	// Start Passing Between
 
 	// From Mumble
@@ -188,12 +191,6 @@ func (b *BridgeState) StartBridge() {
 		defer wg.Done()
 		b.MumbleStream.fromMumbleMixer(ctx, cancel, toDiscord)
 	}()
-
-	// From Discord
-	b.DiscordStream = &DiscordDuplex{
-		Bridge:         b,
-		fromDiscordMap: make(map[uint32]fromDiscord),
-	}
 
 	wg.Add(1)
 	go func() {
