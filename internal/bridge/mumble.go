@@ -62,7 +62,6 @@ func (m *MumbleDuplex) fromMumbleMixer(ctx context.Context, cancel context.Cance
 	m.mumbleSleepTick.Start(10 * time.Millisecond)
 
 	sendAudio := false
-	bufferWarning := false
 
 	droppingPackets := false
 	droppingPacketCount := 0
@@ -114,18 +113,6 @@ func (m *MumbleDuplex) fromMumbleMixer(ctx context.Context, cancel context.Cance
 			for i := 0; i < len(outBuf); i++ {
 				for j := 0; j < len(internalMixerArr); j++ {
 					outBuf[i] += (internalMixerArr[j])[i]
-				}
-			}
-
-			if len(toDiscord) > 20 {
-				if !bufferWarning {
-					log.Println("Warning: toDiscord buffer size")
-					bufferWarning = true
-				}
-			} else {
-				if bufferWarning {
-					log.Println("Resolved: toDiscord buffer size")
-					bufferWarning = false
 				}
 			}
 
