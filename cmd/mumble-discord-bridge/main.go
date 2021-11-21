@@ -207,11 +207,6 @@ func main() {
 		Bridge.Mode = bridge.BridgeModeConstant
 		Bridge.DiscordChannelID = Bridge.BridgeConfig.CID
 		go func() {
-			defer func() {
-				if r := recover(); r != nil {
-					fmt.Println("Bridge paniced", r)
-				}
-			}()
 			for {
 				Bridge.StartBridge()
 				log.Println("Bridge died")
