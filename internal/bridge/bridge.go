@@ -259,7 +259,7 @@ func (b *BridgeState) DiscordStatusUpdate() {
 				b.MumbleUserCount = b.MumbleUserCount - 1
 			}
 			if b.MumbleUserCount == 0 {
-				status = "No users in Mumble"
+				status = "no users in Mumble"
 			} else {
 				if len(b.MumbleUsers) > 0 {
 					status = fmt.Sprintf("%v/%v users in Mumble\n", len(b.MumbleUsers), b.MumbleUserCount)
