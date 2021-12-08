@@ -210,7 +210,7 @@ func (b *BridgeState) StartBridge() {
 		b.DiscordStream.discordSendPCM(ctx, cancel, toDiscord)
 	}()
 
-	// Monitor Mumble
+	// Monitor
 	wg.Add(1)
 	go func() {
 		defer wg.Done()

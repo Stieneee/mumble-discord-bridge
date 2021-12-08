@@ -85,7 +85,7 @@ var (
 
 	promDiscordReceivedPackets = promauto.NewCounter(prometheus.CounterOpts{
 		Name: "mdb_discord_received_count",
-		Help: "The number of received packed from Discord",
+		Help: "The number of received packets from Discord",
 	})
 
 	promDiscordSentPackets = promauto.NewCounter(prometheus.CounterOpts{

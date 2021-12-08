@@ -110,7 +110,11 @@ func (dd *DiscordDuplex) discordSendPCM(ctx context.Context, cancel context.Canc
 			lastReady = true
 			readyTimeout.Stop()
 		} else {
-			dd.Bridge.DiscordVoice.OpusSend <- opus
+			select {
+			case dd.Bridge.DiscordVoice.OpusSend <- opus:
+			case <-ctx.Done():
+			}
+
 			promDiscordSentPackets.Inc()
 		}
 		dd.Bridge.DiscordVoice.RWMutex.RUnlock()
