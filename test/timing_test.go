@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"math/rand"
@@ -18,7 +19,7 @@ const maxSleepInterval time.Duration = 15 * time.Millisecond
 const tickerInterval time.Duration = 10 * time.Millisecond
 const testDuration time.Duration = time.Duration(testCount * 10 * int64(time.Millisecond))
 
-func testTickerBaseCase(wg *sync.WaitGroup) {
+func testTickerBaseCase(wg *sync.WaitGroup, test *testing.T) {
 	wg.Add(1)
 	go func(interval time.Duration) {
 		now := time.Now()
@@ -39,7 +40,7 @@ func testTickerBaseCase(wg *sync.WaitGroup) {
 func TestTickerBaseCase(t *testing.T) {
 	wg := sync.WaitGroup{}
 
-	testTickerBaseCase(&wg)
+	testTickerBaseCase(&wg, t)
 
 	wg.Wait()
 }
@@ -115,7 +116,7 @@ func testSleepCT(wg *sync.WaitGroup) {
 			if i+1 < testCount {
 				time.Sleep(time.Duration(float64(maxSleepInterval) * rand.Float64()))
 			}
-			s.SleepNextTarget()
+			s.SleepNextTarget(context.TODO(), false)
 		}
 		fmt.Println("SleepCT (loaded) after", testDuration, "drifts", time.Since(start)-testDuration)
 		wg.Done()
@@ -126,6 +127,35 @@ func TestSleepCT(t *testing.T) {
 	wg := sync.WaitGroup{}
 
 	testSleepCT(&wg)
+
+	wg.Wait()
+}
+
+func testSleepCTPause(wg *sync.WaitGroup) {
+	wg.Add(1)
+	go func(interval time.Duration) {
+		now := time.Now()
+		start := now
+		// start the ticker
+		s := sleepct.SleepCT{}
+		s.Start(interval)
+		var i int64
+		for i = 0; i < testCount; i++ {
+			if i+1 < testCount {
+				time.Sleep(time.Duration(float64(maxSleepInterval) * rand.Float64()))
+			}
+			s.Notify()
+			s.SleepNextTarget(context.TODO(), true)
+		}
+		fmt.Println("SleepCT Pause (loaded) after", testDuration, "drifts", time.Since(start)-testDuration)
+		wg.Done()
+	}(tickerInterval)
+}
+
+func TestSleepCTPause(t *testing.T) {
+	wg := sync.WaitGroup{}
+
+	testSleepCTPause(&wg)
 
 	wg.Wait()
 }

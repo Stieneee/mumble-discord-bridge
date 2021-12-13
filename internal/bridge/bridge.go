@@ -42,6 +42,7 @@ type BridgeConfig struct {
 	CID                        string
 	DiscordStartStreamingCount int
 	DiscordDisableText         bool
+	DiscordDisableBotStatus    bool
 	Version                    string
 }
 
@@ -119,6 +120,9 @@ func (b *BridgeState) StartBridge() {
 
 	var err error
 
+	promBridgeStarts.Inc()
+	promBridgeStartTime.SetToCurrentTime()
+
 	// DISCORD Connect Voice
 	log.Println("Attempting to join Discord voice channel")
 	if b.DiscordChannelID == "" {
@@ -138,7 +142,7 @@ func (b *BridgeState) StartBridge() {
 
 	// MUMBLE Connect
 
-	b.MumbleStream = &MumbleDuplex{}
+	b.MumbleStream = NewMumbleDuplex()
 	det := b.BridgeConfig.MumbleConfig.AudioListeners.Attach(b.MumbleStream)
 	defer det.Detach()
 
@@ -177,26 +181,40 @@ func (b *BridgeState) StartBridge() {
 	defer close(toDiscord)
 	defer close(toMumble)
 
+	// From Discord
+	b.DiscordStream = NewDiscordDuplex(b)
+
 	// Start Passing Between
 
 	// From Mumble
-	go b.MumbleStream.fromMumbleMixer(ctx, &wg, toDiscord)
-
-	// From Discord
-	b.DiscordStream = &DiscordDuplex{
-		Bridge:         b,
-		fromDiscordMap: make(map[uint32]fromDiscord),
-	}
-
-	go b.DiscordStream.discordReceivePCM(ctx, &wg, cancel)
-	go b.DiscordStream.fromDiscordMixer(ctx, &wg, toMumble)
-
-	// To Discord
-	go b.DiscordStream.discordSendPCM(ctx, &wg, cancel, toDiscord)
-
-	// Monitor Mumble
 	wg.Add(1)
 	go func() {
+		defer wg.Done()
+		b.MumbleStream.fromMumbleMixer(ctx, cancel, toDiscord)
+	}()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		b.DiscordStream.discordReceivePCM(ctx, cancel)
+	}()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		b.DiscordStream.fromDiscordMixer(ctx, toMumble)
+	}()
+
+	// To Discord
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		b.DiscordStream.discordSendPCM(ctx, cancel, toDiscord)
+	}()
+
+	// Monitor
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
 		ticker := time.NewTicker(500 * time.Millisecond)
 		for {
 			select {
@@ -210,7 +228,6 @@ func (b *BridgeState) StartBridge() {
 					cancel()
 				}
 			case <-ctx.Done():
-				wg.Done()
 				return
 			}
 		}
@@ -252,6 +269,9 @@ func (b *BridgeState) DiscordStatusUpdate() {
 			log.Printf("error pinging mumble server %v\n", err)
 			b.DiscordSession.UpdateListeningStatus("an error pinging mumble")
 		} else {
+
+			promMumblePing.Set(float64(resp.Ping.Milliseconds()))
+
 			b.MumbleUsersMutex.Lock()
 			b.BridgeMutex.Lock()
 			b.MumbleUserCount = resp.ConnectedUsers
@@ -269,8 +289,16 @@ func (b *BridgeState) DiscordStatusUpdate() {
 			}
 			b.BridgeMutex.Unlock()
 			b.MumbleUsersMutex.Unlock()
-			b.DiscordSession.UpdateListeningStatus(status)
+			if !b.BridgeConfig.DiscordDisableBotStatus {
+				b.DiscordSession.UpdateListeningStatus(status)
+			}
 		}
+
+		discordHeartBeat := b.DiscordSession.LastHeartbeatAck.Sub(b.DiscordSession.LastHeartbeatSent).Milliseconds()
+		if discordHeartBeat > 0 {
+			promDiscordHeartBeat.Set(float64(discordHeartBeat))
+		}
+
 	}
 }
 

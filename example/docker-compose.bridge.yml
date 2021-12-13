@@ -1,3 +1,6 @@
+# This a basic docker-compose file to run an instance an instance of Mumble-Discord-Bridge
+# docker-compose -f ./docker-compose.yml up -d
+
 version: "3"
    
 services:

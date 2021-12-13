@@ -26,8 +26,19 @@ type fromDiscord struct {
 type DiscordDuplex struct {
 	Bridge *BridgeState
 
-	discordMutex   sync.Mutex
-	fromDiscordMap map[uint32]fromDiscord
+	discordMutex            sync.Mutex
+	fromDiscordMap          map[uint32]fromDiscord
+	discordSendSleepTick    sleepct.SleepCT
+	discordReceiveSleepTick sleepct.SleepCT
+}
+
+func NewDiscordDuplex(b *BridgeState) *DiscordDuplex {
+	return &DiscordDuplex{
+		Bridge:                  b,
+		fromDiscordMap:          make(map[uint32]fromDiscord),
+		discordSendSleepTick:    sleepct.SleepCT{},
+		discordReceiveSleepTick: sleepct.SleepCT{},
+	}
 }
 
 // OnError gets called by dgvoice when an error is encountered.
@@ -43,8 +54,8 @@ var OnError = func(str string, err error) {
 }
 
 // SendPCM will receive on the provied channel encode
-// received PCM data into Opus then send that to Discordgo
-func (dd *DiscordDuplex) discordSendPCM(ctx context.Context, wg *sync.WaitGroup, cancel context.CancelFunc, pcm <-chan []int16) {
+// received PCM data with Opus then send that to Discordgo
+func (dd *DiscordDuplex) discordSendPCM(ctx context.Context, cancel context.CancelFunc, pcm <-chan []int16) {
 	const channels int = 1
 	const frameRate int = 48000              // audio sampling rate
 	const frameSize int = 960                // uint16 size of each audio frame
@@ -61,14 +72,27 @@ func (dd *DiscordDuplex) discordSendPCM(ctx context.Context, wg *sync.WaitGroup,
 	// Generate Opus Silence Frame
 	opusSilence := []byte{0xf8, 0xff, 0xfe}
 
-	sleepTick := sleepct.SleepCT{}
-	sleepTick.Start(20 * time.Millisecond)
+	dd.discordSendSleepTick.Start(20 * time.Millisecond)
 
 	lastReady := true
 	var readyTimeout *time.Timer
 	var speakingStart time.Time
 
-	wg.Add(1)
+	// Spy on the PCM channel to notify
+	// TODO determine a method to notify a paused sleepct
+	// pcm := make(chan []int16, 10)
+	// go func() {
+	// 	for {
+	// 		t, ok := <-pcmIn
+	// 		if !ok {
+	// 			close(pcm)
+	// 			return
+	// 		} else {
+	// 			dd.discordSendSleepTick.Notify()
+	// 			pcm <- t
+	// 		}
+	// 	}
+	// }()
 
 	internalSend := func(opus []byte) {
 		dd.Bridge.DiscordVoice.RWMutex.RLock()
@@ -86,7 +110,12 @@ func (dd *DiscordDuplex) discordSendPCM(ctx context.Context, wg *sync.WaitGroup,
 			lastReady = true
 			readyTimeout.Stop()
 		} else {
-			dd.Bridge.DiscordVoice.OpusSend <- opus
+			select {
+			case dd.Bridge.DiscordVoice.OpusSend <- opus:
+			case <-ctx.Done():
+			}
+
+			promDiscordSentPackets.Inc()
 		}
 		dd.Bridge.DiscordVoice.RWMutex.RUnlock()
 	}
@@ -94,12 +123,14 @@ func (dd *DiscordDuplex) discordSendPCM(ctx context.Context, wg *sync.WaitGroup,
 	for {
 		select {
 		case <-ctx.Done():
-			wg.Done()
+			log.Println("Stopping Discord send PCM")
 			return
 		default:
 		}
 
-		sleepTick.SleepNextTarget()
+		// if we are not streaming try to pause
+		// promTimerDiscordSend.Observe(float64(dd.discordSendSleepTick.SleepNextTarget(ctx, !streaming)))
+		promTimerDiscordSend.Observe(float64(dd.discordSendSleepTick.SleepNextTarget(ctx, false)))
 
 		if (len(pcm) > 1 && streaming) || (len(pcm) > dd.Bridge.BridgeConfig.DiscordStartStreamingCount && !streaming) {
 			if !streaming {
@@ -126,7 +157,7 @@ func (dd *DiscordDuplex) discordSendPCM(ctx context.Context, wg *sync.WaitGroup,
 				// It is possible that short speaking cycle is the result of a short input to mumble (Not a problem). ie a quick tap of push to talk button.
 				// Or when timing delays are introduced via network, hardware or kernel delays (Problem).
 				// The problem delays result in choppy or stuttering sounds, especially when the silence frames are introduced into the opus frames below.
-				// Multiple short cycle delays can result in a Discrod rate limiter being trigger due to of multiple JSON speaking/not-speaking state changes
+				// Multiple short cycle delays can result in a discord rate limiter being trigger due to of multiple JSON speaking/not-speaking state changes
 				if time.Since(speakingStart).Milliseconds() < 50 {
 					log.Println("Warning: Short Mumble to Discord speaking cycle. Consider increaseing the size of the to Discord jitter buffer.")
 				}
@@ -135,7 +166,9 @@ func (dd *DiscordDuplex) discordSendPCM(ctx context.Context, wg *sync.WaitGroup,
 				// We want to do this after alerting the user of possible short speaking cycles
 				for i := 0; i < 5; i++ {
 					internalSend(opusSilence)
-					sleepTick.SleepNextTarget()
+					// promTimerDiscordSend.Observe(float64(dd.discordSendSleepTick.SleepNextTarget(ctx, true)))
+					promTimerDiscordSend.Observe(float64(dd.discordSendSleepTick.SleepNextTarget(ctx, false)))
+
 				}
 
 				dd.Bridge.DiscordVoice.Speaking(false)
@@ -147,7 +180,7 @@ func (dd *DiscordDuplex) discordSendPCM(ctx context.Context, wg *sync.WaitGroup,
 
 // ReceivePCM will receive on the the Discordgo OpusRecv channel and decode
 // the opus audio into PCM then send it on the provided channel.
-func (dd *DiscordDuplex) discordReceivePCM(ctx context.Context, wg *sync.WaitGroup, cancel context.CancelFunc) {
+func (dd *DiscordDuplex) discordReceivePCM(ctx context.Context, cancel context.CancelFunc) {
 	var err error
 
 	lastReady := true
@@ -157,8 +190,6 @@ func (dd *DiscordDuplex) discordReceivePCM(ctx context.Context, wg *sync.WaitGro
 	for i := 0; i < 480; i++ {
 		zeros[i] = 0
 	}
-
-	wg.Add(1)
 
 	for {
 		dd.Bridge.DiscordVoice.RWMutex.RLock()
@@ -184,7 +215,7 @@ func (dd *DiscordDuplex) discordReceivePCM(ctx context.Context, wg *sync.WaitGro
 
 		select {
 		case <-ctx.Done():
-			wg.Done()
+			log.Println("Stopping Discord receive PCM")
 			return
 		case p, ok = <-dd.Bridge.DiscordVoice.OpusRecv:
 		}
@@ -234,13 +265,15 @@ func (dd *DiscordDuplex) discordReceivePCM(ctx context.Context, wg *sync.WaitGro
 		dd.fromDiscordMap[p.SSRC] = s
 		dd.discordMutex.Unlock()
 
-		p.PCM, err = s.decoder.Decode(p.Opus, deltaT*2, false)
+		p.PCM, err = s.decoder.Decode(p.Opus, deltaT, false)
 		if err != nil {
 			OnError("Error decoding opus data", err)
 			continue
 		}
 
 		// fmt.Println(p.SSRC, p.Type, deltaT, p.Sequence, p.Sequence-s.lastSequence, oldReceiving, s.streaming, len(p.Opus), len(p.PCM))
+
+		promDiscordReceivedPackets.Inc()
 
 		// Push data into pcm channel in 10ms chunks of mono pcm data
 		dd.discordMutex.Lock()
@@ -257,37 +290,41 @@ func (dd *DiscordDuplex) discordReceivePCM(ctx context.Context, wg *sync.WaitGro
 			}
 		}
 		dd.discordMutex.Unlock()
+
+		dd.discordReceiveSleepTick.Notify()
 	}
 }
 
-func (dd *DiscordDuplex) fromDiscordMixer(ctx context.Context, wg *sync.WaitGroup, toMumble chan<- gumble.AudioBuffer) {
+func (dd *DiscordDuplex) fromDiscordMixer(ctx context.Context, toMumble chan<- gumble.AudioBuffer) {
 	mumbleSilence := gumble.AudioBuffer{}
 	for i := 3; i < 480; i++ {
 		mumbleSilence = append(mumbleSilence, 0x00)
 	}
 	var speakingStart time.Time
 
-	sleepTick := sleepct.SleepCT{}
-	sleepTick.Start(10 * time.Millisecond)
+	dd.discordReceiveSleepTick.Start(10 * time.Millisecond)
 
 	sendAudio := false
 	toMumbleStreaming := false
-	wg.Add(1)
 
 	for {
 		select {
 		case <-ctx.Done():
-			wg.Done()
+			log.Println("Stopping from Discord mixer")
 			return
 		default:
 		}
 
-		sleepTick.SleepNextTarget()
+		// if didn't send audio try to pause
+		// promTimerDiscordMixer.Observe(float64(dd.discordReceiveSleepTick.SleepNextTarget(ctx, !sendAudio)))
+		// TODO Additional pause testing
+		promTimerDiscordMixer.Observe(float64(dd.discordReceiveSleepTick.SleepNextTarget(ctx, false)))
 
 		dd.discordMutex.Lock()
 
 		sendAudio = false
 		internalMixerArr := make([][]int16, 0)
+		streamingCount := 0
 
 		// Work through each channel
 		for i := range dd.fromDiscordMap {
@@ -306,6 +343,7 @@ func (dd *DiscordDuplex) fromDiscordMixer(ctx context.Context, wg *sync.WaitGrou
 					dd.fromDiscordMap[i] = x
 				}
 
+				streamingCount++
 				x1 := (<-dd.fromDiscordMap[i].pcm)
 				internalMixerArr = append(internalMixerArr, x1)
 			} else {
@@ -318,6 +356,9 @@ func (dd *DiscordDuplex) fromDiscordMixer(ctx context.Context, wg *sync.WaitGrou
 			}
 		}
 
+		promDiscordArraySize.Set(float64(len(dd.fromDiscordMap)))
+		promDiscordStreaming.Set(float64(streamingCount))
+
 		dd.discordMutex.Unlock()
 
 		mumbleTimeoutSend := func(outBuf []int16) {
@@ -329,8 +370,10 @@ func (dd *DiscordDuplex) fromDiscordMixer(ctx context.Context, wg *sync.WaitGrou
 
 			select {
 			case toMumble <- outBuf:
+				promSentMumblePackets.Inc()
 			case <-timeout:
 				log.Println("To Mumble timeout. Dropping packet")
+				promToMumbleDropped.Inc()
 			}
 		}
 
@@ -354,7 +397,7 @@ func (dd *DiscordDuplex) fromDiscordMixer(ctx context.Context, wg *sync.WaitGrou
 
 			for i := 0; i < 5; i++ {
 				mumbleTimeoutSend(mumbleSilence)
-				sleepTick.SleepNextTarget()
+				promTimerDiscordMixer.Observe(float64(dd.discordReceiveSleepTick.SleepNextTarget(ctx, false)))
 			}
 
 			toMumbleStreaming = false

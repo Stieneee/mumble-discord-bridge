@@ -10,48 +10,6 @@ Several configuration variables must be set for the binary to function correctly
 All variables can be set using flags or in the environment.
 The binary will also attempt to load .env file located in the working directory.
 
-```bash
-Usage of ./mumble-discord-bridge:
-  -cpuprofile file
-     write cpu profile to file
-  -debug-level int
-     DEBUG_LEVEL, Discord debug level, optional, (default 1) (default 1)
-  -discord-cid string
-     DISCORD_CID, discord cid, required
-  -discord-command string
-     DISCORD_COMMAND, Discord command string, env alt DISCORD_COMMAND, optional, (defaults mumble-discord) (default "mumble-discord")
-  -discord-disable-text
-     DISCORD_DISABLE_TEXT, disable sending direct messages to discord, (default false)
-  -discord-gid string
-     DISCORD_GID, discord gid, required
-  -discord-token string
-     DISCORD_TOKEN, discord bot token, required
-  -mode string
-     MODE, [constant, manual, auto] determine which mode the bridge starts in, (default constant) (default "constant")
-  -mumble-address string
-     MUMBLE_ADDRESS, mumble server address, example example.com, required
-  -mumble-certificate string
-     MUMBLE_CERTIFICATE, client certificate to use when connecting to the Mumble server
-  -mumble-channel string
-     MUMBLE_CHANNEL, mumble channel to start in, using '/' to separate nested channels, optional
-  -mumble-disable-text
-     MUMBLE_DISABLE_TEXT, disable sending text to mumble, (default false)
-  -mumble-insecure bool ("true" or "false")
-      MUMBLE_INSECURE, mumble insecure, optional, (default false)
-  -mumble-password string
-     MUMBLE_PASSWORD, mumble password, optional
-  -mumble-port int
-     MUMBLE_PORT, mumble port, (default 64738) (default 64738)
-  -mumble-username string
-     MUMBLE_USERNAME, mumble username, (default: discord) (default "Discord")
-  -nice
-     NICE, whether the bridge should automatically try to 'nice' itself, (default false)
-  -to-discord-buffer int
-     TO_DISCORD_BUFFER, Jitter buffer from Mumble to Discord to absorb timing issues related to network, OS and hardware quality. (Increments of 10ms) (default 50)
-  -to-mumble-buffer int
-     TO_MUMBLE_BUFFER, Jitter buffer from Discord to Mumble to absorb timing issues related to network, OS and hardware quality. (Increments of 10ms) (default 50)
-```
-
 The bridge can be run with the follow modes:
 
 ```bash
@@ -98,6 +56,8 @@ The bot requires the following permissions:
 * Voice Channel Connect
 * Voice Channel Speak
 * Voice Channel Use Voice Activity
+
+Permission integer 36768768.
 
 ### Finding Discord CID and GID
 
@@ -186,6 +146,13 @@ The Mumble client itself includes a jitter buffer for similar reasons.
 A default jitter of 50ms should be adequate for most scenarios.
 A warning will be logged if short burst or audio are seen.
 A single warning can be ignored multiple warnings in short time spans would suggest the need for a larger jitter buffer.
+
+## Monitoring the Bridge
+
+The bridge can be started with a Prometheus metrics endpoint enabled.
+The example folder contains the a docker-compose file that will spawn the bridge, Prometheus and Grafana configured to serve a single a pre-configured dashboard.
+
+![Mumble Discord Bridge Grafana Dashboard](example/grafana-dashboard.png "Grafana Dashboard")
 
 ## Known Issues
 

@@ -2,6 +2,7 @@ GOFILES=$(shell find ./ -type f -name '*.go')
 
 mumble-discord-bridge: $(GOFILES) .goreleaser.yml
 	goreleaser build --skip-validate --rm-dist
+	go-licenses save ./cmd/mumble-discord-bridge --force --save_path="./dist/LICENSES"
 
 dev: $(GOFILES) .goreleaser.yml
 	goreleaser build --skip-validate --rm-dist && sudo ./dist/mumble-discord-bridge_linux_amd64/mumble-discord-bridge
