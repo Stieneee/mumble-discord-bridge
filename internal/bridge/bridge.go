@@ -42,6 +42,7 @@ type BridgeConfig struct {
 	CID                        string
 	DiscordStartStreamingCount int
 	DiscordDisableText         bool
+	DiscordDisableBotStatus    bool
 	Version                    string
 }
 
@@ -288,7 +289,9 @@ func (b *BridgeState) DiscordStatusUpdate() {
 			}
 			b.BridgeMutex.Unlock()
 			b.MumbleUsersMutex.Unlock()
-			b.DiscordSession.UpdateListeningStatus(status)
+			if !b.BridgeConfig.DiscordDisableBotStatus {
+				b.DiscordSession.UpdateListeningStatus(status)
+			}
 		}
 
 		discordHeartBeat := b.DiscordSession.LastHeartbeatAck.Sub(b.DiscordSession.LastHeartbeatSent).Milliseconds()

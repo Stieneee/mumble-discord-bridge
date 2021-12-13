@@ -50,6 +50,7 @@ func main() {
 	discordSendBuffer := flag.Int("to-discord-buffer", lookupEnvOrInt("TO_DISCORD_BUFFER", 50), "TO_DISCORD_BUFFER, Jitter buffer from Mumble to Discord to absorb timing issues related to network, OS and hardware quality. (Increments of 10ms)")
 	discordCommand := flag.String("discord-command", lookupEnvOrString("DISCORD_COMMAND", "mumble-discord"), "DISCORD_COMMAND, Discord command string, env alt DISCORD_COMMAND, optional, (defaults mumble-discord)")
 	discordDisableText := flag.Bool("discord-disable-text", lookupEnvOrBool("DISCORD_DISABLE_TEXT", false), "DISCORD_DISABLE_TEXT, disable sending direct messages to discord, (default false)")
+	discordDisableBotStatus := flag.Bool("discord-disable-bot-status", lookupEnvOrBool("DISCORD_DISABLE_BOT_STATUS", false), "DISCORD_DISABLE_BOT_STATUS, disable updating bot status, (default false)")
 	mode := flag.String("mode", lookupEnvOrString("MODE", "constant"), "MODE, [constant, manual, auto] determine which mode the bridge starts in, (default constant)")
 	nice := flag.Bool("nice", lookupEnvOrBool("NICE", false), "NICE, whether the bridge should automatically try to 'nice' itself, (default false)")
 	debug := flag.Int("debug-level", lookupEnvOrInt("DEBUG", 1), "DEBUG_LEVEL, Discord debug level, optional, (default 1)")
@@ -135,6 +136,7 @@ func main() {
 			CID:                        *discordCID,
 			DiscordStartStreamingCount: discordStartStreamingCount,
 			DiscordDisableText:         *discordDisableText,
+			DiscordDisableBotStatus:    *discordDisableBotStatus,
 			Version:                    version,
 		},
 		Connected:    false,
