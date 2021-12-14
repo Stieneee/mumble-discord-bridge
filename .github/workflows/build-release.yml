@@ -1,8 +1,11 @@
 name: 'CI'
 on:
   push:
-    tags:
-      - 'v*'
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
 
 jobs:
   goreleaser:
@@ -33,12 +36,21 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         with:
           version: latest
+          args: build --rm-dist
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      -
+        name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          version: latest
           args: release --rm-dist
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      # -
-      #   name: Upload assets
-      #   uses: actions/upload-artifact@v2
-      #   with:
-      #     name: mdb
-      #     path: dist/*
+      -
+        name: Upload assets
+        uses: actions/upload-artifact@v2
+        with:
+          name: mdb
+          path: dist/*
