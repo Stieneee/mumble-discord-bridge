@@ -15,7 +15,7 @@ jobs:
           fetch-depth: 0
       - 
         name: Install libopus-dev
-        run: sudo apt-get -y install libopus-dev
+        run: sudo apt update && sudo apt-get -y install libopus-dev
       -
         name: Set up Go
         uses: actions/setup-go@v2
@@ -23,7 +23,7 @@ jobs:
           go-version: 1.17
       -
         name: go-license install
-        run: go get github.com/google/go-licenses
+        run: go install github.com/google/go-licenses@latest
       -
         name: go-license save
         run: go-licenses save ./cmd/mumble-discord-bridge --force --save_path="./dist/LICENSES"
@@ -36,9 +36,9 @@ jobs:
           args: release --rm-dist
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      -
-        name: Upload assets
-        uses: actions/upload-artifact@v2
-        with:
-          name: mdb
-          path: dist/*
+      # -
+      #   name: Upload assets
+      #   uses: actions/upload-artifact@v2
+      #   with:
+      #     name: mdb
+      #     path: dist/*

@@ -20,7 +20,7 @@ builds:
     goarch:
       - amd64
     
-archives:
+# archives:
 checksum:
   name_template: 'checksums.txt'
 snapshot:
