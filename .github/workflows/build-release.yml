@@ -16,8 +16,8 @@ jobs:
         with:
           fetch-depth: 0
   
-      - name: Install libopus-dev
-        run: sudo apt update && sudo apt-get -y install libopus-dev
+      - name: Install libopus-dev zip
+        run: sudo apt update && sudo apt-get -y install libopus-dev zip
 
       - name: Set up Go
         uses: actions/setup-go@v2
@@ -28,20 +28,13 @@ jobs:
         run: go install github.com/google/go-licenses@latest
 
       - name: go-license save
-        run: go-licenses save ./cmd/mumble-discord-bridge --force --save_path="./LICENSES"
-
-      - name: Log in to Docker Hub
-        uses: docker/login-action@f054a8b539a109f9f41c372932f1ae047eff08c9
-        if: startsWith(github.ref, 'refs/tags/')
-        with:
-          username: ${{ secrets.DOCKER_USERNAME }}
-          password: ${{ secrets.DOCKER_PASSWORD }}
+        run: go-licenses save ./cmd/mumble-discord-bridge --force --save_path="./LICENSES" && zip -r -9 LICENSES.zip ./LICENSES
       
       - name: Run GoReleaser Build
         uses: goreleaser/goreleaser-action@v2
         with:
           version: latest
-          args: build --rm-dist
+          args: build --rm-dist --skip-validate
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
