@@ -19,22 +19,24 @@ builds:
       # - darwin
     goarch:
       - amd64
-dockers:
-  - image_templates:
-    - "ghcr.io/stieneee/mumble-discord-bridge:latest"
-    - "ghcr.io/stieneee/mumble-discord-bridge:{{ .Tag }}"
-    - "stieneee/mumble-discord-bridge:latest"
-    - "stieneee/mumble-discord-bridge:{{ .Tag }}"
-    skip_push: "false"
-    dockerfile: Dockerfile
-    use: docker
-    build_flag_templates:
-    - "--pull"
-    - "--label=org.opencontainers.image.created={{.Date}}"
-    - "--label=org.opencontainers.image.title={{.ProjectName}}"
-    - "--label=org.opencontainers.image.revision={{.FullCommit}}"
-    - "--label=org.opencontainers.image.version={{.Version}}"
-    - "--platform=linux/arm64"
+# dockers:
+#   - goos: linux
+#     goarch: amd64
+#     image_templates:
+#     - "ghcr.io/stieneee/mumble-discord-bridge:latest"
+#     - "ghcr.io/stieneee/mumble-discord-bridge:{{ .Tag }}"
+#     - "stieneee/mumble-discord-bridge:latest"
+#     - "stieneee/mumble-discord-bridge:{{ .Tag }}"
+#     skip_push: "false"
+#     dockerfile: Dockerfile
+#     use: docker
+#     build_flag_templates:
+#     - "--pull"
+#     - "--label=org.opencontainers.image.created={{.Date}}"
+#     - "--label=org.opencontainers.image.title={{.ProjectName}}"
+#     - "--label=org.opencontainers.image.revision={{.FullCommit}}"
+#     - "--label=org.opencontainers.image.version={{.Version}}"
+#     - "--platform=linux/amd64"
     # push_flags:
     # - --tls-verify=false
     # extra_files:
@@ -47,7 +49,7 @@ snapshot:
   name_template: "{{ .Tag }}-next"
 release:
   extra_files:
-    - glob: "./LICENSES/*"
+    - glob: "./LICENSES.zip"
 changelog:
   sort: asc
   filters:
