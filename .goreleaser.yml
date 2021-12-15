@@ -45,6 +45,9 @@ checksum:
   name_template: 'checksums.txt'
 snapshot:
   name_template: "{{ .Tag }}-next"
+release:
+  extra_files:
+    - glob: "./LICENSES/*"
 changelog:
   sort: asc
   filters:

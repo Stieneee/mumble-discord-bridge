@@ -1,8 +1,11 @@
 GOFILES=$(shell find ./ -type f -name '*.go')
 
 mumble-discord-bridge: $(GOFILES) .goreleaser.yml
-	goreleaser build --skip-validate --rm-dist --single-target --snapshot
-	go-licenses save ./cmd/mumble-discord-bridge --force --save_path="./dist/LICENSES"
+	goreleaser build --skip-validate --rm-dist --single-target --auto-snapshot
+
+release: 
+	go-licenses save ./cmd/mumble-discord-bridge --force --save_path="./LICENSES"
+	goreleaser release --rm-dist
 
 dev: $(GOFILES) .goreleaser.yml
 	goreleaser build --skip-validate --rm-dist --single-target --snapshot && sudo ./dist/mumble-discord-bridge_linux_amd64/mumble-discord-bridge
@@ -32,4 +35,4 @@ docker-next:
 clean:
 	rm -f mumble-discord-bridge
 
-.PHONY: docker-latest docker-latest-push clean
+.PHONY: release docker-latest docker-latest-push clean
