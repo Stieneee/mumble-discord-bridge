@@ -1,17 +1,17 @@
 GOFILES=$(shell find ./ -type f -name '*.go')
 
 mumble-discord-bridge: $(GOFILES) .goreleaser.yml
-	goreleaser build --skip-validate --rm-dist
+	goreleaser build --skip-validate --rm-dist --single-target --snapshot
 	go-licenses save ./cmd/mumble-discord-bridge --force --save_path="./dist/LICENSES"
 
 dev: $(GOFILES) .goreleaser.yml
-	goreleaser build --skip-validate --rm-dist && sudo ./dist/mumble-discord-bridge_linux_amd64/mumble-discord-bridge
+	goreleaser build --skip-validate --rm-dist --single-target --snapshot && sudo ./dist/mumble-discord-bridge_linux_amd64/mumble-discord-bridge
 
 dev-race: $(GOFILES) .goreleaser.yml
 	go run -race ./cmd/mumble-discord-bridge
 
 dev-profile: $(GOFILES) .goreleaser.yml
-	goreleaser build --skip-validate --rm-dist && sudo ./dist/mumble-discord-bridge_linux_amd64/mumble-discord-bridge -cpuprofile cpu.prof
+	goreleaser build --skip-validate --rm-dist --single-target --snapshot && sudo ./dist/mumble-discord-bridge_linux_amd64/mumble-discord-bridge -cpuprofile cpu.prof
 
 test-chart: SHELL:=/bin/bash 
 test-chart:

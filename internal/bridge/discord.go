@@ -120,10 +120,11 @@ func (dd *DiscordDuplex) discordSendPCM(ctx context.Context, cancel context.Canc
 		dd.Bridge.DiscordVoice.RWMutex.RUnlock()
 	}
 
+	defer log.Println("Stopping Discord send PCM")
+
 	for {
 		select {
 		case <-ctx.Done():
-			log.Println("Stopping Discord send PCM")
 			return
 		default:
 		}
@@ -135,7 +136,21 @@ func (dd *DiscordDuplex) discordSendPCM(ctx context.Context, cancel context.Canc
 		if (len(pcm) > 1 && streaming) || (len(pcm) > dd.Bridge.BridgeConfig.DiscordStartStreamingCount && !streaming) {
 			if !streaming {
 				speakingStart = time.Now()
-				dd.Bridge.DiscordVoice.Speaking(true)
+				done := make(chan bool, 1)
+				go func() {
+					// This call will prevent discordSendPCM from exiting if the discord connection is lost
+					dd.Bridge.DiscordVoice.Speaking(true)
+					done <- true
+				}()
+				select {
+				case <-done:
+				case <-time.After(5 * time.Second):
+					fmt.Println("Discord speaking timeout :(")
+					cancel()
+					return
+				case <-ctx.Done():
+					return
+				}
 				streaming = true
 			}
 
