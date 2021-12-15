@@ -8,3 +8,4 @@ cert.pem
 *.gob
 docker-compose.yml
 mdb-local
+LICENSES
