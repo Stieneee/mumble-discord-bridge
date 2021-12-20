@@ -4,27 +4,39 @@ Mumble Discord Bridge is an open source Go application to bridge the audio betwe
 
 It was built with the hope that people can continue to use the voice application of their choice.
 
+## PatchCord.io
+
+Mumble Discord Bridge can be hosted on any server or computer and ships in a Docker container for convenience.
+
+If hosting this application yourself seem like an difficult task please consider [PatchCord.io](https://patchcord.io).
+The site even offers a free tier for those who want to try out Mumble Discord Bridge.
+
 ## Usage
 
 Several configuration variables must be set for the binary to function correctly.
 All variables can be set using flags or in the environment.
 The binary will also attempt to load .env file located in the working directory.
+See the help documentation for all the options
+
+```bash
+mumble-discord-bridge --help
+```
 
 The bridge can be run with the follow modes:
 
-```bash
+```text
    auto
        The bridge starts up but does not connect immediately. It can be either manually linked (see below) or will join the voice channels when there's at least one person on each side.
        The bridge will leave both voice channels once there is no one on either end
    manual
        The bridge starts up but does not connect immediately. It will join the voice channels when issued the link command and will leave with the unlink command
-   constant
+   constant (default)
        The bridge starts up and immediately connects to both Discord and Mumble voice channels. It can not be controlled in this mode and quits when the program is stopped
 ```
 
 In "auto" or "manual" modes, the bridge can be controlled in Discord with the following commands:
 
-```bash
+```text
 !DISCORD_COMMAND link
  Commands the bridge to join the Discord channel the user is in and the Mumble server
 
@@ -67,7 +79,7 @@ Discord GID is a unique ID linked to one Discord Server, also called Guild. CID 
 
 Then you can get the GID by right-clicking your server and selecting Copy-ID. Similarly the CID can be found right clicking the voice channel and selecting Copy ID.
 
-### Generating Mumble Client  (Optional)
+### Generating Mumble Client (Optional)
 
 Optionally you can specify a client certificate for mumble [Mumble Certificates](https://wiki.mumble.info/wiki/Mumble_Certificates)
 If you don't have a client certificate, you can generate one with this command:
@@ -127,9 +139,8 @@ A simple go build command is all that is needed.
 Ensure the opus library is installed.
 
 ```bash
-go build -o mumble-discord-bridge *.go
-#or
-make mumble-discord-bridge
+go install github.com/goreleaser/goreleaser@latest
+goreleaser build --skip-validate --rm-dist --single-target --auto-snapshot
 ```
 
 ### OpenBSD Users
@@ -147,7 +158,7 @@ A default jitter of 50ms should be adequate for most scenarios.
 A warning will be logged if short burst or audio are seen.
 A single warning can be ignored multiple warnings in short time spans would suggest the need for a larger jitter buffer.
 
-## Monitoring the Bridge
+## Monitoring the Bridge (Optional)
 
 The bridge can be started with a Prometheus metrics endpoint enabled.
 The example folder contains the a docker-compose file that will spawn the bridge, Prometheus and Grafana configured to serve a single a pre-configured dashboard.
