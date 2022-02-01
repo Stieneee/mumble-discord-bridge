@@ -122,6 +122,33 @@ docker docker run -e MUMBLE_ADDRESS=example.com -e MUMBLE_PASSWORD=optional -e D
 docker stop mumble-discord-bridge && docker rm mumble-discord-bridge
 ```
 
+### MDB Bridge Options
+
+The following options can be set using environment variables or with command line options.
+
+| Environment Option         | Flag                        | Type    | Default          | Description                                                                                                                    |
+|----------------------------|-----------------------------|---------|------------------|--------------------------------------------------------------------------------------------------------------------------------|
+| DEBUG_LEVEL                | -debug-level                | int     | 1                | discord debug level                                                                                                            |
+| DISCORD_CID                | -discord-cid                | string  | ""               | discord cid, required                                                                                                          |
+| DISCORD_COMMAND            | -discord-command            | string  | "mumble-discord" | discord command string, env alt DISCORD_COMMAND, optional                                                                      |
+| DISCORD_DISABLE_BOT_STATUS | -discord-disable-bot-status | boolean | false            | disable updating bot status                                                                                                    |
+| DISCORD_DISABLE_TEXT       | -discord-disable-text       | boolean | false            | disable sending direct messages to discord                                                                                     |
+| DISCORD_GID                | -discord-gid                | string  | ""               | discord gid, required                                                                                                          |
+| DISCORD_TOKEN              | -discord-token              | string  | ""               | discord bot token, required                                                                                                    |
+| MODE                       | -mode                       | string  | "constant"       | [constant, manual, auto] determine which mode the bridge starts in                                                             |
+| MUMBLE_ADDRESS             | -mumble-address             | string  | ""               | mumble server address, example example.com, required                                                                           |
+| MUMBLE_CERTIFICATE         | -mumble-certificate         | string  | ""               | client certificate to use when connecting to the Mumble server                                                                 |
+| MUMBLE_CHANNEL             | -mumble-channel             | string  | ""               | mumble channel to start in, using '/' to separate nested channels, optional                                                    |
+| MUMBLE_DISABLE_TEXT        | -mumble-disable-text        | boolean | false            | disable sending text to mumble                                                                                                 |
+| MUMBLE_INSECURE            | -mumble-insecure            | boolean | false            | mumble insecure, ignore ssl certificates issues                                                                                |
+| MUMBLE_PASSWORD            | -mumble-password            | string  | ""               | mumble password                                                                                                                |
+| MUMBLE_PORT                | -mumble-port                | int     | 64738            | mumble port                                                                                                                    |
+| MUMBLE_USERNAME            | -mumble-username            | string  | "Discord"        | mumble username                                                                                                                |
+| PROMETHEUS_ENABLE          | -prometheus-enable          | boolean | false            | enable prometheus metrics                                                                                                      |
+| PROMETHEUS_PORT            | -prometheus-port            | int     | 9559             | prometheus metrics port                                                                                                        |
+| TO_DISCORD_BUFFER          | -to-discord-buffer          | int     | 50               | jitter buffer from Mumble to Discord to absorb timing issues related to network, OS and hardware quality. (Increments of 10ms) |
+| TO_MUMBLE_BUFFER           | -to-mumble-buffer           | int     | 50               | jitter buffer from Discord to Mumble to absorb timing issues related to network, OS and hardware quality. (Increments of 10ms) |****
+
 ### Mumbler Server Setting
 
 To ensure compatibility please edit your murmur configuration file with the following
