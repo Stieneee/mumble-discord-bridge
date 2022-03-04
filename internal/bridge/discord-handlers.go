@@ -150,7 +150,6 @@ func (l *DiscordListener) MessageCreate(s *discordgo.Session, m *discordgo.Messa
 			go l.Bridge.AutoBridge()
 		} else {
 			l.Bridge.DiscordSession.ChannelMessageSend(m.ChannelID, "Auto mode disabled")
-			l.Bridge.DiscordChannelID = ""
 			l.Bridge.AutoChanDie <- true
 			l.Bridge.Mode = BridgeModeManual
 		}
