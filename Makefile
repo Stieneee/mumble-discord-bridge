@@ -2,7 +2,7 @@ GOFILES=$(shell find ./ -type f -name '*.go')
 LATEST_TAG=$(shell git describe --tags `git rev-list --tags --max-count=1`)
 
 mumble-discord-bridge: $(GOFILES) .goreleaser.yml
-	goreleaser build --skip-validate --rm-dist --single-target --auto-snapshot
+	goreleaser build --rm-dist --snapshot
 
 release: 
 	rm -rf LICENSES.zip LICENSES

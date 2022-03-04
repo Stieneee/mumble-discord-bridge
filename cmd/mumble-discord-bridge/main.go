@@ -31,7 +31,7 @@ func main() {
 	var err error
 
 	fmt.Println("Mumble-Discord-Bridge")
-	fmt.Println("v" + version + " " + commit + " " + date)
+	fmt.Println(version + " " + commit + " " + date)
 
 	godotenv.Load()
 
