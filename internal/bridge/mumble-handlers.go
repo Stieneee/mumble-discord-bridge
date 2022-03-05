@@ -58,7 +58,7 @@ func (l *MumbleListener) MumbleUserChange(e *gumble.UserChangeEvent) {
 		log.Println("User connected to mumble " + e.User.Name)
 
 		if !l.Bridge.BridgeConfig.MumbleDisableText {
-			e.User.Send("Mumble-Discord-Bridge v" + l.Bridge.BridgeConfig.Version)
+			e.User.Send("Mumble-Discord-Bridge " + l.Bridge.BridgeConfig.Version)
 
 			// Tell the user who is connected to discord
 			l.Bridge.DiscordUsersMutex.Lock()
