@@ -2,7 +2,7 @@
 
 # Stage 1
 
-FROM golang:1.17 as builder
+FROM golang:1.18 as builder
 WORKDIR /go/src/app 
 COPY . .
 RUN apt update && apt install -y libopus-dev
@@ -18,7 +18,7 @@ WORKDIR /opt/
 RUN apk add opus
 RUN mkdir /lib64 && ln -s /lib/libc.musl-x86_64.so.1 /lib64/ld-linux-x86-64.so.2
 COPY --from=builder /go/src/app/dist/LICENSES .
-COPY --from=builder /go/src/app/dist/mumble-discord-bridge_linux_amd64/mumble-discord-bridge .
+COPY --from=builder /go/src/app/dist/mumble-discord-bridge_linux_amd64_v1/mumble-discord-bridge .
 
 # FROM ubuntu:latest as final
 # WORKDIR /opt/
