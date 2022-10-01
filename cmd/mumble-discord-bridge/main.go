@@ -128,7 +128,7 @@ func main() {
 			MumbleAddr:                 *mumbleAddr + ":" + strconv.Itoa(*mumblePort),
 			MumbleInsecure:             *mumbleInsecure,
 			MumbleCertificate:          *mumbleCertificate,
-			MumbleChannel:              strings.Split(*mumbleChannel, "/"),
+			MumbleChannel:              strings.Split(*mumbleChannel, "\\/"),
 			MumbleStartStreamCount:     mumbleStartStreamCount,
 			MumbleDisableText:          *mumbleDisableText,
 			Command:                    *discordCommand,
