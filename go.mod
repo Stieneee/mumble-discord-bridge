@@ -3,7 +3,7 @@ module github.com/stieneee/mumble-discord-bridge
 go 1.15
 
 require (
-	github.com/bwmarrin/discordgo v0.24.0
+	github.com/bwmarrin/discordgo v0.24.1
 	github.com/joho/godotenv v1.4.0
 	github.com/prometheus/client_golang v1.12.1
 	github.com/stieneee/gopus v0.0.0-20210424193312-6d10f6090335
