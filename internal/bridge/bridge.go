@@ -46,7 +46,7 @@ type BridgeConfig struct {
 	Version                    string
 }
 
-//BridgeState manages dynamic information about the bridge during runtime
+// BridgeState manages dynamic information about the bridge during runtime
 type BridgeState struct {
 	// The configuration data for this bridge
 	BridgeConfig *BridgeConfig
@@ -267,7 +267,9 @@ func (b *BridgeState) DiscordStatusUpdate() {
 
 		if err != nil {
 			log.Printf("error pinging mumble server %v\n", err)
-			b.DiscordSession.UpdateListeningStatus("an error pinging mumble")
+			if !b.BridgeConfig.DiscordDisableBotStatus {
+				b.DiscordSession.UpdateListeningStatus("an error pinging mumble")
+			}
 		} else {
 
 			promMumblePing.Set(float64(resp.Ping.Milliseconds()))
@@ -294,6 +296,7 @@ func (b *BridgeState) DiscordStatusUpdate() {
 			}
 		}
 
+		// report discord heartbeat
 		discordHeartBeat := b.DiscordSession.LastHeartbeatAck.Sub(b.DiscordSession.LastHeartbeatSent).Milliseconds()
 		if discordHeartBeat > 0 {
 			promDiscordHeartBeat.Set(float64(discordHeartBeat))
