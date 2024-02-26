@@ -16,8 +16,6 @@ type DiscordListener struct {
 }
 
 func (l *DiscordListener) GuildCreate(s *discordgo.Session, event *discordgo.GuildCreate) {
-	log.Println("CREATE event registered")
-
 	if event.ID != l.Bridge.BridgeConfig.GID {
 		log.Println("Received GuildCreate from a guild not in config")
 		return
@@ -62,7 +60,7 @@ func (l *DiscordListener) GuildCreate(s *discordgo.Session, event *discordgo.Gui
 }
 
 func (l *DiscordListener) MessageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
-
+	// log the entire message structure
 	// Ignore all messages created by the bot itself
 	if m.Author.ID == s.State.User.ID {
 		return
@@ -73,85 +71,109 @@ func (l *DiscordListener) MessageCreate(s *discordgo.Session, m *discordgo.Messa
 		// Could not find channel.
 		return
 	}
-
 	// Find the guild for that channel.
 	g, err := s.State.Guild(c.GuildID)
 	if err != nil {
 		// Could not find guild.
 		return
 	}
-	prefix := "!" + l.Bridge.BridgeConfig.Command
 
-	if l.Bridge.Mode == BridgeModeConstant && strings.HasPrefix(m.Content, prefix) {
-		l.Bridge.DiscordSession.ChannelMessageSend(m.ChannelID, "Constant mode enabled, manual commands can not be entered")
+	// the guild has to match the config
+	// If we maintain a single bridge per bot and guild this provides sufficient protection
+	// If a user wants multiple bridges in one guild they will need to define multiple bots
+	if g.ID != l.Bridge.BridgeConfig.GID {
 		return
 	}
+
+	prefix := "!" + l.Bridge.BridgeConfig.Command
 
 	l.Bridge.BridgeMutex.Lock()
 	bridgeConnected := l.Bridge.Connected
 	l.Bridge.BridgeMutex.Unlock()
 
-	if strings.HasPrefix(m.Content, prefix+" link") {
-		// Look for the message sender in that guild's current voice states.
-		for _, vs := range g.VoiceStates {
-			if bridgeConnected {
-				l.Bridge.DiscordSession.ChannelMessageSend(m.ChannelID, "Bridge already running, unlink first")
-				return
-			}
-			if vs.UserID == m.Author.ID {
-				log.Printf("Trying to join GID %v and VID %v\n", g.ID, vs.ChannelID)
-				l.Bridge.DiscordChannelID = vs.ChannelID
-				go l.Bridge.StartBridge()
-				return
-			}
-		}
-	}
+	// If the message starts with "!" then send it to HandleCommand else process as chat
+	// the HandleCommand function is also used by the mumble listener
+	if strings.HasPrefix(m.Content, "!") {
 
-	if strings.HasPrefix(m.Content, prefix+" unlink") {
-		// Look for the message sender in that guild's current voice states.
-		if !bridgeConnected {
-			l.Bridge.DiscordSession.ChannelMessageSend(m.ChannelID, "Bridge is not currently running")
+		// check if discord command is enabled
+		if !l.Bridge.BridgeConfig.DiscordCommand {
 			return
 		}
-		for _, vs := range g.VoiceStates {
-			if vs.UserID == m.Author.ID && vs.ChannelID == l.Bridge.DiscordChannelID {
-				log.Printf("Trying to leave GID %v and VID %v\n", g.ID, vs.ChannelID)
-				l.Bridge.BridgeDie <- true
+
+		// process the shared command options
+		l.Bridge.HandleCommand(m.Content, func(s string) {
+			l.Bridge.DiscordSession.ChannelMessageSend(m.ChannelID, s)
+		})
+
+		// process the Discord specific command options
+
+		if strings.HasPrefix(m.Content, prefix+" link") {
+			if l.Bridge.Mode == BridgeModeConstant && strings.HasPrefix(m.Content, prefix) {
+				l.Bridge.DiscordSession.ChannelMessageSend(m.ChannelID, "Constant mode enabled, link commands can not be entered")
 				return
 			}
-		}
-	}
-
-	if strings.HasPrefix(m.Content, prefix+" refresh") {
-		// Look for the message sender in that guild's current voice states.
-		if !bridgeConnected {
-			l.Bridge.DiscordSession.ChannelMessageSend(m.ChannelID, "Bridge is not currently running")
-			return
-		}
-		for _, vs := range g.VoiceStates {
-			if vs.UserID == m.Author.ID {
-				log.Printf("Trying to refresh GID %v and VID %v\n", g.ID, vs.ChannelID)
-				l.Bridge.BridgeDie <- true
-
-				time.Sleep(5 * time.Second)
-
-				go l.Bridge.StartBridge()
-				return
+			// Look for the message sender in that guild's current voice states.
+			for _, vs := range g.VoiceStates {
+				if bridgeConnected {
+					l.Bridge.DiscordSession.ChannelMessageSend(m.ChannelID, "Bridge already running, unlink first")
+					return
+				}
+				if vs.UserID == m.Author.ID {
+					log.Printf("Trying to join GID %v and VID %v\n", g.ID, vs.ChannelID)
+					l.Bridge.DiscordChannelID = vs.ChannelID
+					go l.Bridge.StartBridge()
+					return
+				}
 			}
 		}
-	}
 
-	if strings.HasPrefix(m.Content, prefix+" auto") {
-		if l.Bridge.Mode != BridgeModeAuto {
-			l.Bridge.DiscordSession.ChannelMessageSend(m.ChannelID, "Auto mode enabled")
-			l.Bridge.Mode = BridgeModeAuto
-			l.Bridge.DiscordChannelID = l.Bridge.BridgeConfig.CID
-			l.Bridge.AutoChanDie = make(chan bool)
-			go l.Bridge.AutoBridge()
-		} else {
-			l.Bridge.DiscordSession.ChannelMessageSend(m.ChannelID, "Auto mode disabled")
-			l.Bridge.AutoChanDie <- true
-			l.Bridge.Mode = BridgeModeManual
+		if strings.HasPrefix(m.Content, prefix+" unlink") {
+			if l.Bridge.Mode == BridgeModeConstant && strings.HasPrefix(m.Content, prefix) {
+				l.Bridge.DiscordSession.ChannelMessageSend(m.ChannelID, "Constant mode enabled, link commands can not be entered")
+				return
+			}
+			// Look for the message sender in that guild's current voice states.
+			if !bridgeConnected {
+				l.Bridge.DiscordSession.ChannelMessageSend(m.ChannelID, "Bridge is not currently running")
+				return
+			}
+			for _, vs := range g.VoiceStates {
+				if vs.UserID == m.Author.ID && vs.ChannelID == l.Bridge.DiscordChannelID {
+					log.Printf("Trying to leave GID %v and VID %v\n", g.ID, vs.ChannelID)
+					l.Bridge.BridgeDie <- true
+					return
+				}
+			}
+		}
+
+		if strings.HasPrefix(m.Content, prefix+" refresh") {
+			if l.Bridge.Mode == BridgeModeConstant && strings.HasPrefix(m.Content, prefix) {
+				l.Bridge.DiscordSession.ChannelMessageSend(m.ChannelID, "Constant mode enabled, link commands can not be entered")
+				return
+			}
+			// Look for the message sender in that guild's current voice states.
+			if !bridgeConnected {
+				l.Bridge.DiscordSession.ChannelMessageSend(m.ChannelID, "Bridge is not currently running")
+				return
+			}
+			for _, vs := range g.VoiceStates {
+				if vs.UserID == m.Author.ID {
+					log.Printf("Trying to refresh GID %v and VID %v\n", g.ID, vs.ChannelID)
+					l.Bridge.BridgeDie <- true
+
+					time.Sleep(5 * time.Second)
+
+					go l.Bridge.StartBridge()
+					return
+				}
+			}
+		}
+
+	} else if !strings.HasPrefix(m.Content, "!") && l.Bridge.BridgeConfig.ChatBridge {
+		if l.Bridge.Connected {
+			l.Bridge.MumbleClient.Do(func() {
+				l.Bridge.MumbleClient.Self.Channel.Send(fmt.Sprintf("%v: %v\n", m.Author.Username, m.Content), false)
+			})
 		}
 	}
 }

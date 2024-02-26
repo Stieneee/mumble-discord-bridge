@@ -23,6 +23,11 @@ type DiscordUser struct {
 
 type BridgeMode int
 
+// define a String method for the BridgeMode type
+func (b BridgeMode) String() string {
+	return [...]string{"auto", "manual", "constant"}[b]
+}
+
 const (
 	BridgeModeAuto BridgeMode = iota
 	BridgeModeManual
@@ -30,20 +35,56 @@ const (
 )
 
 type BridgeConfig struct {
-	MumbleConfig               *gumble.Config
-	MumbleAddr                 string
-	MumbleInsecure             bool
-	MumbleCertificate          string
-	MumbleChannel              []string
-	MumbleStartStreamCount     int
-	MumbleDisableText          bool
-	Command                    string
-	GID                        string
-	CID                        string
+	// The command prefix for the bot
+	Command string
+
+	// The mumble server configuration
+	MumbleConfig *gumble.Config
+
+	// The mumble server address
+	MumbleAddr string
+
+	// The mumble server certificate
+	MumbleInsecure bool
+
+	// The mumble server certificate
+	MumbleCertificate string
+
+	// The mumble channel to join - it has been parse to an array of strings representing the channel path
+	MumbleChannel []string
+
+	// The mumble voice stream count
+	MumbleStartStreamCount int
+
+	// Disable text messages to mumble
+	MumbleDisableText bool
+
+	// Responed to mumble commands
+	MumbleCommand bool
+
+	// The discord server ID
+	GID string
+
+	// The discord voice channel ID
+	CID string
+
+	// The discord voice stream count
 	DiscordStartStreamingCount int
-	DiscordDisableText         bool
-	DiscordDisableBotStatus    bool
-	Version                    string
+
+	// The discord text mode, channel, user, disabled
+	DiscordTextMode string
+
+	// Disable text messages to discord
+	DiscordDisableBotStatus bool
+
+	// Respond to discord commands
+	DiscordCommand bool
+
+	// Bridge messages between mumble and discord
+	ChatBridge bool
+
+	// The version of the bridge
+	Version string
 }
 
 // BridgeState manages dynamic information about the bridge during runtime
@@ -102,6 +143,9 @@ type BridgeState struct {
 
 	// Discord Voice channel to join
 	DiscordChannelID string
+
+	// Start time of the bridge
+	StartTime time.Time
 }
 
 // startBridge established the voice connection
@@ -122,6 +166,7 @@ func (b *BridgeState) StartBridge() {
 
 	promBridgeStarts.Inc()
 	promBridgeStartTime.SetToCurrentTime()
+	b.StartTime = time.Now()
 
 	// DISCORD Connect Voice
 	log.Println("Attempting to join Discord voice channel")
@@ -281,7 +326,7 @@ func (b *BridgeState) DiscordStatusUpdate() {
 				b.MumbleUserCount = b.MumbleUserCount - 1
 			}
 			if b.MumbleUserCount == 0 {
-				status = "no users in Mumble"
+				status = "No users in Mumble"
 			} else {
 				if len(b.MumbleUsers) > 0 {
 					status = fmt.Sprintf("%v/%v users in Mumble\n", len(b.MumbleUsers), b.MumbleUserCount)
@@ -339,17 +384,28 @@ func (b *BridgeState) AutoBridge() {
 	}
 }
 
-func (b *BridgeState) discordSendMessageAll(msg string) {
-	if b.BridgeConfig.DiscordDisableText {
+// This function sends messages based on the bridge configuration
+func (b *BridgeState) discordSendMessage(msg string) {
+	switch b.BridgeConfig.DiscordTextMode {
+	case "disabled":
 		return
-	}
-
-	b.DiscordUsersMutex.Lock()
-	for id := range b.DiscordUsers {
-		du := b.DiscordUsers[id]
-		if du.dm != nil {
-			b.DiscordSession.ChannelMessageSend(du.dm.ID, msg)
+	case "channel":
+		_, err := b.DiscordSession.ChannelMessageSend(b.DiscordChannelID, msg)
+		if err != nil {
+			log.Println(err)
 		}
+		return
+	case "user":
+		b.DiscordUsersMutex.Lock()
+		for id := range b.DiscordUsers {
+			du := b.DiscordUsers[id]
+			if du.dm != nil {
+				b.DiscordSession.ChannelMessageSend(du.dm.ID, msg)
+			}
+		}
+		b.DiscordUsersMutex.Unlock()
+		return
+	default:
+		log.Println("Invalid DiscordTextMode")
 	}
-	b.DiscordUsersMutex.Unlock()
 }

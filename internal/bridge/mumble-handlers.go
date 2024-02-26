@@ -27,7 +27,6 @@ func (l *MumbleListener) updateUsers() {
 	}
 	promMumbleUsers.Set(float64(len(l.Bridge.MumbleUsers)))
 	l.Bridge.MumbleUsersMutex.Unlock()
-
 }
 
 func (l *MumbleListener) MumbleConnect(e *gumble.ConnectEvent) {
@@ -81,11 +80,37 @@ func (l *MumbleListener) MumbleUserChange(e *gumble.UserChangeEvent) {
 		}
 
 		// Send discord a notice
-		l.Bridge.discordSendMessageAll(e.User.Name + " has joined mumble")
+		l.Bridge.discordSendMessage(e.User.Name + " has joined mumble")
 	}
 
 	if e.Type.Has(gumble.UserChangeDisconnected) {
-		l.Bridge.discordSendMessageAll(e.User.Name + " has left mumble")
+		l.Bridge.discordSendMessage(e.User.Name + " has left mumble")
 		log.Println("User disconnected from mumble " + e.User.Name)
+	}
+}
+
+// this function will support bot commands as well as user commands
+func (l *MumbleListener) MumbleTextMessage(e *gumble.TextMessageEvent) {
+	// Ignore bot
+	if e.Sender.Name == l.Bridge.MumbleClient.Self.Name {
+		return
+	}
+
+	// check for bot commands
+	// the HandleCommand function is also used by the discord listener
+	if strings.HasPrefix(e.Message, "!") {
+		// check if mumble command is enabled
+		if !l.Bridge.BridgeConfig.MumbleCommand {
+			return
+		}
+
+		l.Bridge.HandleCommand(e.Message, func(res string) {
+			// send the response to the user
+			e.Sender.Send(res)
+		})
+
+	} else {
+
+		l.Bridge.discordSendMessage(e.Sender.Name + ": " + e.Message)
 	}
 }

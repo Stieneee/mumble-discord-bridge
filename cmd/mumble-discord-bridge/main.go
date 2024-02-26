@@ -36,26 +36,28 @@ func main() {
 	godotenv.Load()
 
 	mumbleAddr := flag.String("mumble-address", lookupEnvOrString("MUMBLE_ADDRESS", ""), "MUMBLE_ADDRESS, mumble server address, example example.com, required")
-	mumblePort := flag.Int("mumble-port", lookupEnvOrInt("MUMBLE_PORT", 64738), "MUMBLE_PORT, mumble port, (default 64738)")
-	mumbleUsername := flag.String("mumble-username", lookupEnvOrString("MUMBLE_USERNAME", "Discord"), "MUMBLE_USERNAME, mumble username, (default: discord)")
+	mumblePort := flag.Int("mumble-port", lookupEnvOrInt("MUMBLE_PORT", 64738), "MUMBLE_PORT, mumble port")
+	mumbleUsername := flag.String("mumble-username", lookupEnvOrString("MUMBLE_USERNAME", "Discord"), "MUMBLE_USERNAME, mumble username")
 	mumblePassword := flag.String("mumble-password", lookupEnvOrString("MUMBLE_PASSWORD", ""), "MUMBLE_PASSWORD, mumble password, optional")
-	mumbleInsecure := flag.Bool("mumble-insecure", lookupEnvOrBool("MUMBLE_INSECURE", false), " MUMBLE_INSECURE, mumble insecure, optional")
+	mumbleInsecure := flag.Bool("mumble-insecure", lookupEnvOrBool("MUMBLE_INSECURE", false), " MUMBLE_INSECURE, mumble insecure, flag")
 	mumbleCertificate := flag.String("mumble-certificate", lookupEnvOrString("MUMBLE_CERTIFICATE", ""), "MUMBLE_CERTIFICATE, client certificate to use when connecting to the Mumble server")
 	mumbleChannel := flag.String("mumble-channel", lookupEnvOrString("MUMBLE_CHANNEL", ""), "MUMBLE_CHANNEL, mumble channel to start in, using '/' to separate nested channels, optional")
-	mumbleSendBuffer := flag.Int("to-mumble-buffer", lookupEnvOrInt("TO_MUMBLE_BUFFER", 50), "TO_MUMBLE_BUFFER, Jitter buffer from Discord to Mumble to absorb timing issues related to network, OS and hardware quality. (Increments of 10ms)")
-	mumbleDisableText := flag.Bool("mumble-disable-text", lookupEnvOrBool("MUMBLE_DISABLE_TEXT", false), "MUMBLE_DISABLE_TEXT, disable sending text to mumble, (default false)")
+	mumbleSendBuffer := flag.Int("to-mumble-buffer", lookupEnvOrInt("TO_MUMBLE_BUFFER", 50), "TO_MUMBLE_BUFFER, Jitter buffer from Discord to Mumble to absorb timing issues related to network, OS and hardware quality, increments of 10ms")
+	mumbleDisableText := flag.Bool("mumble-disable-text", lookupEnvOrBool("MUMBLE_DISABLE_TEXT", false), "MUMBLE_DISABLE_TEXT, disable sending text to mumble")
 	discordToken := flag.String("discord-token", lookupEnvOrString("DISCORD_TOKEN", ""), "DISCORD_TOKEN, discord bot token, required")
 	discordGID := flag.String("discord-gid", lookupEnvOrString("DISCORD_GID", ""), "DISCORD_GID, discord gid, required")
 	discordCID := flag.String("discord-cid", lookupEnvOrString("DISCORD_CID", ""), "DISCORD_CID, discord cid, required")
-	discordSendBuffer := flag.Int("to-discord-buffer", lookupEnvOrInt("TO_DISCORD_BUFFER", 50), "TO_DISCORD_BUFFER, Jitter buffer from Mumble to Discord to absorb timing issues related to network, OS and hardware quality. (Increments of 10ms)")
-	discordCommand := flag.String("discord-command", lookupEnvOrString("DISCORD_COMMAND", "mumble-discord"), "DISCORD_COMMAND, Discord command string, env alt DISCORD_COMMAND, optional, (defaults mumble-discord)")
-	discordDisableText := flag.Bool("discord-disable-text", lookupEnvOrBool("DISCORD_DISABLE_TEXT", false), "DISCORD_DISABLE_TEXT, disable sending direct messages to discord, (default false)")
-	discordDisableBotStatus := flag.Bool("discord-disable-bot-status", lookupEnvOrBool("DISCORD_DISABLE_BOT_STATUS", false), "DISCORD_DISABLE_BOT_STATUS, disable updating bot status, (default false)")
-	mode := flag.String("mode", lookupEnvOrString("MODE", "constant"), "MODE, [constant, manual, auto] determine which mode the bridge starts in, (default constant)")
-	nice := flag.Bool("nice", lookupEnvOrBool("NICE", false), "NICE, whether the bridge should automatically try to 'nice' itself, (default false)")
-	debug := flag.Int("debug-level", lookupEnvOrInt("DEBUG", 1), "DEBUG_LEVEL, Discord debug level, optional, (default 1)")
+	discordSendBuffer := flag.Int("to-discord-buffer", lookupEnvOrInt("TO_DISCORD_BUFFER", 50), "TO_DISCORD_BUFFER, Jitter buffer from Mumble to Discord to absorb timing issues related to network, OS and hardware quality, increments of 10ms")
+	discordTextMode := flag.String("discord-text-mode", lookupEnvOrString("DISCORD_TEXT_MODE", "channel"), "DISCORD_TEXT_MODE, [channel, user, disabled] determine where discord text messages are sent")
+	discordDisableBotStatus := flag.Bool("discord-disable-bot-status", lookupEnvOrBool("DISCORD_DISABLE_BOT_STATUS", false), "DISCORD_DISABLE_BOT_STATUS, disable updating bot status")
+	chatBridge := flag.Bool("chat-bridge", lookupEnvOrBool("CHAT_BRIDGE", false), "CHAT_BRIDGE, enable chat bridge")
+	command := flag.String("command", lookupEnvOrString("COMMAND", "mumble-discord"), "COMMAND, command phrase '!mumble-discord help' to control the bridge via text channels")
+	commandMode := flag.String("command-mode", lookupEnvOrString("COMMAND_MODE", "both"), "COMMAND_MODE, [both, mumble, discord, none] determine which side of the bridge will respond to commands")
+	mode := flag.String("mode", lookupEnvOrString("MODE", "constant"), "MODE, [constant, manual, auto] determine which mode the bridge starts in")
+	nice := flag.Bool("nice", lookupEnvOrBool("NICE", false), "NICE, whether the bridge should automatically try to 'nice' itself")
+	debug := flag.Int("debug-level", lookupEnvOrInt("DEBUG", 1), "DEBUG_LEVEL, Discord debug level, optional")
 	promEnable := flag.Bool("prometheus-enable", lookupEnvOrBool("PROMETHEUS_ENABLE", false), "PROMETHEUS_ENABLE, Enable prometheus metrics")
-	promPort := flag.Int("prometheus-port", lookupEnvOrInt("PROMETHEUS_PORT", 9559), "PROMETHEUS_PORT, Prometheus metrics port, optional, (default 9559)")
+	promPort := flag.Int("prometheus-port", lookupEnvOrInt("PROMETHEUS_PORT", 9559), "PROMETHEUS_PORT, Prometheus metrics port, optional")
 
 	cpuprofile := flag.String("cpuprofile", "", "write cpu profile to `file`")
 
@@ -78,9 +80,21 @@ func main() {
 	if *discordCID == "" {
 		log.Fatalln("missing discord cid")
 	}
-	if *mode == "" {
-		log.Fatalln("missing mode set")
+	if *discordTextMode != "channel" && *discordTextMode != "user" && *discordTextMode != "disabled" {
+		log.Fatalln("invalid discord text mode set")
 	}
+	if *commandMode != "both" && *commandMode != "mumble" && *commandMode != "discord" && *commandMode != "none" {
+		log.Fatalln("invalid command mode set")
+	}
+	if *commandMode != "none" {
+		if *command == "" {
+			log.Fatalln("missing command")
+		}
+	}
+	if *mode != "constant" && *mode != "manual" && *mode != "auto" {
+		log.Fatalln("invalid bridge mode set")
+	}
+
 	if *nice {
 		err := syscall.Setpriority(syscall.PRIO_PROCESS, os.Getpid(), -5)
 		if err != nil {
@@ -114,29 +128,59 @@ func main() {
 		*mumbleSendBuffer = 10
 	}
 
+	// check if chat bridge is enabled
+	if !*mumbleDisableText && *discordTextMode == "channel" && *chatBridge {
+		log.Println("chat bridge is enabled")
+	} else {
+		*chatBridge = false
+		log.Println("chat bridge is disabled")
+	}
+
 	var discordStartStreamingCount int = int(math.Round(float64(*discordSendBuffer) / 10.0))
 	log.Println("To Discord Jitter Buffer: ", discordStartStreamingCount*10, " ms")
 
 	var mumbleStartStreamCount int = int(math.Round(float64(*mumbleSendBuffer) / 10.0))
 	log.Println("To Mumble Jitter Buffer: ", mumbleStartStreamCount*10, " ms")
 
+	// create a command flag for each command mode
+	var discordCommand bool
+	var mumbleCommand bool
+
+	switch *commandMode {
+	case "both":
+		discordCommand = true
+		mumbleCommand = true
+	case "mumble":
+		discordCommand = false
+		mumbleCommand = true
+	case "discord":
+		discordCommand = true
+		mumbleCommand = false
+	case "none":
+		discordCommand = false
+		mumbleCommand = false
+	}
+
 	// BRIDGE SETUP
 
 	Bridge := &bridge.BridgeState{
 		BridgeConfig: &bridge.BridgeConfig{
 			// MumbleConfig:   config,
+			Command:                    *command,
 			MumbleAddr:                 *mumbleAddr + ":" + strconv.Itoa(*mumblePort),
 			MumbleInsecure:             *mumbleInsecure,
 			MumbleCertificate:          *mumbleCertificate,
 			MumbleChannel:              strings.Split(*mumbleChannel, "/"),
 			MumbleStartStreamCount:     mumbleStartStreamCount,
 			MumbleDisableText:          *mumbleDisableText,
-			Command:                    *discordCommand,
+			MumbleCommand:              mumbleCommand,
 			GID:                        *discordGID,
 			CID:                        *discordCID,
 			DiscordStartStreamingCount: discordStartStreamingCount,
-			DiscordDisableText:         *discordDisableText,
+			DiscordTextMode:            *discordTextMode,
 			DiscordDisableBotStatus:    *discordDisableBotStatus,
+			DiscordCommand:             discordCommand,
+			ChatBridge:                 *chatBridge,
 			Version:                    version,
 		},
 		Connected:    false,
@@ -157,9 +201,10 @@ func main() {
 	}
 
 	Bridge.BridgeConfig.MumbleConfig.Attach(gumbleutil.Listener{
-		Connect:    Bridge.MumbleListener.MumbleConnect,
-		UserChange: Bridge.MumbleListener.MumbleUserChange,
-		// ChannelChange: Bridge.MumbleListener.MumbleChannelChange,
+		Connect:     Bridge.MumbleListener.MumbleConnect,
+		UserChange:  Bridge.MumbleListener.MumbleUserChange,
+		TextMessage: Bridge.MumbleListener.MumbleTextMessage,
+		// TODO - notify discord on channel change.
 	})
 
 	// DISCORD SETUP
@@ -192,20 +237,20 @@ func main() {
 	defer Bridge.DiscordSession.Close()
 
 	log.Println("Discord Bot Connected")
-	log.Printf("Discord bot looking for command !%v", *discordCommand)
+	log.Printf("Discord bot looking for command !%v", *command)
 
 	switch *mode {
 	case "auto":
-		log.Println("bridge starting in automatic mode")
+		log.Println("Starting in automatic mode")
 		Bridge.AutoChanDie = make(chan bool)
 		Bridge.Mode = bridge.BridgeModeAuto
 		Bridge.DiscordChannelID = Bridge.BridgeConfig.CID
 		go Bridge.AutoBridge()
 	case "manual":
-		log.Println("bridge starting in manual mode")
+		log.Println("Starting in manual mode")
 		Bridge.Mode = bridge.BridgeModeManual
 	case "constant":
-		log.Println("bridge starting in constant mode")
+		log.Println("Starting in constant mode")
 		Bridge.Mode = bridge.BridgeModeConstant
 		Bridge.DiscordChannelID = Bridge.BridgeConfig.CID
 		go func() {
