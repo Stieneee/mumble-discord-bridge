@@ -134,8 +134,21 @@ var (
 	})
 )
 
-func StartPromServer(port int) {
+func StartPromServer(port int, b *BridgeState) {
 	log.Println("Starting Metrics Server")
 	http.Handle("/metrics", promhttp.Handler())
+	http.HandleFunc("/live", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("OK"))
+	})
+	http.HandleFunc("/ready", func(w http.ResponseWriter, r *http.Request) {
+		if b.Connected {
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte("OK"))
+		} else {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			w.Write([]byte("Disconnected"))
+		}
+	})
 	http.ListenAndServe(":"+strconv.Itoa(port), nil)
 }

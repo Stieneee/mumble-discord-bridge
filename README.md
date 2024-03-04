@@ -215,6 +215,8 @@ A single warning can be ignored multiple warnings in short time spans would sugg
 The bridge can be started with a Prometheus metrics endpoint enabled.
 The example folder contains the a docker-compose file that will spawn the bridge, Prometheus and Grafana configured to serve a single a pre-configured dashboard.
 
+The endpoint exposes /live and /ready for use with Kubernetes.
+
 ![Mumble Discord Bridge Grafana Dashboard](example/grafana-dashboard.png "Grafana Dashboard")
 
 ## Known Issues

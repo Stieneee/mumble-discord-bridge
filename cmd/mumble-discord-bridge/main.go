@@ -102,10 +102,6 @@ func main() {
 		}
 	}
 
-	if *promEnable {
-		go bridge.StartPromServer(*promPort)
-	}
-
 	// Optional CPU Profiling
 	if *cpuprofile != "" {
 		f, err := os.Create(*cpuprofile)
@@ -186,6 +182,10 @@ func main() {
 		Connected:    false,
 		DiscordUsers: make(map[string]bridge.DiscordUser),
 		MumbleUsers:  make(map[string]bool),
+	}
+
+	if *promEnable {
+		go bridge.StartPromServer(*promPort, Bridge)
 	}
 
 	bridge.PromApplicationStartTime.SetToCurrentTime()
