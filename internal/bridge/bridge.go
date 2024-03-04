@@ -304,7 +304,14 @@ func (b *BridgeState) StartBridge() {
 }
 
 func (b *BridgeState) DiscordStatusUpdate() {
+	if b.BridgeConfig.DiscordDisableBotStatus {
+		// force clear any previous status
+		b.DiscordSession.UpdateStatusComplex(discordgo.UpdateStatusData{})
+	}
+
 	m, _ := time.ParseDuration("30s")
+
+	// even if disabled we still want to do the loop to ping mumble and collect metrics
 	for {
 		time.Sleep(3 * time.Second)
 		resp, err := gumble.Ping(b.BridgeConfig.MumbleAddr, -1, m)

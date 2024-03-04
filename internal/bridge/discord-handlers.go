@@ -17,7 +17,6 @@ type DiscordListener struct {
 
 func (l *DiscordListener) GuildCreate(s *discordgo.Session, event *discordgo.GuildCreate) {
 	if event.ID != l.Bridge.BridgeConfig.GID {
-		log.Println("Received GuildCreate from a guild not in config")
 		return
 	}
 
