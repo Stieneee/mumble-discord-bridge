@@ -91,6 +91,12 @@ func (l *MumbleListener) MumbleUserChange(e *gumble.UserChangeEvent) {
 
 // this function will support bot commands as well as user commands
 func (l *MumbleListener) MumbleTextMessage(e *gumble.TextMessageEvent) {
+	// ignore non-user messages
+	if e.Sender == nil {
+		log.Println("Received message from nil sender")
+		return
+	}
+
 	// Ignore bot
 	if e.Sender.Name == l.Bridge.MumbleClient.Self.Name {
 		return
