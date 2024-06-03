@@ -44,6 +44,7 @@ func main() {
 	mumbleChannel := flag.String("mumble-channel", lookupEnvOrString("MUMBLE_CHANNEL", ""), "MUMBLE_CHANNEL, mumble channel to start in, using '/' to separate nested channels, optional")
 	mumbleSendBuffer := flag.Int("to-mumble-buffer", lookupEnvOrInt("TO_MUMBLE_BUFFER", 50), "TO_MUMBLE_BUFFER, Jitter buffer from Discord to Mumble to absorb timing issues related to network, OS and hardware quality, increments of 10ms")
 	mumbleDisableText := flag.Bool("mumble-disable-text", lookupEnvOrBool("MUMBLE_DISABLE_TEXT", false), "MUMBLE_DISABLE_TEXT, disable sending text to mumble")
+	mumbleBotFlag := flag.Bool("mumble-bot", lookupEnvOrBool("MUMBLE_BOT", false), "MUMBLE_BOT, exclude bot from mumble user count, optional, requires mumble v1.5 or later")
 	discordToken := flag.String("discord-token", lookupEnvOrString("DISCORD_TOKEN", ""), "DISCORD_TOKEN, discord bot token, required")
 	discordGID := flag.String("discord-gid", lookupEnvOrString("DISCORD_GID", ""), "DISCORD_GID, discord gid, required")
 	discordCID := flag.String("discord-cid", lookupEnvOrString("DISCORD_CID", ""), "DISCORD_CID, discord cid, required")
@@ -161,7 +162,6 @@ func main() {
 
 	Bridge := &bridge.BridgeState{
 		BridgeConfig: &bridge.BridgeConfig{
-			// MumbleConfig:   config,
 			Command:                    *command,
 			MumbleAddr:                 *mumbleAddr + ":" + strconv.Itoa(*mumblePort),
 			MumbleInsecure:             *mumbleInsecure,
@@ -170,6 +170,7 @@ func main() {
 			MumbleStartStreamCount:     mumbleStartStreamCount,
 			MumbleDisableText:          *mumbleDisableText,
 			MumbleCommand:              mumbleCommand,
+			MumbleBotFlag:              *mumbleBotFlag,
 			GID:                        *discordGID,
 			CID:                        *discordCID,
 			DiscordStartStreamingCount: discordStartStreamingCount,

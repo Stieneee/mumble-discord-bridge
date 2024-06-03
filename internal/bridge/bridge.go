@@ -59,8 +59,11 @@ type BridgeConfig struct {
 	// Disable text messages to mumble
 	MumbleDisableText bool
 
-	// Responed to mumble commands
+	// Respond to mumble commands
 	MumbleCommand bool
+
+	// Mumble bot flag
+	MumbleBotFlag bool
 
 	// The discord server ID
 	GID string
@@ -206,12 +209,15 @@ func (b *BridgeState) StartBridge() {
 		}
 	}
 
+	if b.BridgeConfig.MumbleBotFlag {
+		b.BridgeConfig.MumbleConfig.ClientType = 1 // BOT
+	}
+
 	log.Println("Attempting to join Mumble")
 	b.MumbleClient, err = gumble.DialWithDialer(new(net.Dialer), b.BridgeConfig.MumbleAddr, b.BridgeConfig.MumbleConfig, &tlsConfig)
 
 	if err != nil {
 		log.Println(err)
-		b.DiscordVoice.Disconnect()
 		return
 	}
 	defer b.MumbleClient.Disconnect()

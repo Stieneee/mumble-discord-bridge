@@ -1,35 +1,35 @@
 # Mumble Discord Bridge
 
-Mumble Discord Bridge is an open source Go application to bridge the audio between Mumble and Discord.
+Mumble Discord Bridge is an open source Go application to bridge the audio and chat between Mumble and Discord.
 
-It was built with the hope that people can continue to use the voice application of their choice.
+It was built with the idea that people can continue to use the voice application of their choice.
 
 ## PatchCord.io
 
 Mumble Discord Bridge can be hosted on any server or computer and ships in a Docker container for convenience.
 
-If hosting this application yourself seem like an difficult task please consider [PatchCord.io](https://patchcord.io).
-The site even offers a free tier for those who want to try out Mumble Discord Bridge.
+For those looking for SaaS solution take a look at [PatchCord.io](https://patchcord.io).
+PatchCord offers a free tier for those who want to try out Mumble Discord Bridge.
 
 ## Usage
 
-Several configuration variables must be set for the binary to function correctly.
-All variables can be set using flags or in the environment.
-The binary will also attempt to load .env file located in the working directory.
+Several configuration variables are required to run the bridge.
+All variables can be set using command line flags or in the environment.
+The variable can also be specified in an .env file located in the working directory.
 See the help documentation for all the options
 
 ```bash
-mumble-discord-bridge --help
+./mumble-discord-bridge --help
 ```
 
 The bridge can be run with the follow modes:
 
 ```text
    auto
-       The bridge starts up but does not connect immediately. It can be either manually linked (see below) or will join the voice channels when there's at least one person on each side.
-       The bridge will leave both voice channels once there is no one on either end
+       The bot starts up but does not connect audio channels immediately. It can be either manually linked (see below) or will join the voice channels when there's at least one person on each side.
+       The audio bridge will leave both voice channels once there is no one on either end
    manual
-       The bridge starts up but does not connect immediately. It will join the voice channels when issued the link command and will leave with the unlink command
+       The bot starts up but does not connect immediately. It will join the voice channels when issued the link command via chat and will leave with the unlink command
    constant (default)
        The bridge starts up and immediately connects to both Discord and Mumble voice channels. It can not be controlled in this mode and quits when the program is stopped
 ```
@@ -71,20 +71,20 @@ There are additional commands that can be called from either Mumble or Discord.
 
 ### Creating a Discord Bot
 
-A Discord bot is required to authenticate this application with Discord.
-The guide below provides information on how to setup a Discord bot.
+A Discord Bot is required to authenticate this application with Discord.
+The guide below provides information on how to create a Discord bot.
 
 [Create a Discord Bot](https://discordpy.readthedocs.io/en/latest/discord.html)
 
 Individual Discord servers need to invite the bot before it can connect.  
 The bot requires the following permissions:
 
-* View Channels
-* See Messages
-* Read Message History
-* Voice Channel Connect
-* Voice Channel Speak
-* Voice Channel Use Voice Activity
+- View Channels
+- See Messages
+- Read Message History
+- Voice Channel Connect
+- Voice Channel Speak
+- Voice Channel Use Voice Activity
 
 Permission integer 36768768.
 
@@ -101,7 +101,7 @@ Then you can get the GID by right-clicking your server and selecting Copy-ID. Si
 Optionally you can specify a client certificate for mumble [Mumble Certificates](https://wiki.mumble.info/wiki/Mumble_Certificates)
 If you don't have a client certificate, you can generate one with this command:
 
-``` bash
+```bash
 openssl req -x509 -nodes -days 3650 -newkey rsa:2048 -keyout cert.pem -out cert.pem -subj "/CN=mumble-discord-bridge"
 ```
 
@@ -143,32 +143,33 @@ docker stop mumble-discord-bridge && docker rm mumble-discord-bridge
 
 The following options can be set using environment variables or with command line options.
 
-Note boolean vales are flags when set via command line. example ```-mumble-insecure -mumble-disable-text``` not ```-mumble-insecure true -mumble-disable-text true```.
+Note boolean vales are flags when set via command line. example `-mumble-insecure -mumble-disable-text` not `-mumble-insecure true -mumble-disable-text true`.
 
-| Environment Variable       | CLI                         | Type    | Default          | Description                                                                                                                    |
-|----------------------------|-----------------------------|---------|------------------|--------------------------------------------------------------------------------------------------------------------------------|
-| CHAT_BRIDGE                | -chat-bridge                | flag    | false            | enable text chat bridge                                                                                                        |
-| COMMAND                    | -command                    | string  | "mumble-discord" | command phrase '!mumble-discord help' to control the bridge via text channels                                                  |
-| COMMAND_MODE               | -command                    | string  | "both"           | [both, mumble, discord, none] determine which side of the bridge will respond to commands                                      |
-| DEBUG_LEVEL                | -debug-level                | int     | 1                | discord debug level                                                                                                            |
-| DISCORD_CID                | -discord-cid                | string  | ""               | discord cid, required                                                                                                          |
-| DISCORD_DISABLE_BOT_STATUS | -discord-disable-bot-status | flag    | false            | disable updating bot status                                                                                                    |
-| DISCORD_TEXT_MODE          | -discord-text-mode          | string  | "channel"        | disable sending direct messages to discord                                                                                     |
-| DISCORD_GID                | -discord-gid                | string  | ""               | discord gid, required                                                                                                          |
-| DISCORD_TOKEN              | -discord-token              | string  | ""               | discord bot token, required                                                                                                    |
-| MODE                       | -mode                       | string  | "constant"       | [constant, manual, auto] determine which mode the bridge starts in                                                             |
-| MUMBLE_ADDRESS             | -mumble-address             | string  | ""               | mumble server address, example example.com, required                                                                           |
-| MUMBLE_CERTIFICATE         | -mumble-certificate         | string  | ""               | client certificate to use when connecting to the Mumble server                                                                 |
-| MUMBLE_CHANNEL             | -mumble-channel             | string  | ""               | mumble channel to start in, using '/' to separate nested channels, optional                                                    |
-| MUMBLE_DISABLE_TEXT        | -mumble-disable-text        | flag    | false            | disable sending text to mumble                                                                                                 |
-| MUMBLE_INSECURE            | -mumble-insecure            | flag    | false            | mumble insecure, ignore ssl certificates issues                                                                                |
-| MUMBLE_PASSWORD            | -mumble-password            | string  | ""               | mumble password                                                                                                                |
-| MUMBLE_PORT                | -mumble-port                | int     | 64738            | mumble port                                                                                                                    |
-| MUMBLE_USERNAME            | -mumble-username            | string  | "Discord"        | mumble username                                                                                                                |
-| PROMETHEUS_ENABLE          | -prometheus-enable          | flag    | false            | enable prometheus metrics                                                                                                      |
-| PROMETHEUS_PORT            | -prometheus-port            | int     | 9559             | prometheus metrics port                                                                                                        |
-| TO_DISCORD_BUFFER          | -to-discord-buffer          | int     | 50               | jitter buffer from Mumble to Discord to absorb timing issues related to network, OS and hardware quality. (Increments of 10ms) |
-| TO_MUMBLE_BUFFER           | -to-mumble-buffer           | int     | 50               | jitter buffer from Discord to Mumble to absorb timing issues related to network, OS and hardware quality. (Increments of 10ms) |
+| Environment Variable       | CLI                         | Type   | Default          | Description                                                                                                                    |
+| -------------------------- | --------------------------- | ------ | ---------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| CHAT_BRIDGE                | -chat-bridge                | flag   | false            | enable text chat bridge                                                                                                        |
+| COMMAND                    | -command                    | string | "mumble-discord" | command phrase '!mumble-discord help' to control the bridge via text channels                                                  |
+| COMMAND_MODE               | -command                    | string | "both"           | [both, mumble, discord, none] determine which side of the bridge will respond to commands                                      |
+| DEBUG_LEVEL                | -debug-level                | int    | 1                | discord debug level                                                                                                            |
+| DISCORD_CID                | -discord-cid                | string | ""               | discord cid, required                                                                                                          |
+| DISCORD_DISABLE_BOT_STATUS | -discord-disable-bot-status | flag   | false            | disable updating bot status                                                                                                    |
+| DISCORD_TEXT_MODE          | -discord-text-mode          | string | "channel"        | disable sending direct messages to discord                                                                                     |
+| DISCORD_GID                | -discord-gid                | string | ""               | discord gid, required                                                                                                          |
+| DISCORD_TOKEN              | -discord-token              | string | ""               | discord bot token, required                                                                                                    |
+| MODE                       | -mode                       | string | "constant"       | [constant, manual, auto] determine which mode the bridge starts in                                                             |
+| MUMBLE_ADDRESS             | -mumble-address             | string | ""               | mumble server address, example example.com, required                                                                           |
+| MUMBLE_CERTIFICATE         | -mumble-certificate         | string | ""               | client certificate to use when connecting to the Mumble server                                                                 |
+| MUMBLE_CHANNEL             | -mumble-channel             | string | ""               | mumble channel to start in, using '/' to separate nested channels, optional                                                    |
+| MUMBLE_DISABLE_TEXT        | -mumble-disable-text        | flag   | false            | disable sending text to mumble                                                                                                 |
+| MUMBLE_INSECURE            | -mumble-insecure            | flag   | false            | mumble insecure, ignore ssl certificates issues                                                                                |
+| MUMBLE_PASSWORD            | -mumble-password            | string | ""               | mumble password                                                                                                                |
+| MUMBLE_PORT                | -mumble-port                | int    | 64738            | mumble port                                                                                                                    |
+| MUMBLE_USERNAME            | -mumble-username            | string | "Discord"        | mumble username                                                                                                                |
+| MUMBLE_BOT                 | -mumble-bot                 | flag   | false            | exclude bot from mumble user count, optional, requires mumble v1.5 or later                                                    |
+| PROMETHEUS_ENABLE          | -prometheus-enable          | flag   | false            | enable prometheus metrics                                                                                                      |
+| PROMETHEUS_PORT            | -prometheus-port            | int    | 9559             | prometheus metrics port                                                                                                        |
+| TO_DISCORD_BUFFER          | -to-discord-buffer          | int    | 50               | jitter buffer from Mumble to Discord to absorb timing issues related to network, OS and hardware quality. (Increments of 10ms) |
+| TO_MUMBLE_BUFFER           | -to-mumble-buffer           | int    | 50               | jitter buffer from Discord to Mumble to absorb timing issues related to network, OS and hardware quality. (Increments of 10ms) |
 
 ### Mumbler Server Setting
 
@@ -182,7 +183,9 @@ This ensures all packets are opus encoded and should not cause any compatibility
 
 ### Chat Bridge
 
-The chat bridge feature will relay chat messages between mumble and discord channels. To enable the feature the MUMBLE_DISABLE_TEXT must be false and DISCORD_TEXT_MODE must be set to "channel" (the default state). Finally the CHAT_BRIDGE variable must be set to true.
+The chat bridge feature will relay chat messages between mumble and discord channels.
+To enable the feature the MUMBLE_DISABLE_TEXT must be false and DISCORD_TEXT_MODE must be set to "channel" (the default state).
+Finally the CHAT_BRIDGE variable must be set to true.
 
 ## Building From Source
 
@@ -192,7 +195,7 @@ Ensure the opus library is installed.
 
 ```bash
 go install github.com/goreleaser/goreleaser@latest
-goreleaser build --skip-validate --rm-dist --single-target --auto-snapshot
+goreleaser build --skip-validate --rm-dist --single-target
 ```
 
 ### OpenBSD Users
@@ -252,5 +255,5 @@ Please consider opening an issue to discuss features and ideas.
 
 The project would not have been possible without:
 
-* [gumble](https://github.com/layeh/gumble)
-* [discordgo](https://github.com/bwmarrin/discordgo)
+- [gumble](https://github.com/layeh/gumble)
+- [discordgo](https://github.com/bwmarrin/discordgo)
