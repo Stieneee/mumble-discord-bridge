@@ -7,7 +7,7 @@ require (
 	github.com/joho/godotenv v1.5.1
 	github.com/prometheus/client_golang v1.19.1
 	github.com/stieneee/gopus v0.0.0-20210424193312-6d10f6090335
-	github.com/stieneee/gumble v0.0.0-20240602213447-910445533728
+	github.com/stieneee/gumble v0.0.0-20240606033158-72cc4679195e
 	github.com/stieneee/tickerct v0.0.0-20210420020607-d1b092aa40e9
 )
 

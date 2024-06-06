@@ -24,6 +24,8 @@ github.com/stieneee/gumble v0.0.0-20240602195239-96b563f73b9b h1:+JvC8/qzfNn3j3I
 github.com/stieneee/gumble v0.0.0-20240602195239-96b563f73b9b/go.mod h1:VSTG68FvzgzONwOlOj2fr++KG1cSxkGwcO1iekQfMQs=
 github.com/stieneee/gumble v0.0.0-20240602213447-910445533728 h1:yZ7auQb56ksyg7yy2tbB+5Uzb72J8dCfftulB3vd5q0=
 github.com/stieneee/gumble v0.0.0-20240602213447-910445533728/go.mod h1:VSTG68FvzgzONwOlOj2fr++KG1cSxkGwcO1iekQfMQs=
+github.com/stieneee/gumble v0.0.0-20240606033158-72cc4679195e h1:KYjkbEL5KSPMgEAsf+K3seJ/0+XbgxsOXWkSiCwdDfM=
+github.com/stieneee/gumble v0.0.0-20240606033158-72cc4679195e/go.mod h1:VSTG68FvzgzONwOlOj2fr++KG1cSxkGwcO1iekQfMQs=
 github.com/stieneee/tickerct v0.0.0-20210420020607-d1b092aa40e9 h1:0l2H6Oj6JHMmkqm9xaBMQA5MOGhPT+Nn/thlTUcD9Iw=
 github.com/stieneee/tickerct v0.0.0-20210420020607-d1b092aa40e9/go.mod h1:54+oZlabriEpT52rPAjAeEWUFgYqv325LrS3hNxHGFE=
 golang.org/x/crypto v0.0.0-20210421170649-83a5a9bb288b h1:7mWr3k41Qtv8XlltBkDkl8LoP3mpSgBW8BUoxtEdbXg=
