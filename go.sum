@@ -21,8 +21,6 @@ github.com/prometheus/procfs v0.15.1 h1:YagwOFzUgYfKKHX6Dr+sHT7km/hxC76UB0leargg
 github.com/prometheus/procfs v0.15.1/go.mod h1:fB45yRUv8NstnjriLhBQLuOUt+WW4BsoGhij/e3PBqk=
 github.com/stieneee/gopus v0.0.0-20210424193312-6d10f6090335 h1:yzwz6AqGKysli5du4CrQ48BMGUCSkrl7V7Kbo9VaG8w=
 github.com/stieneee/gopus v0.0.0-20210424193312-6d10f6090335/go.mod h1:tAKYr3fSBJGold7c9DMPlhupn9oy8hTgl3cZ0hoyRQs=
-github.com/stieneee/gumble v0.0.0-20240609005312-f66c2ec91e89 h1:zuraRuMChoNERr+qcjEG6si+V90vo1wFZ3CZqdj+c9w=
-github.com/stieneee/gumble v0.0.0-20240609005312-f66c2ec91e89/go.mod h1:VSTG68FvzgzONwOlOj2fr++KG1cSxkGwcO1iekQfMQs=
 github.com/stieneee/gumble v0.0.0-20240610021017-a3449ae7108c h1:xDFXk/q55qdUVEbIYDIxeorDOsgfQnuRaKsIf3WStgg=
 github.com/stieneee/gumble v0.0.0-20240610021017-a3449ae7108c/go.mod h1:VSTG68FvzgzONwOlOj2fr++KG1cSxkGwcO1iekQfMQs=
 github.com/stieneee/tickerct v0.0.0-20210420020607-d1b092aa40e9 h1:0l2H6Oj6JHMmkqm9xaBMQA5MOGhPT+Nn/thlTUcD9Iw=
