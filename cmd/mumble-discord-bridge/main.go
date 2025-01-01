@@ -33,7 +33,9 @@ func main() {
 	fmt.Println("Mumble-Discord-Bridge")
 	fmt.Println(version + " " + commit + " " + date)
 
-	godotenv.Load()
+	if err := godotenv.Load(); err != nil {
+		log.Println("Failed to load .env file:", err)
+	}
 
 	mumbleAddr := flag.String("mumble-address", lookupEnvOrString("MUMBLE_ADDRESS", ""), "MUMBLE_ADDRESS, mumble server address, example example.com, required")
 	mumblePort := flag.Int("mumble-port", lookupEnvOrInt("MUMBLE_PORT", 64738), "MUMBLE_PORT, mumble port")
@@ -109,7 +111,11 @@ func main() {
 		if err != nil {
 			log.Fatal("could not create CPU profile: ", err)
 		}
-		defer f.Close() // error handling omitted for example
+		defer func() {
+			if err := f.Close(); err != nil {
+				log.Println("could not close CPU profile: ", err)
+			}
+		}()
 		if err := pprof.StartCPUProfile(f); err != nil {
 			log.Fatal("could not start CPU profile: ", err)
 		}
@@ -160,7 +166,7 @@ func main() {
 
 	// BRIDGE SETUP
 
-	Bridge := &bridge.BridgeState{
+	b := &bridge.BridgeState{
 		BridgeConfig: &bridge.BridgeConfig{
 			Command:                    *command,
 			MumbleAddr:                 *mumbleAddr + ":" + strconv.Itoa(*mumblePort),
@@ -186,56 +192,65 @@ func main() {
 	}
 
 	if *promEnable {
-		go bridge.StartPromServer(*promPort, Bridge)
+		go bridge.StartPromServer(*promPort, b)
 	}
 
 	bridge.PromApplicationStartTime.SetToCurrentTime()
 
 	// MUMBLE SETUP
-	Bridge.BridgeConfig.MumbleConfig = gumble.NewConfig()
-	Bridge.BridgeConfig.MumbleConfig.Username = *mumbleUsername
-	Bridge.BridgeConfig.MumbleConfig.Password = *mumblePassword
-	Bridge.BridgeConfig.MumbleConfig.AudioInterval = time.Millisecond * 10
+	b.BridgeConfig.MumbleConfig = gumble.NewConfig()
+	b.BridgeConfig.MumbleConfig.Username = *mumbleUsername
+	b.BridgeConfig.MumbleConfig.Password = *mumblePassword
+	b.BridgeConfig.MumbleConfig.AudioInterval = time.Millisecond * 10
 
-	Bridge.MumbleListener = &bridge.MumbleListener{
-		Bridge: Bridge,
+	b.MumbleListener = &bridge.MumbleListener{
+		Bridge: b,
 	}
 
-	Bridge.BridgeConfig.MumbleConfig.Attach(gumbleutil.Listener{
-		Connect:     Bridge.MumbleListener.MumbleConnect,
-		UserChange:  Bridge.MumbleListener.MumbleUserChange,
-		TextMessage: Bridge.MumbleListener.MumbleTextMessage,
+	b.BridgeConfig.MumbleConfig.Attach(gumbleutil.Listener{
+		Connect:     b.MumbleListener.MumbleConnect,
+		UserChange:  b.MumbleListener.MumbleUserChange,
+		TextMessage: b.MumbleListener.MumbleTextMessage,
 		// TODO - notify discord on channel change.
 	})
 
 	// DISCORD SETUP
-
-	//Connect to discord
-	Bridge.DiscordSession, err = discordgo.New("Bot " + *discordToken)
+	b.DiscordSession, err = discordgo.New("Bot " + *discordToken)
 	if err != nil {
 		log.Println(err)
 		return
 	}
-
-	Bridge.DiscordSession.LogLevel = *debug
-	Bridge.DiscordSession.StateEnabled = true
-	Bridge.DiscordSession.Identify.Intents = discordgo.MakeIntent(discordgo.IntentsAllWithoutPrivileged)
-	Bridge.DiscordSession.ShouldReconnectOnError = true
+	intents := discordgo.MakeIntent(discordgo.IntentsGuildVoiceStates |
+		discordgo.IntentsGuildMessages |
+		discordgo.IntentsGuildMessageReactions |
+		discordgo.IntentsDirectMessages |
+		discordgo.IntentsDirectMessageReactions)
+	b.DiscordSession.LogLevel = *debug
+	b.DiscordSession.StateEnabled = true
+	b.DiscordSession.Identify.Intents = intents
+	b.DiscordSession.ShouldReconnectOnError = true
 	// register handlers
-	Bridge.DiscordListener = &bridge.DiscordListener{
-		Bridge: Bridge,
+	b.DiscordListener = &bridge.DiscordListener{
+		Bridge: b,
 	}
-	Bridge.DiscordSession.AddHandler(Bridge.DiscordListener.MessageCreate)
-	Bridge.DiscordSession.AddHandler(Bridge.DiscordListener.GuildCreate)
-	Bridge.DiscordSession.AddHandler(Bridge.DiscordListener.VoiceUpdate)
+	b.DiscordSession.AddHandler(b.DiscordListener.MessageCreate)
+	b.DiscordSession.AddHandler(b.DiscordListener.GuildCreate)
+	b.DiscordSession.AddHandler(b.DiscordListener.VoiceUpdate)
 
 	// Open Discord websocket
-	err = Bridge.DiscordSession.Open()
-	if err != nil {
-		log.Println(err)
-		return
+	maxRetries := 5
+	for i := 0; i < maxRetries; i++ {
+		err = b.DiscordSession.Open()
+		if err == nil {
+			break
+		}
+		log.Printf("Failed to connect to Discord (attempt %d/%d): %v", i+1, maxRetries, err)
+		time.Sleep(5 * time.Second)
 	}
-	defer Bridge.DiscordSession.Close()
+	if err != nil {
+		log.Fatalf("Could not connect to Discord after %d attempts: %v", maxRetries, err)
+	}
+	defer b.DiscordSession.Close()
 
 	log.Println("Discord Bot Connected")
 	log.Printf("Discord bot looking for command !%v", *command)
@@ -243,31 +258,30 @@ func main() {
 	switch *mode {
 	case "auto":
 		log.Println("Starting in automatic mode")
-		Bridge.AutoChanDie = make(chan bool)
-		Bridge.Mode = bridge.BridgeModeAuto
-		Bridge.DiscordChannelID = Bridge.BridgeConfig.CID
-		go Bridge.AutoBridge()
+		b.AutoChanDie = make(chan bool)
+		b.Mode = bridge.BridgeModeAuto
+		b.DiscordChannelID = b.BridgeConfig.CID
+		go b.AutoBridge()
 	case "manual":
 		log.Println("Starting in manual mode")
-		Bridge.Mode = bridge.BridgeModeManual
+		b.Mode = bridge.BridgeModeManual
 	case "constant":
 		log.Println("Starting in constant mode")
-		Bridge.Mode = bridge.BridgeModeConstant
-		Bridge.DiscordChannelID = Bridge.BridgeConfig.CID
+		b.Mode = bridge.BridgeModeConstant
+		b.DiscordChannelID = b.BridgeConfig.CID
 		go func() {
 			for {
-				Bridge.StartBridge()
+				b.StartBridge()
 				log.Println("Bridge died")
 				time.Sleep(5 * time.Second)
 				log.Println("Restarting")
 			}
 		}()
 	default:
-		Bridge.DiscordSession.Close()
 		log.Fatalln("invalid bridge mode set")
 	}
 
-	go Bridge.DiscordStatusUpdate()
+	go b.DiscordStatusUpdate()
 
 	// Shutdown on OS signal
 	sc := make(chan os.Signal, 1)
@@ -281,11 +295,14 @@ func main() {
 	})
 
 	// Wait or the bridge to exit cleanly
-	Bridge.BridgeMutex.Lock()
-	if Bridge.Connected {
-		//TODO BridgeDie occasionally panics on send to closed channel
-		Bridge.BridgeDie <- true
-		Bridge.WaitExit.Wait()
+	b.BridgeMutex.Lock()
+	if b.Connected {
+		// Prevent panic by checking if the channel is closed before sending
+		select {
+		case b.BridgeDie <- true:
+		default:
+		}
+		b.WaitExit.Wait()
 	}
-	Bridge.BridgeMutex.Unlock()
+	b.BridgeMutex.Unlock()
 }
