@@ -195,7 +195,7 @@ Ensure the opus library is installed.
 
 ```bash
 go install github.com/goreleaser/goreleaser@latest
-goreleaser build --skip-validate --rm-dist --single-target
+goreleaser build --skip=validate --rm-dist --single-target
 ```
 
 ### OpenBSD Users
