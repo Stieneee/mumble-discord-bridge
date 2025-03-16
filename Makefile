@@ -17,7 +17,7 @@ dev-race: $(GOFILES) .goreleaser.yml
 	go run -race ./cmd/mumble-discord-bridge
 
 dev-profile: $(GOFILES) .goreleaser.yml
-	goreleaser build --skip-validate --clean --single-target --snapshot && ./dist/mumble-discord-bridge_linux_amd64_v1/mumble-discord-bridge -cpuprofile cpu.prof
+	goreleaser build --skip=validate --clean --single-target --snapshot && ./dist/mumble-discord-bridge_linux_amd64_v1/mumble-discord-bridge -cpuprofile cpu.prof
 
 test-chart: SHELL:=/bin/bash 
 test-chart:
