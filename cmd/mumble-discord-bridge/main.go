@@ -224,7 +224,8 @@ func main() {
 		discordgo.IntentsGuildMessages |
 		discordgo.IntentsGuildMessageReactions |
 		discordgo.IntentsDirectMessages |
-		discordgo.IntentsDirectMessageReactions)
+		discordgo.IntentsDirectMessageReactions |
+		discordgo.IntentsMessageContent)
 	b.DiscordSession.LogLevel = *debug
 	b.DiscordSession.StateEnabled = true
 	b.DiscordSession.Identify.Intents = intents
