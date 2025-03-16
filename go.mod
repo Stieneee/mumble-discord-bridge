@@ -11,6 +11,8 @@ require (
 	github.com/stieneee/tickerct v0.0.0-20210420020607-d1b092aa40e9
 )
 
+replace github.com/bwmarrin/discordgo => ./libs/discordgo
+
 require (
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect

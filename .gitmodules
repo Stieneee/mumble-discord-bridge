@@ -1,0 +1,3 @@
+[submodule "libs/discordgo"]
+	path = libs/discordgo
+	url = https://github.com/bwmarrin/discordgo.git
