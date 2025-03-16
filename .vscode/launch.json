@@ -1,0 +1,17 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Launch Mumble-Discord-Bridge",
+            "type": "go",
+            "request": "launch",
+            "mode": "auto",
+            "program": "${workspaceFolder}/cmd/mumble-discord-bridge",
+            "env": {
+                "CGO_ENABLED": "1"
+            },
+            "buildFlags": "-tags=netgo",
+            "cwd": "${workspaceFolder}"
+        }
+    ]
+}
