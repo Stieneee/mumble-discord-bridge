@@ -12,3 +12,4 @@ LICENSES
 LICENSES.zip
 mumble-dsicrod-bridge
 dist/
+.vscode/settings.json
