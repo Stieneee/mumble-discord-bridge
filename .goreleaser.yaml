@@ -5,6 +5,7 @@ project_name: mumble-discord-bridge
 before:
   hooks:
     - go mod tidy
+    - go install github.com/google/go-licenses@latest
 
 builds:
   - goos:
@@ -17,13 +18,47 @@ builds:
     ldflags: "-s -w -X main.version={{.Version}} -X main.commit={{.Commit}} -X main.date={{.Date}} -X main.builtBy=goreleaser"
     flags:
       - -tags=netgo
+    hooks:
+      post:
+        - cmd: go-licenses save ./cmd/mumble-discord-bridge --save_path="./dist/LICENSES"
 
 checksum:
   name_template: "checksums.txt"
 
-release:
-  extra_files:
-    - glob: "./LICENSES.zip"
+dockers:
+  # We break the goreleaser pattern by not copying the build binary into the docker image.
+  # Instead we use a two-stage build to create a static binary in the docker image.
+  # The docker file uses Alpine (musl) and while we build the binary for glibc.
+  - use: buildx
+    goos: linux
+    goarch: amd64
+    dockerfile: Dockerfile
+    image_templates:
+      - "stieneee/mumble-discord-bridge:latest"
+      - "stieneee/mumble-discord-bridge:{{ .Version }}"
+      - "ghcr.io/stieneee/mumble-discord-bridge:latest"
+      - "ghcr.io/stieneee/mumble-discord-bridge:{{ .Version }}"
+    build_flag_templates:
+      - "--platform=linux/amd64"
+      - "--label=org.opencontainers.image.created={{.Date}}"
+      - "--label=org.opencontainers.image.title={{.ProjectName}}"
+      - "--label=org.opencontainers.image.revision={{.FullCommit}}"
+      - "--label=org.opencontainers.image.version={{.Version}}"
+      - "--label=org.opencontainers.image.source=https://github.com/stieneee/mumble-discord-bridge"
+
+docker_manifests:
+  - name_template: stieneee/mumble-discord-bridge:latest
+    image_templates:
+      - stieneee/mumble-discord-bridge:latest
+  - name_template: stieneee/mumble-discord-bridge:{{ .Version }}
+    image_templates:
+      - stieneee/mumble-discord-bridge:{{ .Version }}
+  - name_template: ghcr.io/stieneee/mumble-discord-bridge:latest
+    image_templates:
+      - ghcr.io/stieneee/mumble-discord-bridge:latest
+  - name_template: ghcr.io/stieneee/mumble-discord-bridge:{{ .Version }}
+    image_templates:
+      - ghcr.io/stieneee/mumble-discord-bridge:{{ .Version }}
 
 changelog:
   sort: asc
