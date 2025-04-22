@@ -11,17 +11,9 @@ builds:
       - linux
     goarch:
       - amd64
-      # - arm64
     main: ./cmd/mumble-discord-bridge
     env:
       - CGO_ENABLED=1
-      # - >-
-      #   {{- if eq .Arch "arm64" }}
-      #   CC=aarch64-linux-gnu-gcc
-      #   CGO_CFLAGS="-I/usr/aarch64-linux-gnu/include"
-      #   CGO_LDFLAGS="-L/usr/aarch64-linux-gnu/lib"
-      #   PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig
-      #   {{- end }}
     ldflags: "-s -w -X main.version={{.Version}} -X main.commit={{.Commit}} -X main.date={{.Date}} -X main.builtBy=goreleaser"
     flags:
       - -tags=netgo

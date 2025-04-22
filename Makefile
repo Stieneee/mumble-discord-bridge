@@ -1,22 +1,22 @@
 GOFILES=$(shell find ./ -type f -name '*.go')
 LATEST_TAG=$(shell git describe --tags `git rev-list --tags --max-count=1`)
 
-mumble-discord-bridge: $(GOFILES) .goreleaser.yml
+mumble-discord-bridge: $(GOFILES)
 	goreleaser build --clean --snapshot
 
-release: 
+release: $(GOFILES)
 	rm -rf LICENSES.zip LICENSES
 	go-licenses save ./cmd/mumble-discord-bridge --save_path="./LICENSES"
 	zip -r -9 LICENSES.zip ./LICENSES
 	goreleaser release --clean
 
-dev: $(GOFILES) .goreleaser.yml
+dev: $(GOFILES)
 	goreleaser build --clean --single-target --snapshot && ./dist/mumble-discord-bridge_linux_amd64_v1/mumble-discord-bridge
 
-dev-race: $(GOFILES) .goreleaser.yml
+dev-race: $(GOFILES)
 	go run -race ./cmd/mumble-discord-bridge
 
-dev-profile: $(GOFILES) .goreleaser.yml
+dev-profile: $(GOFILES)
 	goreleaser build --skip=validate --clean --single-target --snapshot && ./dist/mumble-discord-bridge_linux_amd64_v1/mumble-discord-bridge -cpuprofile cpu.prof
 
 test-chart: SHELL:=/bin/bash 
@@ -46,4 +46,4 @@ clean:
 	rm -rf dist
 	rm -rf LICENSES.zip LICENSES
 
-.PHONY: release dev dev-profile dev-race test-chart docker-latest docker-latest-release docker-release docker-next clean
+.PHONY: mumble-discord-bridge release dev dev-profile dev-race test-chart docker-latest docker-latest-release docker-release docker-next clean

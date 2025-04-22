@@ -6,7 +6,7 @@ FROM golang:1.24 AS builder
 WORKDIR /go/src/app 
 COPY . .
 RUN apt update && apt install -y libopus-dev
-RUN go install github.com/goreleaser/goreleaser@latest
+RUN go install github.com/goreleaser/goreleaser/v2@latest
 RUN go install github.com/google/go-licenses@latest
 RUN goreleaser build --skip=validate
 RUN go-licenses save ./cmd/mumble-discord-bridge --force --save_path="./dist/LICENSES"
