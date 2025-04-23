@@ -1,4 +1,7 @@
-name: 'CI'
+name: "CI"
+permissions:
+  contents: read
+  pull-requests: write
 on:
   push:
     branches:
@@ -15,21 +18,21 @@ jobs:
         uses: actions/checkout@v3
         with:
           fetch-depth: 0
-  
+
       - name: Install libopus-dev zip
         run: sudo apt update && sudo apt-get -y install libopus-dev zip
 
       - name: Set up Go
         uses: actions/setup-go@v4
         with:
-          go-version-file: 'go.mod'
+          go-version-file: "go.mod"
 
       - name: go-license install
         run: go install github.com/google/go-licenses@latest
 
       - name: go-license save
         run: go-licenses save ./cmd/mumble-discord-bridge --force --save_path="./LICENSES" && zip -r -9 LICENSES.zip ./LICENSES
-      
+
       - name: Run GoReleaser Build
         uses: goreleaser/goreleaser-action@v4
         with:
@@ -46,7 +49,7 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      
+
       - name: Upload assets
         uses: actions/upload-artifact@v3
         with:
