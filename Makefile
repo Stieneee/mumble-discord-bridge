@@ -8,7 +8,7 @@ release: $(GOFILES)
 	goreleaser release --clean
 
 dev: $(GOFILES)
-	goreleaser build --clean --single-target --snapshot && ./dist/mumble-discord-bridge_linux_amd64/mumble-discord-bridge
+	goreleaser build --clean --single-target --snapshot && ./dist/mumble-discord-bridge_linux_amd64_v1/mumble-discord-bridge
 
 dev-race: $(GOFILES)
 	go run -race ./cmd/mumble-discord-bridge
