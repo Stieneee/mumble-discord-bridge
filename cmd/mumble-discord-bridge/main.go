@@ -139,10 +139,10 @@ func main() {
 		log.Println("chat bridge is disabled")
 	}
 
-	var discordStartStreamingCount int = int(math.Round(float64(*discordSendBuffer) / 10.0))
+	var discordStartStreamingCount = int(math.Round(float64(*discordSendBuffer) / 10.0))
 	log.Println("To Discord Jitter Buffer: ", discordStartStreamingCount*10, " ms")
 
-	var mumbleStartStreamCount int = int(math.Round(float64(*mumbleSendBuffer) / 10.0))
+	var mumbleStartStreamCount = int(math.Round(float64(*mumbleSendBuffer) / 10.0))
 	log.Println("To Mumble Jitter Buffer: ", mumbleStartStreamCount*10, " ms")
 
 	// create a command flag for each command mode
@@ -251,7 +251,11 @@ func main() {
 	if err != nil {
 		log.Fatalf("Could not connect to Discord after %d attempts: %v", maxRetries, err)
 	}
-	defer b.DiscordSession.Close()
+	defer func() {
+		if err := b.DiscordSession.Close(); err != nil {
+			log.Println("Error closing Discord session:", err)
+		}
+	}()
 
 	log.Println("Discord Bot Connected")
 	log.Printf("Discord bot looking for command !%v", *command)

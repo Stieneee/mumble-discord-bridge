@@ -101,20 +101,29 @@ func (l *DiscordListener) MessageCreate(s *discordgo.Session, m *discordgo.Messa
 
 		// process the shared command options
 		l.Bridge.HandleCommand(m.Content, func(s string) {
-			l.Bridge.DiscordSession.ChannelMessageSend(m.ChannelID, s)
+			_, err := l.Bridge.DiscordSession.ChannelMessageSend(m.ChannelID, s)
+			if err != nil {
+				log.Printf("Error sending command response: %v", err)
+			}
 		})
 
 		// process the Discord specific command options
 
 		if strings.HasPrefix(m.Content, prefix+" link") {
 			if l.Bridge.Mode == BridgeModeConstant && strings.HasPrefix(m.Content, prefix) {
-				l.Bridge.DiscordSession.ChannelMessageSend(m.ChannelID, "Constant mode enabled, link commands can not be entered")
+				_, err := l.Bridge.DiscordSession.ChannelMessageSend(m.ChannelID, "Constant mode enabled, link commands can not be entered")
+				if err != nil {
+					log.Printf("Error sending constant mode message: %v", err)
+				}
 				return
 			}
 			// Look for the message sender in that guild's current voice states.
 			for _, vs := range g.VoiceStates {
 				if bridgeConnected {
-					l.Bridge.DiscordSession.ChannelMessageSend(m.ChannelID, "Bridge already running, unlink first")
+					_, err := l.Bridge.DiscordSession.ChannelMessageSend(m.ChannelID, "Bridge already running, unlink first")
+					if err != nil {
+						log.Printf("Error sending bridge status message: %v", err)
+					}
 					return
 				}
 				if vs.UserID == m.Author.ID {
@@ -128,12 +137,18 @@ func (l *DiscordListener) MessageCreate(s *discordgo.Session, m *discordgo.Messa
 
 		if strings.HasPrefix(m.Content, prefix+" unlink") {
 			if l.Bridge.Mode == BridgeModeConstant && strings.HasPrefix(m.Content, prefix) {
-				l.Bridge.DiscordSession.ChannelMessageSend(m.ChannelID, "Constant mode enabled, link commands can not be entered")
+				_, err := l.Bridge.DiscordSession.ChannelMessageSend(m.ChannelID, "Constant mode enabled, link commands can not be entered")
+				if err != nil {
+					log.Printf("Error sending constant mode message: %v", err)
+				}
 				return
 			}
 			// Look for the message sender in that guild's current voice states.
 			if !bridgeConnected {
-				l.Bridge.DiscordSession.ChannelMessageSend(m.ChannelID, "Bridge is not currently running")
+				_, err := l.Bridge.DiscordSession.ChannelMessageSend(m.ChannelID, "Bridge is not currently running")
+				if err != nil {
+					log.Printf("Error sending bridge status message: %v", err)
+				}
 				return
 			}
 			for _, vs := range g.VoiceStates {
@@ -147,12 +162,18 @@ func (l *DiscordListener) MessageCreate(s *discordgo.Session, m *discordgo.Messa
 
 		if strings.HasPrefix(m.Content, prefix+" refresh") {
 			if l.Bridge.Mode == BridgeModeConstant && strings.HasPrefix(m.Content, prefix) {
-				l.Bridge.DiscordSession.ChannelMessageSend(m.ChannelID, "Constant mode enabled, link commands can not be entered")
+				_, err := l.Bridge.DiscordSession.ChannelMessageSend(m.ChannelID, "Constant mode enabled, link commands can not be entered")
+				if err != nil {
+					log.Printf("Error sending constant mode message: %v", err)
+				}
 				return
 			}
 			// Look for the message sender in that guild's current voice states.
 			if !bridgeConnected {
-				l.Bridge.DiscordSession.ChannelMessageSend(m.ChannelID, "Bridge is not currently running")
+				_, err := l.Bridge.DiscordSession.ChannelMessageSend(m.ChannelID, "Bridge is not currently running")
+				if err != nil {
+					log.Printf("Error sending bridge status message: %v", err)
+				}
 				return
 			}
 			for _, vs := range g.VoiceStates {

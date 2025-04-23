@@ -181,11 +181,21 @@ func (b *BridgeState) StartBridge() {
 
 	if err != nil {
 		log.Println(err)
-		b.DiscordVoice.Disconnect()
+		if err := b.DiscordVoice.Disconnect(); err != nil {
+			log.Println("Error disconnecting from Discord voice:", err)
+		}
 		return
 	}
-	defer b.DiscordVoice.Disconnect()
-	defer b.DiscordVoice.Speaking(false)
+	defer func() {
+		if err := b.DiscordVoice.Disconnect(); err != nil {
+			log.Println("Error disconnecting from Discord voice:", err)
+		}
+	}()
+	defer func() {
+		if err := b.DiscordVoice.Speaking(false); err != nil {
+			log.Println("Error setting speaking status to false:", err)
+		}
+	}()
 	log.Println("Discord Voice Connected")
 
 	// MUMBLE Connect
@@ -220,7 +230,11 @@ func (b *BridgeState) StartBridge() {
 		log.Println(err)
 		return
 	}
-	defer b.MumbleClient.Disconnect()
+	defer func() {
+		if err := b.MumbleClient.Disconnect(); err != nil {
+			log.Println("Error disconnecting from Mumble:", err)
+		}
+	}()
 	log.Println("Mumble Connected")
 
 	// Shared Channels
@@ -312,7 +326,9 @@ func (b *BridgeState) StartBridge() {
 func (b *BridgeState) DiscordStatusUpdate() {
 	if b.BridgeConfig.DiscordDisableBotStatus {
 		// force clear any previous status
-		b.DiscordSession.UpdateStatusComplex(discordgo.UpdateStatusData{})
+		if err := b.DiscordSession.UpdateStatusComplex(discordgo.UpdateStatusData{}); err != nil {
+			log.Println("Error updating Discord status:", err)
+		}
 	}
 
 	m, _ := time.ParseDuration("30s")
@@ -326,7 +342,9 @@ func (b *BridgeState) DiscordStatusUpdate() {
 		if err != nil {
 			log.Printf("error pinging mumble server %v\n", err)
 			if !b.BridgeConfig.DiscordDisableBotStatus {
-				b.DiscordSession.UpdateListeningStatus("an error pinging mumble")
+				if err := b.DiscordSession.UpdateListeningStatus("an error pinging mumble"); err != nil {
+					log.Println("Error updating Discord listening status:", err)
+				}
 			}
 		} else {
 
@@ -350,7 +368,9 @@ func (b *BridgeState) DiscordStatusUpdate() {
 			b.BridgeMutex.Unlock()
 			b.MumbleUsersMutex.Unlock()
 			if !b.BridgeConfig.DiscordDisableBotStatus {
-				b.DiscordSession.UpdateListeningStatus(status)
+				if err := b.DiscordSession.UpdateListeningStatus(status); err != nil {
+					log.Println("Error updating Discord listening status:", err)
+				}
 			}
 		}
 
@@ -410,15 +430,20 @@ func (b *BridgeState) discordSendMessage(msg string) {
 		return
 	case "user":
 		b.DiscordUsersMutex.Lock()
+		defer b.DiscordUsersMutex.Unlock()
+
 		for id := range b.DiscordUsers {
 			du := b.DiscordUsers[id]
 			if du.dm != nil {
-				b.DiscordSession.ChannelMessageSend(du.dm.ID, msg)
+				_, err := b.DiscordSession.ChannelMessageSend(du.dm.ID, msg)
+				if err != nil {
+					log.Printf("Error sending message to user %s: %v", du.username, err)
+				}
 			}
 		}
-		b.DiscordUsersMutex.Unlock()
 		return
 	default:
 		log.Println("Invalid DiscordTextMode")
+		return
 	}
 }

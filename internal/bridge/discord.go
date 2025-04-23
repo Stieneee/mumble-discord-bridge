@@ -95,7 +95,7 @@ func (dd *DiscordDuplex) discordSendPCM(ctx context.Context, cancel context.Canc
 	// }()
 
 	internalSend := func(opus []byte) {
-		dd.Bridge.DiscordVoice.RWMutex.RLock()
+		dd.Bridge.DiscordVoice.RLock()
 		if !dd.Bridge.DiscordVoice.Ready || dd.Bridge.DiscordVoice.OpusSend == nil {
 			if lastReady {
 				OnError(fmt.Sprintf("Discordgo not ready for opus packets. %+v : %+v", dd.Bridge.DiscordVoice.Ready, dd.Bridge.DiscordVoice.OpusSend), nil)
@@ -117,7 +117,7 @@ func (dd *DiscordDuplex) discordSendPCM(ctx context.Context, cancel context.Canc
 
 			promDiscordSentPackets.Inc()
 		}
-		dd.Bridge.DiscordVoice.RWMutex.RUnlock()
+		dd.Bridge.DiscordVoice.RUnlock()
 	}
 
 	defer log.Println("Stopping Discord send PCM")
@@ -139,7 +139,9 @@ func (dd *DiscordDuplex) discordSendPCM(ctx context.Context, cancel context.Canc
 				done := make(chan bool, 1)
 				go func() {
 					// This call will prevent discordSendPCM from exiting if the discord connection is lost
-					dd.Bridge.DiscordVoice.Speaking(true)
+					if err := dd.Bridge.DiscordVoice.Speaking(true); err != nil {
+						log.Println("Error setting speaking status to true:", err)
+					}
 					done <- true
 				}()
 				select {
@@ -186,7 +188,9 @@ func (dd *DiscordDuplex) discordSendPCM(ctx context.Context, cancel context.Canc
 
 				}
 
-				dd.Bridge.DiscordVoice.Speaking(false)
+				if err := dd.Bridge.DiscordVoice.Speaking(false); err != nil {
+					log.Println("Error setting speaking status to false:", err)
+				}
 				streaming = false
 			}
 		}
@@ -207,7 +211,7 @@ func (dd *DiscordDuplex) discordReceivePCM(ctx context.Context, cancel context.C
 	}
 
 	for {
-		dd.Bridge.DiscordVoice.RWMutex.RLock()
+		dd.Bridge.DiscordVoice.RLock()
 		if !dd.Bridge.DiscordVoice.Ready || dd.Bridge.DiscordVoice.OpusRecv == nil {
 			if lastReady {
 				OnError(fmt.Sprintf("Discordgo not to receive opus packets. %+v : %+v", dd.Bridge.DiscordVoice.Ready, dd.Bridge.DiscordVoice.OpusSend), nil)
@@ -217,13 +221,14 @@ func (dd *DiscordDuplex) discordReceivePCM(ctx context.Context, cancel context.C
 				})
 				lastReady = false
 			}
+			dd.Bridge.DiscordVoice.RUnlock()
 			continue
 		} else if !lastReady {
 			fmt.Println("Discordgo ready to receive packets")
 			lastReady = true
 			readyTimeout.Stop()
 		}
-		dd.Bridge.DiscordVoice.RWMutex.RUnlock()
+		dd.Bridge.DiscordVoice.RUnlock()
 
 		var ok bool
 		var p *discordgo.Packet
