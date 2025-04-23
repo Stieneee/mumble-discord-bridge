@@ -1,37 +1,17 @@
-// For format details, see https://aka.ms/devcontainer.json. For config options, see the
-// README at: https://github.com/devcontainers/templates/tree/main/src/go
 {
-	"name": "Go",
-	// Or use a Dockerfile or Docker Compose file. More info: https://containers.dev/guide/dockerfile
-	"image": "mcr.microsoft.com/devcontainers/go:1-1.22-bookworm",
-
-	// Features to add to the dev container. More info: https://containers.dev/features.
-	// "features": {},
-
-	// Configure tool-specific properties.
-	"customizations": {
-		// Configure properties specific to VS Code.
-		"vscode": {
-			"settings": {},
-			"extensions": []
-		}
-	},
-
-	// Use 'forwardPorts' to make a list of ports inside the container available locally.
-	// "forwardPorts": [9000],
-
-	// Use 'portsAttributes' to set default properties for specific forwarded ports. 
-	// More info: https://containers.dev/implementors/json_reference/#port-attributes
-	"portsAttributes": {
-		"9000": {
-			"label": "Hello Remote World",
-			"onAutoForward": "notify"
-		}
-	},
-
-	// Use 'postCreateCommand' to run commands after the container is created.
-	"postCreateCommand": "sudo apt update && sudo apt install -y libopus-dev pkg-config",
-
-	// Uncomment to connect as root instead. More info: https://aka.ms/dev-containers-non-root.
-	// "remoteUser": "root"
+  "name": "Go",
+  "image": "mcr.microsoft.com/devcontainers/go:1-1.24-bookworm",
+  "customizations": {
+    "vscode": {
+      "settings": {},
+      "extensions": []
+    }
+  },
+  "portsAttributes": {
+    "9000": {
+      "label": "Hello Remote World",
+      "onAutoForward": "notify"
+    }
+  },
+  "postCreateCommand": "sudo apt update && sudo apt install -y libopus-dev pkg-config"
 }
