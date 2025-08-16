@@ -8,16 +8,11 @@ import (
 	"os"
 	"os/signal"
 	"runtime/pprof"
-	"strconv"
-	"strings"
 	"syscall"
-	"time"
 
-	"github.com/bwmarrin/discordgo"
 	"github.com/joho/godotenv"
-	"github.com/stieneee/gumble/gumble"
-	"github.com/stieneee/gumble/gumbleutil"
 	"github.com/stieneee/mumble-discord-bridge/internal/bridge"
+	"github.com/stieneee/mumble-discord-bridge/pkg/bridgelib"
 )
 
 var (
@@ -58,7 +53,6 @@ func main() {
 	commandMode := flag.String("command-mode", lookupEnvOrString("COMMAND_MODE", "both"), "COMMAND_MODE, [both, mumble, discord, none] determine which side of the bridge will respond to commands")
 	mode := flag.String("mode", lookupEnvOrString("MODE", "constant"), "MODE, [constant, manual, auto] determine which mode the bridge starts in")
 	nice := flag.Bool("nice", lookupEnvOrBool("NICE", false), "NICE, whether the bridge should automatically try to 'nice' itself")
-	debug := flag.Int("debug-level", lookupEnvOrInt("DEBUG", 1), "DEBUG_LEVEL, Discord debug level, optional")
 	promEnable := flag.Bool("prometheus-enable", lookupEnvOrBool("PROMETHEUS_ENABLE", false), "PROMETHEUS_ENABLE, Enable prometheus metrics")
 	promPort := flag.Int("prometheus-port", lookupEnvOrInt("PROMETHEUS_PORT", 9559), "PROMETHEUS_PORT, Prometheus metrics port, optional")
 
@@ -132,12 +126,23 @@ func main() {
 	}
 
 	// check if chat bridge is enabled
-	if !*mumbleDisableText && *discordTextMode == "channel" && *chatBridge {
-		log.Println("chat bridge is enabled")
-	} else {
+	log.Printf("Chat bridge settings - mumbleDisableText: %v, discordTextMode: %s, chatBridge flag: %v",
+		*mumbleDisableText, *discordTextMode, *chatBridge)
+	
+	// Override chatBridge if conditions aren't met
+	if *mumbleDisableText {
+		log.Println("Warning: Chat bridge disabled because mumbleDisableText is set to true")
 		*chatBridge = false
-		log.Println("chat bridge is disabled")
+	} else if *discordTextMode != "channel" {
+		log.Printf("Warning: Chat bridge disabled because discordTextMode is '%s' instead of 'channel'", *discordTextMode)
+		*chatBridge = false
+	} else if !*chatBridge {
+		log.Println("Warning: Chat bridge disabled because chatBridge flag is set to false")
+	} else {
+		log.Println("Chat bridge is ENABLED")
 	}
+	
+	log.Printf("Final chat bridge status: %v", *chatBridge)
 
 	var discordStartStreamingCount = int(math.Round(float64(*discordSendBuffer) / 10.0))
 	log.Println("To Discord Jitter Buffer: ", discordStartStreamingCount*10, " ms")
@@ -166,148 +171,71 @@ func main() {
 
 	// BRIDGE SETUP
 
-	b := &bridge.BridgeState{
-		BridgeConfig: &bridge.BridgeConfig{
-			Command:                    *command,
-			MumbleAddr:                 *mumbleAddr + ":" + strconv.Itoa(*mumblePort),
-			MumbleInsecure:             *mumbleInsecure,
-			MumbleCertificate:          *mumbleCertificate,
-			MumbleChannel:              strings.Split(*mumbleChannel, "/"),
-			MumbleStartStreamCount:     mumbleStartStreamCount,
-			MumbleDisableText:          *mumbleDisableText,
-			MumbleCommand:              mumbleCommand,
-			MumbleBotFlag:              *mumbleBotFlag,
-			GID:                        *discordGID,
-			CID:                        *discordCID,
-			DiscordStartStreamingCount: discordStartStreamingCount,
-			DiscordTextMode:            *discordTextMode,
-			DiscordDisableBotStatus:    *discordDisableBotStatus,
-			DiscordCommand:             discordCommand,
-			ChatBridge:                 *chatBridge,
-			Version:                    version,
-		},
-		Connected:    false,
-		DiscordUsers: make(map[string]bridge.DiscordUser),
-		MumbleUsers:  make(map[string]bool),
+	// Create shared Discord client
+	discordClient, err := bridgelib.NewSharedDiscordClient(*discordToken)
+	if err != nil {
+		log.Fatalln("Failed to create Discord client:", err)
 	}
-
+	
+	// Connect to Discord
+	err = discordClient.Connect()
+	if err != nil {
+		log.Fatalln("Failed to connect to Discord:", err)
+	}
+	defer discordClient.Disconnect()
+	
+	// Create bridge configuration
+	config := &bridgelib.BridgeConfig{
+		Command:                 *command,
+		MumbleAddress:           *mumbleAddr,
+		MumblePort:              *mumblePort,
+		MumbleUsername:          *mumbleUsername,
+		MumblePassword:          *mumblePassword,
+		MumbleChannel:           *mumbleChannel,
+		MumbleSendBuffer:        *mumbleSendBuffer,
+		MumbleDisableText:       *mumbleDisableText,
+		MumbleCommand:           mumbleCommand,
+		MumbleBotFlag:           *mumbleBotFlag,
+		MumbleInsecure:          *mumbleInsecure,
+		MumbleCertificate:       *mumbleCertificate,
+		DiscordGID:              *discordGID,
+		DiscordCID:              *discordCID,
+		DiscordSendBuffer:       *discordSendBuffer,
+		DiscordTextMode:         *discordTextMode,
+		DiscordDisableBotStatus: *discordDisableBotStatus,
+		DiscordCommand:          discordCommand,
+		ChatBridge:              *chatBridge,
+		Mode:                    *mode,
+		Version:                 version,
+	}
+	
+	// Create and start bridge instance
+	bridgeInstance, err := bridgelib.NewBridgeInstance("default", config, discordClient)
+	if err != nil {
+		log.Fatalln("Failed to create bridge instance:", err)
+	}
+	
+	// Start metrics server if enabled
 	if *promEnable {
-		go bridge.StartPromServer(*promPort, b)
+		go bridge.StartPromServer(*promPort, nil) // Pass nil since we're using bridgelib
 	}
-
+	
+	// Set prometheus start time metric
 	bridge.PromApplicationStartTime.SetToCurrentTime()
-
-	// MUMBLE SETUP
-	b.BridgeConfig.MumbleConfig = gumble.NewConfig()
-	b.BridgeConfig.MumbleConfig.Username = *mumbleUsername
-	b.BridgeConfig.MumbleConfig.Password = *mumblePassword
-	b.BridgeConfig.MumbleConfig.AudioInterval = time.Millisecond * 10
-
-	b.MumbleListener = &bridge.MumbleListener{
-		Bridge: b,
+	
+	// Start the bridge
+	if err := bridgeInstance.Start(); err != nil {
+		log.Fatalln("Failed to start bridge:", err)
 	}
-
-	b.BridgeConfig.MumbleConfig.Attach(gumbleutil.Listener{
-		Connect:     b.MumbleListener.MumbleConnect,
-		UserChange:  b.MumbleListener.MumbleUserChange,
-		TextMessage: b.MumbleListener.MumbleTextMessage,
-		// TODO - notify discord on channel change.
-	})
-
-	// DISCORD SETUP
-	b.DiscordSession, err = discordgo.New("Bot " + *discordToken)
-	if err != nil {
-		log.Println(err)
-		return
-	}
-	intents := discordgo.MakeIntent(discordgo.IntentsGuildVoiceStates |
-		discordgo.IntentsGuildMessages |
-		discordgo.IntentsGuildMessageReactions |
-		discordgo.IntentsDirectMessages |
-		discordgo.IntentsDirectMessageReactions |
-		discordgo.IntentsMessageContent)
-	b.DiscordSession.LogLevel = *debug
-	b.DiscordSession.StateEnabled = true
-	b.DiscordSession.Identify.Intents = intents
-	b.DiscordSession.ShouldReconnectOnError = true
-	// register handlers
-	b.DiscordListener = &bridge.DiscordListener{
-		Bridge: b,
-	}
-	b.DiscordSession.AddHandler(b.DiscordListener.MessageCreate)
-	b.DiscordSession.AddHandler(b.DiscordListener.GuildCreate)
-	b.DiscordSession.AddHandler(b.DiscordListener.VoiceUpdate)
-
-	// Open Discord websocket
-	maxRetries := 5
-	for i := 0; i < maxRetries; i++ {
-		err = b.DiscordSession.Open()
-		if err == nil {
-			break
-		}
-		log.Printf("Failed to connect to Discord (attempt %d/%d): %v", i+1, maxRetries, err)
-		time.Sleep(5 * time.Second)
-	}
-	if err != nil {
-		log.Fatalf("Could not connect to Discord after %d attempts: %v", maxRetries, err)
-	}
-	defer func() {
-		if err := b.DiscordSession.Close(); err != nil {
-			log.Println("Error closing Discord session:", err)
-		}
-	}()
-
-	log.Println("Discord Bot Connected")
-	log.Printf("Discord bot looking for command !%v", *command)
-
-	switch *mode {
-	case "auto":
-		log.Println("Starting in automatic mode")
-		b.AutoChanDie = make(chan bool)
-		b.Mode = bridge.BridgeModeAuto
-		b.DiscordChannelID = b.BridgeConfig.CID
-		go b.AutoBridge()
-	case "manual":
-		log.Println("Starting in manual mode")
-		b.Mode = bridge.BridgeModeManual
-	case "constant":
-		log.Println("Starting in constant mode")
-		b.Mode = bridge.BridgeModeConstant
-		b.DiscordChannelID = b.BridgeConfig.CID
-		go func() {
-			for {
-				b.StartBridge()
-				log.Println("Bridge died")
-				time.Sleep(5 * time.Second)
-				log.Println("Restarting")
-			}
-		}()
-	default:
-		log.Fatalln("invalid bridge mode set")
-	}
-
-	go b.DiscordStatusUpdate()
-
-	// Shutdown on OS signal
+	
+	// Wait for termination signal
 	sc := make(chan os.Signal, 1)
 	signal.Notify(sc, syscall.SIGINT, syscall.SIGTERM, os.Interrupt)
 	<-sc
-
+	
 	log.Println("OS Signal. Bot shutting down")
-
-	time.AfterFunc(30*time.Second, func() {
-		os.Exit(99)
-	})
-
-	// Wait or the bridge to exit cleanly
-	b.BridgeMutex.Lock()
-	if b.Connected {
-		// Prevent panic by checking if the channel is closed before sending
-		select {
-		case b.BridgeDie <- true:
-		default:
-		}
-		b.WaitExit.Wait()
+	
+	if err := bridgeInstance.Stop(); err != nil {
+		log.Println("Error stopping bridge:", err)
 	}
-	b.BridgeMutex.Unlock()
 }

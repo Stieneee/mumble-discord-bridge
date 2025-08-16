@@ -153,6 +153,18 @@ type BridgeState struct {
 
 // startBridge established the voice connection
 func (b *BridgeState) StartBridge() {
+	log.Printf("[BRIDGE] StartBridge called, checking connection status")
+	
+	b.BridgeMutex.Lock()
+	if b.Connected {
+		log.Println("[BRIDGE] Bridge already connected, aborting start")
+		b.BridgeMutex.Unlock()
+		return
+	}
+	b.BridgeMutex.Unlock()
+	
+	log.Printf("[BRIDGE] Starting bridge process")
+	
 	b.lock.Lock()
 	defer b.lock.Unlock()
 
@@ -421,24 +433,34 @@ func (b *BridgeState) AutoBridge() {
 func (b *BridgeState) discordSendMessage(msg string) {
 	switch b.BridgeConfig.DiscordTextMode {
 	case "disabled":
+		log.Printf("[MUMBLE→DISCORD] Message not sent - Discord text mode is disabled")
 		return
 	case "channel":
+		log.Printf("[MUMBLE→DISCORD] Sending message to Discord channel: %s", b.DiscordChannelID)
 		_, err := b.DiscordSession.ChannelMessageSend(b.DiscordChannelID, msg)
 		if err != nil {
-			log.Println(err)
+			log.Printf("[MUMBLE→DISCORD] Error sending message to Discord: %v", err)
+		} else {
+			log.Printf("[MUMBLE→DISCORD] Successfully sent message to Discord channel")
 		}
 		return
 	case "user":
+		log.Printf("[MUMBLE→DISCORD] Sending direct messages to %d Discord users", len(b.DiscordUsers))
 		b.DiscordUsersMutex.Lock()
 		defer b.DiscordUsersMutex.Unlock()
 
 		for id := range b.DiscordUsers {
 			du := b.DiscordUsers[id]
 			if du.dm != nil {
+				log.Printf("[MUMBLE→DISCORD] Sending DM to user: %s", du.username)
 				_, err := b.DiscordSession.ChannelMessageSend(du.dm.ID, msg)
 				if err != nil {
-					log.Printf("Error sending message to user %s: %v", du.username, err)
+					log.Printf("[MUMBLE→DISCORD] Error sending DM to user %s: %v", du.username, err)
+				} else {
+					log.Printf("[MUMBLE→DISCORD] Successfully sent DM to user: %s", du.username)
 				}
+			} else {
+				log.Printf("[MUMBLE→DISCORD] No DM channel available for user: %s", du.username)
 			}
 		}
 		return

@@ -4,12 +4,23 @@ Mumble Discord Bridge is an open source Go application to bridge the audio and c
 
 It was built with the idea that people can continue to use the voice application of their choice.
 
+## New BridgeLib Architecture
+
+The project now includes a modular library (`pkg/bridgelib`) that enables multiple bridge instances to share a single Discord client. This solves the issue where text messages would only be delivered to one bridge instance when running multiple bridges.
+
+Key features of the new architecture:
+
+- Shared Discord client for multiple bridge instances
+- Proper message routing between Discord and bridge instances
+- Consistent behavior between single and multi-bridge deployments
+- Used by the patchcord.io multi-bridge service
+
 ## PatchCord.io
 
 Mumble Discord Bridge can be hosted on any server or computer and ships in a Docker container for convenience.
 
 For those looking for SaaS solution take a look at [PatchCord.io](https://patchcord.io).
-PatchCord offers a free tier for those who want to try out Mumble Discord Bridge.
+PatchCord offers a free tier for those who want to try out Mumble Discord Bridge, and paid tiers for those who want to handle larger communities.
 
 ## Usage
 

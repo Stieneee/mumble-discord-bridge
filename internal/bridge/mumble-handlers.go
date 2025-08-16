@@ -116,7 +116,6 @@ func (l *MumbleListener) MumbleTextMessage(e *gumble.TextMessageEvent) {
 		})
 
 	} else {
-
 		l.Bridge.discordSendMessage(e.Sender.Name + ": " + e.Message)
 	}
 }

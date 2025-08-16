@@ -10,6 +10,6 @@ docker-compose.yml
 mdb-local
 LICENSES
 LICENSES.zip
-mumble-dsicrod-bridge
+mumble-discord-bridge
 dist/
 .vscode/settings.json
