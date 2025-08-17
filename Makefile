@@ -22,6 +22,9 @@ test-chart:
 	until pidof test.test; do continue; done;
 	psrecord --plot docs/test-cpu-memory.png $$(pidof mumble-discord-bridge.test)
 
+lint:
+	golangci-lint run
+
 clean:
 	rm -rf dist
 	rm -rf LICENSES.zip LICENSES

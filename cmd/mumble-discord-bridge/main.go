@@ -182,7 +182,11 @@ func main() {
 	if err != nil {
 		log.Fatalln("Failed to connect to Discord:", err)
 	}
-	defer discordClient.Disconnect()
+	defer func() {
+		if err := discordClient.Disconnect(); err != nil {
+			log.Printf("Error disconnecting from Discord: %v", err)
+		}
+	}()
 	
 	// Create bridge configuration
 	config := &bridgelib.BridgeConfig{
