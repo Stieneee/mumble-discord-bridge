@@ -172,7 +172,7 @@ func main() {
 	// BRIDGE SETUP
 
 	// Create shared Discord client
-	discordClient, err := bridgelib.NewSharedDiscordClient(*discordToken)
+	discordClient, err := bridgelib.NewSharedDiscordClient(*discordToken, nil)
 	if err != nil {
 		log.Fatalln("Failed to create Discord client:", err)
 	}

@@ -1,7 +1,7 @@
 package bridge
 
 import (
-	"log"
+	"fmt"
 	"net/http"
 	"strconv"
 
@@ -135,28 +135,28 @@ var (
 )
 
 func StartPromServer(port int, b *BridgeState) {
-	log.Println("Starting Metrics Server")
+	b.Logger.Info("METRICS_SERVER", "Starting Metrics Server")
 	http.Handle("/metrics", promhttp.Handler())
 	http.HandleFunc("/live", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		if _, err := w.Write([]byte("OK")); err != nil {
-			log.Println("Error writing response:", err)
+			b.Logger.Error("METRICS_SERVER", fmt.Sprintf("Error writing response: %v", err))
 		}
 	})
 	http.HandleFunc("/ready", func(w http.ResponseWriter, r *http.Request) {
 		if b.Connected {
 			w.WriteHeader(http.StatusOK)
 			if _, err := w.Write([]byte("OK")); err != nil {
-				log.Println("Error writing response:", err)
+				b.Logger.Error("METRICS_SERVER", fmt.Sprintf("Error writing response: %v", err))
 			}
 		} else {
 			w.WriteHeader(http.StatusServiceUnavailable)
 			if _, err := w.Write([]byte("Disconnected")); err != nil {
-				log.Println("Error writing response:", err)
+				b.Logger.Error("METRICS_SERVER", fmt.Sprintf("Error writing response: %v", err))
 			}
 		}
 	})
 	if err := http.ListenAndServe(":"+strconv.Itoa(port), nil); err != nil {
-		log.Printf("Error starting metrics server: %v", err)
+		b.Logger.Error("METRICS_SERVER", fmt.Sprintf("Error starting metrics server: %v", err))
 	}
 }

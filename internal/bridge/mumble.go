@@ -2,13 +2,13 @@ package bridge
 
 import (
 	"context"
-	"log"
-	"strconv"
+	"fmt"
 	"sync"
 	"time"
 
 	"github.com/stieneee/gumble/gumble"
 	_ "github.com/stieneee/gumble/opus"
+	"github.com/stieneee/mumble-discord-bridge/pkg/logger"
 	"github.com/stieneee/mumble-discord-bridge/pkg/sleepct"
 )
 
@@ -17,12 +17,14 @@ type MumbleDuplex struct {
 	mutex           sync.Mutex
 	streams         []chan gumble.AudioBuffer
 	mumbleSleepTick sleepct.SleepCT
+	logger          logger.Logger
 }
 
-func NewMumbleDuplex() *MumbleDuplex {
+func NewMumbleDuplex(log logger.Logger) *MumbleDuplex {
 	return &MumbleDuplex{
 		streams:         make([]chan gumble.AudioBuffer, 0),
 		mumbleSleepTick: sleepct.SleepCT{},
+		logger:          log,
 	}
 }
 
@@ -39,7 +41,7 @@ func (m *MumbleDuplex) OnAudioStream(e *gumble.AudioStreamEvent) {
 
 	go func() {
 		name := e.User.Name
-		log.Println("New mumble audio stream", name)
+		m.logger.Info("MUMBLE_STREAM", fmt.Sprintf("New mumble audio stream: %s", name))
 		for p := range e.C {
 			// log.Println("audio packet", p.Sender.Name, len(p.AudioBuffer))
 
@@ -50,7 +52,7 @@ func (m *MumbleDuplex) OnAudioStream(e *gumble.AudioStreamEvent) {
 			promReceivedMumblePackets.Inc()
 			m.mumbleSleepTick.Notify()
 		}
-		log.Println("Mumble audio stream ended", name)
+		m.logger.Info("MUMBLE_STREAM", fmt.Sprintf("Mumble audio stream ended: %s", name))
 		//remove the MumbleStream from the array
 		m.mutex.Lock()
 		defer m.mutex.Unlock()
@@ -76,7 +78,7 @@ func (m *MumbleDuplex) fromMumbleMixer(ctx context.Context, cancel context.Cance
 	for {
 		select {
 		case <-ctx.Done():
-			log.Println("Stopping From Mumble Mixer")
+			m.logger.Info("MUMBLE_MIXER", "Stopping From Mumble Mixer")
 			return
 		default:
 		}
@@ -118,20 +120,20 @@ func (m *MumbleDuplex) fromMumbleMixer(ctx context.Context, cancel context.Cance
 			case toDiscord <- outBuf:
 				{
 					if droppingPackets {
-						log.Println("Discord buffer ok, total packets dropped " + strconv.Itoa(droppingPacketCount))
+						m.logger.Info("MUMBLE_MIXER", fmt.Sprintf("Discord buffer ok, total packets dropped: %d", droppingPacketCount))
 						droppingPackets = false
 					}
 				}
 			default:
 				if !droppingPackets {
-					log.Println("Error: toDiscord buffer full. Dropping packets")
+					m.logger.Warn("MUMBLE_MIXER", "toDiscord buffer full. Dropping packets")
 					droppingPackets = true
 					droppingPacketCount = 0
 				}
 				droppingPacketCount++
 				promToDiscordDropped.Inc()
 				if droppingPacketCount > 250 {
-					log.Println("Discord Timeout")
+					m.logger.Error("MUMBLE_MIXER", "Discord Timeout")
 					cancel()
 				}
 			}

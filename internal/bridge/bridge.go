@@ -4,15 +4,14 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
-	"log"
 	"net"
 	"os"
-	"strconv"
 	"sync"
 	"time"
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/stieneee/gumble/gumble"
+	"github.com/stieneee/mumble-discord-bridge/pkg/logger"
 )
 
 type DiscordUser struct {
@@ -149,21 +148,24 @@ type BridgeState struct {
 
 	// Start time of the bridge
 	StartTime time.Time
+	
+	// Logger for this bridge
+	Logger logger.Logger
 }
 
 // startBridge established the voice connection
 func (b *BridgeState) StartBridge() {
-	log.Printf("[BRIDGE] StartBridge called, checking connection status")
+	b.Logger.Debug("BRIDGE", "StartBridge called, checking connection status")
 	
 	b.BridgeMutex.Lock()
 	if b.Connected {
-		log.Println("[BRIDGE] Bridge already connected, aborting start")
+		b.Logger.Info("BRIDGE", "Bridge already connected, aborting start")
 		b.BridgeMutex.Unlock()
 		return
 	}
 	b.BridgeMutex.Unlock()
 	
-	log.Printf("[BRIDGE] Starting bridge process")
+	b.Logger.Info("BRIDGE", "Starting bridge process")
 	
 	b.lock.Lock()
 	defer b.lock.Unlock()
@@ -184,35 +186,35 @@ func (b *BridgeState) StartBridge() {
 	b.StartTime = time.Now()
 
 	// DISCORD Connect Voice
-	log.Println("Attempting to join Discord voice channel")
+	b.Logger.Debug("BRIDGE", "Attempting to join Discord voice channel")
 	if b.DiscordChannelID == "" {
-		log.Println("Tried to start bridge but no Discord channel specified")
+		b.Logger.Error("BRIDGE", "Tried to start bridge but no Discord channel specified")
 		return
 	}
 	b.DiscordVoice, err = b.DiscordSession.ChannelVoiceJoin(b.BridgeConfig.GID, b.DiscordChannelID, false, false)
 
 	if err != nil {
-		log.Println(err)
+		b.Logger.Error("BRIDGE", fmt.Sprintf("Discord voice connection error: %v", err))
 		if err := b.DiscordVoice.Disconnect(); err != nil {
-			log.Println("Error disconnecting from Discord voice:", err)
+			b.Logger.Error("BRIDGE", fmt.Sprintf("Error disconnecting from Discord voice: %v", err))
 		}
 		return
 	}
 	defer func() {
 		if err := b.DiscordVoice.Disconnect(); err != nil {
-			log.Println("Error disconnecting from Discord voice:", err)
+			b.Logger.Error("BRIDGE", fmt.Sprintf("Error disconnecting from Discord voice: %v", err))
 		}
 	}()
 	defer func() {
 		if err := b.DiscordVoice.Speaking(false); err != nil {
-			log.Println("Error setting speaking status to false:", err)
+			b.Logger.Error("BRIDGE", fmt.Sprintf("Error setting speaking status to false: %v", err))
 		}
 	}()
-	log.Println("Discord Voice Connected")
+	b.Logger.Info("BRIDGE", "Discord Voice Connected")
 
 	// MUMBLE Connect
 
-	b.MumbleStream = NewMumbleDuplex()
+	b.MumbleStream = NewMumbleDuplex(b.Logger)
 	det := b.BridgeConfig.MumbleConfig.AudioListeners.Attach(b.MumbleStream)
 	defer det.Detach()
 
@@ -235,19 +237,19 @@ func (b *BridgeState) StartBridge() {
 		b.BridgeConfig.MumbleConfig.ClientType = 1 // BOT
 	}
 
-	log.Println("Attempting to join Mumble")
+	b.Logger.Debug("BRIDGE", "Attempting to join Mumble")
 	b.MumbleClient, err = gumble.DialWithDialer(new(net.Dialer), b.BridgeConfig.MumbleAddr, b.BridgeConfig.MumbleConfig, &tlsConfig)
 
 	if err != nil {
-		log.Println(err)
+		b.Logger.Error("BRIDGE", fmt.Sprintf("Mumble connection error: %v", err))
 		return
 	}
 	defer func() {
 		if err := b.MumbleClient.Disconnect(); err != nil {
-			log.Println("Error disconnecting from Mumble:", err)
+			b.Logger.Error("BRIDGE", fmt.Sprintf("Error disconnecting from Mumble: %v", err))
 		}
 	}()
-	log.Println("Mumble Connected")
+	b.Logger.Info("BRIDGE", "Mumble Connected")
 
 	// Shared Channels
 	// Shared channels pass PCM information in 10ms chunks [480]int16
@@ -298,9 +300,9 @@ func (b *BridgeState) StartBridge() {
 			case <-ticker.C:
 				if b.MumbleClient == nil || b.MumbleClient.State() != 2 {
 					if b.MumbleClient != nil {
-						log.Println("Lost mumble connection " + strconv.Itoa(int(b.MumbleClient.State())))
+						b.Logger.Warn("BRIDGE", fmt.Sprintf("Lost mumble connection state: %d", int(b.MumbleClient.State())))
 					} else {
-						log.Println("Lost mumble connection due to bridge dieing")
+						b.Logger.Info("BRIDGE", "Lost mumble connection due to bridge dieing")
 					}
 					cancel()
 				}
@@ -317,9 +319,9 @@ func (b *BridgeState) StartBridge() {
 	// Hold until cancelled or external die request
 	select {
 	case <-ctx.Done():
-		log.Println("Bridge internal context cancel")
+		b.Logger.Debug("BRIDGE", "Bridge internal context cancel")
 	case <-b.BridgeDie:
-		log.Println("Bridge die request received")
+		b.Logger.Debug("BRIDGE", "Bridge die request received")
 		cancel()
 	}
 
@@ -328,7 +330,7 @@ func (b *BridgeState) StartBridge() {
 	b.BridgeMutex.Unlock()
 
 	wg.Wait()
-	log.Println("Terminating Bridge")
+	b.Logger.Info("BRIDGE", "Terminating Bridge")
 	b.MumbleUsersMutex.Lock()
 	b.MumbleUsers = make(map[string]bool)
 	b.MumbleUsersMutex.Unlock()
@@ -339,7 +341,7 @@ func (b *BridgeState) DiscordStatusUpdate() {
 	if b.BridgeConfig.DiscordDisableBotStatus {
 		// force clear any previous status
 		if err := b.DiscordSession.UpdateStatusComplex(discordgo.UpdateStatusData{}); err != nil {
-			log.Println("Error updating Discord status:", err)
+			b.Logger.Error("BRIDGE", fmt.Sprintf("Error updating Discord status: %v", err))
 		}
 	}
 
@@ -352,10 +354,10 @@ func (b *BridgeState) DiscordStatusUpdate() {
 		status := ""
 
 		if err != nil {
-			log.Printf("error pinging mumble server %v\n", err)
+			b.Logger.Error("BRIDGE", fmt.Sprintf("Error pinging mumble server: %v", err))
 			if !b.BridgeConfig.DiscordDisableBotStatus {
 				if err := b.DiscordSession.UpdateListeningStatus("an error pinging mumble"); err != nil {
-					log.Println("Error updating Discord listening status:", err)
+					b.Logger.Error("BRIDGE", fmt.Sprintf("Error updating Discord listening status: %v", err))
 				}
 			}
 		} else {
@@ -381,7 +383,7 @@ func (b *BridgeState) DiscordStatusUpdate() {
 			b.MumbleUsersMutex.Unlock()
 			if !b.BridgeConfig.DiscordDisableBotStatus {
 				if err := b.DiscordSession.UpdateListeningStatus(status); err != nil {
-					log.Println("Error updating Discord listening status:", err)
+					b.Logger.Error("BRIDGE", fmt.Sprintf("Error updating Discord listening status: %v", err))
 				}
 			}
 		}
@@ -399,14 +401,14 @@ func (b *BridgeState) DiscordStatusUpdate() {
 // when there is at least one user on both, starts up the bridge
 // when there are no users on either side, kills the bridge
 func (b *BridgeState) AutoBridge() {
-	log.Println("Beginning auto mode")
+	b.Logger.Info("BRIDGE", "Beginning auto mode")
 	ticker := time.NewTicker(3 * time.Second)
 
 	for {
 		select {
 		case <-ticker.C:
 		case <-b.AutoChanDie:
-			log.Println("Ending automode")
+			b.Logger.Info("BRIDGE", "Ending automode")
 			return
 		}
 
@@ -415,11 +417,11 @@ func (b *BridgeState) AutoBridge() {
 		b.BridgeMutex.Lock()
 
 		if !b.Connected && b.MumbleUserCount > 0 && len(b.DiscordUsers) > 0 {
-			log.Println("Users detected in mumble and discord, bridging")
+			b.Logger.Info("BRIDGE", "Users detected in mumble and discord, bridging")
 			go b.StartBridge()
 		}
 		if b.Connected && b.MumbleUserCount == 0 && len(b.DiscordUsers) <= 1 {
-			log.Println("No one online, killing bridge")
+			b.Logger.Info("BRIDGE", "No one online, killing bridge")
 			b.BridgeDie <- true
 		}
 
@@ -433,39 +435,39 @@ func (b *BridgeState) AutoBridge() {
 func (b *BridgeState) discordSendMessage(msg string) {
 	switch b.BridgeConfig.DiscordTextMode {
 	case "disabled":
-		log.Printf("[MUMBLE→DISCORD] Message not sent - Discord text mode is disabled")
+		b.Logger.Debug("MUMBLE→DISCORD", "Message not sent - Discord text mode is disabled")
 		return
 	case "channel":
-		log.Printf("[MUMBLE→DISCORD] Sending message to Discord channel: %s", b.DiscordChannelID)
+		b.Logger.Debug("MUMBLE→DISCORD", fmt.Sprintf("Sending message to Discord channel: %s", b.DiscordChannelID))
 		_, err := b.DiscordSession.ChannelMessageSend(b.DiscordChannelID, msg)
 		if err != nil {
-			log.Printf("[MUMBLE→DISCORD] Error sending message to Discord: %v", err)
+			b.Logger.Error("MUMBLE→DISCORD", fmt.Sprintf("Error sending message to Discord: %v", err))
 		} else {
-			log.Printf("[MUMBLE→DISCORD] Successfully sent message to Discord channel")
+			b.Logger.Debug("MUMBLE→DISCORD", "Successfully sent message to Discord channel")
 		}
 		return
 	case "user":
-		log.Printf("[MUMBLE→DISCORD] Sending direct messages to %d Discord users", len(b.DiscordUsers))
+		b.Logger.Debug("MUMBLE→DISCORD", fmt.Sprintf("Sending direct messages to %d Discord users", len(b.DiscordUsers)))
 		b.DiscordUsersMutex.Lock()
 		defer b.DiscordUsersMutex.Unlock()
 
 		for id := range b.DiscordUsers {
 			du := b.DiscordUsers[id]
 			if du.dm != nil {
-				log.Printf("[MUMBLE→DISCORD] Sending DM to user: %s", du.username)
+				b.Logger.Debug("MUMBLE→DISCORD", fmt.Sprintf("Sending DM to user: %s", du.username))
 				_, err := b.DiscordSession.ChannelMessageSend(du.dm.ID, msg)
 				if err != nil {
-					log.Printf("[MUMBLE→DISCORD] Error sending DM to user %s: %v", du.username, err)
+					b.Logger.Error("MUMBLE→DISCORD", fmt.Sprintf("Error sending DM to user %s: %v", du.username, err))
 				} else {
-					log.Printf("[MUMBLE→DISCORD] Successfully sent DM to user: %s", du.username)
+					b.Logger.Debug("MUMBLE→DISCORD", fmt.Sprintf("Successfully sent DM to user: %s", du.username))
 				}
 			} else {
-				log.Printf("[MUMBLE→DISCORD] No DM channel available for user: %s", du.username)
+				b.Logger.Debug("MUMBLE→DISCORD", fmt.Sprintf("No DM channel available for user: %s", du.username))
 			}
 		}
 		return
 	default:
-		log.Println("Invalid DiscordTextMode")
+		b.Logger.Warn("MUMBLE→DISCORD", "Invalid DiscordTextMode")
 		return
 	}
 }

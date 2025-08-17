@@ -2,7 +2,7 @@ package bridgelib
 
 import (
 	"errors"
-	"log"
+	"fmt"
 	"strconv"
 	"strings"
 	"sync"
@@ -59,6 +59,9 @@ type BridgeConfig struct {
 	ChatBridge bool
 	Mode       string
 	Version    string
+	
+	// Logger for the bridge instance
+	Logger Logger
 }
 
 // BridgeInstance represents a single bridge instance
@@ -75,6 +78,9 @@ type BridgeInstance struct {
 	// Instance ID
 	ID string
 
+	// Logger for this bridge instance
+	logger Logger
+
 	// The lock for protecting access to the bridge
 	mu sync.Mutex
 
@@ -87,15 +93,32 @@ type BridgeInstance struct {
 
 // NewBridgeInstance creates a new bridge instance
 func NewBridgeInstance(id string, config *BridgeConfig, discordProvider DiscordProvider) (*BridgeInstance, error) {
+	// Use provided logger or create a default console logger
+	logger := config.Logger
+	if logger == nil {
+		logger = NewConsoleLogger()
+	}
+	
+	// Create bridge-specific logger with the bridge ID
+	bridgeLogger := logger.WithBridgeID(id)
+	
+	bridgeLogger.Debug("BRIDGE_INIT", "Starting bridge instance creation")
+	bridgeLogger.Debug("BRIDGE_INIT", fmt.Sprintf("Configuration: Mumble=%s:%d, Discord=%s:%s, Mode=%s", 
+		config.MumbleAddress, config.MumblePort, config.DiscordGID, config.DiscordCID, config.Mode))
+	
 	// Create the bridge instance
 	inst := &BridgeInstance{
 		ID:              id,
 		config:          config,
 		discordProvider: discordProvider,
+		logger:          bridgeLogger,
 		stopChan:        make(chan bool),
 	}
+	
+	bridgeLogger.Debug("BRIDGE_INIT", "Bridge instance struct created successfully")
 
 	// Create the internal bridge state
+	bridgeLogger.Debug("BRIDGE_INIT", "Creating internal bridge state")
 	inst.State = &bridge.BridgeState{
 		BridgeConfig: &bridge.BridgeConfig{
 			Command:                    config.Command,
@@ -119,32 +142,42 @@ func NewBridgeInstance(id string, config *BridgeConfig, discordProvider DiscordP
 		Connected:    false,
 		DiscordUsers: make(map[string]bridge.DiscordUser),
 		MumbleUsers:  make(map[string]bool),
+		Logger:       bridgeLogger,
 	}
 
 	// Setup Mumble config
+	bridgeLogger.Debug("BRIDGE_INIT", "Setting up Mumble configuration")
 	inst.State.BridgeConfig.MumbleConfig = gumble.NewConfig()
 	inst.State.BridgeConfig.MumbleConfig.Username = config.MumbleUsername
 	inst.State.BridgeConfig.MumbleConfig.Password = config.MumblePassword
 	inst.State.BridgeConfig.MumbleConfig.AudioInterval = time.Millisecond * 10
+	bridgeLogger.Debug("BRIDGE_INIT", fmt.Sprintf("Mumble config created for user: %s", config.MumbleUsername))
 
 	// Create the Mumble listener
+	bridgeLogger.Debug("BRIDGE_INIT", "Creating Mumble listener")
 	inst.State.MumbleListener = &bridge.MumbleListener{
 		Bridge: inst.State,
 	}
 
 	// Attach the Mumble listener
+	bridgeLogger.Debug("BRIDGE_INIT", "Setting up Mumble event handlers")
 	inst.setupMumbleListeners()
+	bridgeLogger.Debug("BRIDGE_INIT", "Mumble listeners attached successfully")
 
 	// Set the Discord session from the provider
+	bridgeLogger.Debug("BRIDGE_INIT", "Getting Discord session from provider")
 	inst.State.DiscordSession = inst.discordProvider.GetSession()
+	bridgeLogger.Debug("BRIDGE_INIT", "Discord session obtained successfully")
 
 	// Create the Discord listener
+	bridgeLogger.Debug("BRIDGE_INIT", "Creating Discord listener")
 	inst.State.DiscordListener = &bridge.DiscordListener{
 		Bridge: inst.State,
 	}
+	bridgeLogger.Debug("BRIDGE_INIT", "Discord listener created successfully")
 	
 	// Register Discord event handlers
-	log.Printf("[BRIDGELIB] Registering Discord event handlers for bridge: %s", id)
+	bridgeLogger.Info("BRIDGE_SETUP", "Registering Discord event handlers")
 	
 	// Register with the Discord session
 	inst.State.DiscordSession.AddHandler(inst.State.DiscordListener.MessageCreate)
@@ -153,22 +186,24 @@ func NewBridgeInstance(id string, config *BridgeConfig, discordProvider DiscordP
 	
 	// Also register with the shared client's routing system
 	if sharedClient, ok := inst.discordProvider.(*SharedDiscordClient); ok {
-		log.Printf("[BRIDGELIB] Registering with SharedDiscordClient's message router for GID: %s, CID: %s", 
-			config.DiscordGID, config.DiscordCID)
+		bridgeLogger.Info("BRIDGE_SETUP", fmt.Sprintf("Registering with SharedDiscordClient's message router for GID: %s, CID: %s", config.DiscordGID, config.DiscordCID))
 		
 		sharedClient.RegisterMessageHandler(
 			config.DiscordGID, 
 			config.DiscordCID, 
 			inst.State.DiscordListener.MessageCreate)
 			
-		log.Printf("[BRIDGELIB] Message handler registered successfully")
+		bridgeLogger.Info("BRIDGE_SETUP", "Message handler registered successfully")
 	} else {
-		log.Printf("[BRIDGELIB] Not using SharedDiscordClient, message routing will use global handlers only")
+		bridgeLogger.Info("BRIDGE_SETUP", "Not using SharedDiscordClient, message routing will use global handlers only")
 	}
 
 	// Set the bridge mode
+	bridgeLogger.Debug("BRIDGE_INIT", fmt.Sprintf("Setting bridge mode to: %s", config.Mode))
 	inst.setBridgeMode(config.Mode)
+	bridgeLogger.Debug("BRIDGE_INIT", fmt.Sprintf("Bridge mode set to: %s", inst.State.Mode.String()))
 
+	bridgeLogger.Info("BRIDGE_INIT", "Bridge instance created successfully")
 	return inst, nil
 }
 
@@ -188,34 +223,36 @@ func (b *BridgeInstance) Start() error {
 	defer b.mu.Unlock()
 
 	// Reset the stopped flag and create new stopChan if previously stopped
+	b.logger.Debug("BRIDGE_START", fmt.Sprintf("Bridge stopped state: %v", b.stopped))
 	if b.stopped {
 		b.stopped = false
 		b.stopChan = make(chan bool)
-		log.Printf("[BRIDGELIB] Resetting stopped bridge for restart: %s", b.ID)
+		b.logger.Info("BRIDGE_START", "Resetting stopped bridge for restart")
 	}
 
-	log.Printf("[BRIDGELIB] Starting bridge: %s (Discord GID: %s, CID: %s)", 
-		b.ID, b.config.DiscordGID, b.config.DiscordCID)
+	b.logger.Info("BRIDGE_START", fmt.Sprintf("Starting bridge (Discord GID: %s, CID: %s)", b.config.DiscordGID, b.config.DiscordCID))
 	
 	// Log important configuration values
-	log.Printf("[BRIDGELIB] Bridge configuration: ChatBridge=%v, MumbleDisableText=%v, DiscordTextMode=%s",
-		b.config.ChatBridge, b.config.MumbleDisableText, b.config.DiscordTextMode)
+	b.logger.Info("BRIDGE_CONFIG", fmt.Sprintf("ChatBridge=%v, MumbleDisableText=%v, DiscordTextMode=%s", b.config.ChatBridge, b.config.MumbleDisableText, b.config.DiscordTextMode))
 		
 	// Set the Discord channel ID
+	b.logger.Debug("BRIDGE_START", fmt.Sprintf("Setting Discord channel ID: %s", b.config.DiscordCID))
 	b.State.DiscordChannelID = b.config.DiscordCID
 	
 	// Validate essential configuration
+	b.logger.Debug("BRIDGE_START", "Validating Discord session")
 	if b.State.DiscordSession == nil {
+		b.logger.Error("BRIDGE_START", "Discord session is nil - cannot start bridge")
 		return errors.New("discord session is nil")
 	}
+	b.logger.Debug("BRIDGE_START", "Discord session validation passed")
 	
 	// Ensure Discord event handlers are properly registered
-	log.Printf("[BRIDGELIB] Verifying Discord event handlers for bridge: %s", b.ID)
+	b.logger.Info("BRIDGE_VERIFY", "Verifying Discord event handlers")
 	
 	// Re-register with the shared client's routing system to ensure handlers are registered
 	if sharedClient, ok := b.discordProvider.(*SharedDiscordClient); ok {
-		log.Printf("[BRIDGELIB] Re-registering with SharedDiscordClient's message router for GID: %s, CID: %s", 
-			b.config.DiscordGID, b.config.DiscordCID)
+		b.logger.Info("BRIDGE_VERIFY", fmt.Sprintf("Re-registering with SharedDiscordClient's message router for GID: %s, CID: %s", b.config.DiscordGID, b.config.DiscordCID))
 		
 		// First unregister any existing handlers to avoid duplicates
 		// Then register the handler
@@ -230,32 +267,38 @@ func (b *BridgeInstance) Start() error {
 			b.config.DiscordCID, 
 			b.State.DiscordListener.MessageCreate)
 			
-		log.Printf("[BRIDGELIB] Message handler re-registered successfully")
+		b.logger.Info("BRIDGE_VERIFY", "Message handler re-registered successfully")
 	} else {
-		log.Printf("[BRIDGELIB] WARNING: Not using SharedDiscordClient, message routing will use global handlers only")
+		b.logger.Warn("BRIDGE_VERIFY", "Not using SharedDiscordClient, message routing will use global handlers only")
 	}
 
 	// Start the bridge based on its mode
-	log.Printf("[BRIDGELIB] Starting bridge in mode: %s", b.State.Mode)
+	b.logger.Info("BRIDGE_MODE", fmt.Sprintf("Starting bridge in mode: %s", b.State.Mode))
 	
 	switch b.State.Mode {
 	case bridge.BridgeModeAuto:
-		log.Printf("[BRIDGELIB] Using Auto mode")
+		b.logger.Info("BRIDGE_MODE", "Using Auto mode")
+		b.logger.Debug("BRIDGE_MODE", "Creating auto channel die signal")
 		b.State.AutoChanDie = make(chan bool)
+		b.logger.Debug("BRIDGE_MODE", "Starting auto bridge goroutine")
 		go b.State.AutoBridge()
+		b.logger.Debug("BRIDGE_MODE", "Auto bridge goroutine started")
 	case bridge.BridgeModeConstant:
-		log.Printf("[BRIDGELIB] Using Constant mode")
+		b.logger.Info("BRIDGE_MODE", "Using Constant mode")
+		b.logger.Debug("BRIDGE_MODE", "Starting constant mode goroutine")
 		go func() {
 			for {
 				select {
 				case <-b.stopChan:
-					log.Printf("[BRIDGELIB] Received stop signal, exiting constant mode loop")
+					b.logger.Info("BRIDGE_STOP", "Received stop signal, exiting constant mode loop")
 					return
 				default:
-					log.Printf("[BRIDGELIB] Starting bridge in constant mode")
+					b.logger.Info("BRIDGE_MODE", "Starting bridge in constant mode")
+					b.logger.Debug("BRIDGE_START", "Calling State.StartBridge()")
 					
 					// Start the bridge and verify it connected successfully
 					b.State.StartBridge()
+					b.logger.Debug("BRIDGE_START", "State.StartBridge() returned")
 					
 					// Check if the bridge is connected
 					b.State.BridgeMutex.Lock()
@@ -263,21 +306,24 @@ func (b *BridgeInstance) Start() error {
 					b.State.BridgeMutex.Unlock()
 					
 					if connected {
-						log.Printf("[BRIDGELIB] Bridge successfully connected in constant mode")
+						b.logger.Info("BRIDGE_STATUS", "Bridge successfully connected in constant mode")
 					} else {
-						log.Printf("[BRIDGELIB] WARNING: Bridge failed to connect in constant mode")
+						b.logger.Warn("BRIDGE_STATUS", "Bridge failed to connect in constant mode")
 					}
 					
-					log.Printf("[BRIDGELIB] Bridge exited, waiting 5 seconds before restarting")
+					b.logger.Info("BRIDGE_STATUS", "Bridge exited, waiting 5 seconds before restarting")
 					time.Sleep(5 * time.Second)
 				}
 			}
 		}()
 	case bridge.BridgeModeManual:
-		log.Printf("[BRIDGELIB] Using Manual mode")
+		b.logger.Info("BRIDGE_MODE", "Using Manual mode")
+		b.logger.Debug("BRIDGE_MODE", "Starting manual mode goroutine")
 		go func() {
-			log.Printf("[BRIDGELIB] Starting bridge in manual mode")
+			b.logger.Info("BRIDGE_MODE", "Starting bridge in manual mode")
+			b.logger.Debug("BRIDGE_START", "Calling State.StartBridge() in manual mode")
 			b.State.StartBridge()
+			b.logger.Debug("BRIDGE_START", "State.StartBridge() returned in manual mode")
 			
 			// Check if the bridge is connected
 			b.State.BridgeMutex.Lock()
@@ -285,12 +331,12 @@ func (b *BridgeInstance) Start() error {
 			b.State.BridgeMutex.Unlock()
 			
 			if connected {
-				log.Printf("[BRIDGELIB] Bridge successfully connected in manual mode")
+				b.logger.Info("BRIDGE_STATUS", "Bridge successfully connected in manual mode")
 			} else {
-				log.Printf("[BRIDGELIB] WARNING: Bridge failed to connect in manual mode")
+				b.logger.Warn("BRIDGE_STATUS", "Bridge failed to connect in manual mode")
 			}
 			
-			log.Printf("[BRIDGELIB] Bridge in manual mode exited")
+			b.logger.Info("BRIDGE_STATUS", "Bridge in manual mode exited")
 		}()
 	}
 
@@ -302,31 +348,45 @@ func (b *BridgeInstance) Stop() error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
+	b.logger.Debug("BRIDGE_STOP", "Stop method called")
+	
 	// Check if already stopped
 	if b.stopped {
-		log.Printf("[BRIDGELIB] Bridge %s is already stopped", b.ID)
+		b.logger.Info("BRIDGE_STOP", "Bridge is already stopped")
 		return nil
 	}
 
-	log.Printf("[BRIDGELIB] Stopping bridge: %s", b.ID)
+	b.logger.Info("BRIDGE_STOP", "Stopping bridge")
+	b.logger.Debug("BRIDGE_STOP", "Closing stop channel")
 	
 	// Signal to the bridge to stop
 	close(b.stopChan)
 	b.stopped = true
+	b.logger.Debug("BRIDGE_STOP", "Bridge marked as stopped")
 
 	// Stop the auto bridge if it's running
 	if b.State.Mode == bridge.BridgeModeAuto && b.State.AutoChanDie != nil {
+		b.logger.Debug("BRIDGE_STOP", "Sending stop signal to auto bridge")
 		b.State.AutoChanDie <- true
+		b.logger.Debug("BRIDGE_STOP", "Auto bridge stop signal sent")
 	}
 
 	// Stop the bridge if it's connected
+	b.logger.Debug("BRIDGE_STOP", "Checking bridge connection status")
 	b.State.BridgeMutex.Lock()
-	if b.State.Connected {
+	connected := b.State.Connected
+	if connected {
+		b.logger.Debug("BRIDGE_STOP", "Bridge is connected, sending die signal")
 		b.State.BridgeDie <- true
+		b.logger.Debug("BRIDGE_STOP", "Waiting for bridge exit")
 		b.State.WaitExit.Wait()
+		b.logger.Debug("BRIDGE_STOP", "Bridge exit completed")
+	} else {
+		b.logger.Debug("BRIDGE_STOP", "Bridge is not connected, skipping die signal")
 	}
 	b.State.BridgeMutex.Unlock()
 
+	b.logger.Info("BRIDGE_STOP", "Bridge stopped successfully")
 	return nil
 }
 

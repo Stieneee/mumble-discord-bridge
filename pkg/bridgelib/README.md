@@ -29,8 +29,8 @@ import (
 )
 
 func main() {
-    // Create shared Discord client
-    discordClient, err := bridgelib.NewSharedDiscordClient("YOUR_DISCORD_BOT_TOKEN")
+    // Create shared Discord client (nil uses default console logger)
+    discordClient, err := bridgelib.NewSharedDiscordClient("YOUR_DISCORD_BOT_TOKEN", nil)
     if err != nil {
         log.Fatalln("Failed to create Discord client:", err)
     }

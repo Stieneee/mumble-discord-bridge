@@ -44,6 +44,8 @@ func NewDiscordDuplex(b *BridgeState) *DiscordDuplex {
 // OnError gets called by dgvoice when an error is encountered.
 // By default logs to STDERR
 var OnError = func(str string, err error) {
+	// OnError function still uses log for compatibility
+	// but individual bridge instances will use their own logger
 	prefix := "dgVoice: " + str
 
 	if err != nil {
@@ -100,13 +102,13 @@ func (dd *DiscordDuplex) discordSendPCM(ctx context.Context, cancel context.Canc
 			if lastReady {
 				OnError(fmt.Sprintf("Discordgo not ready for opus packets. %+v : %+v", dd.Bridge.DiscordVoice.Ready, dd.Bridge.DiscordVoice.OpusSend), nil)
 				readyTimeout = time.AfterFunc(30*time.Second, func() {
-					log.Println("Debug: Set ready timeout")
+					dd.Bridge.Logger.Debug("DISCORD_SEND", "Set ready timeout")
 					cancel()
 				})
 				lastReady = false
 			}
 		} else if !lastReady {
-			fmt.Println("Discordgo ready to send opus packets")
+			dd.Bridge.Logger.Info("DISCORD_SEND", "Discordgo ready to send opus packets")
 			lastReady = true
 			readyTimeout.Stop()
 		} else {
@@ -120,7 +122,7 @@ func (dd *DiscordDuplex) discordSendPCM(ctx context.Context, cancel context.Canc
 		dd.Bridge.DiscordVoice.RUnlock()
 	}
 
-	defer log.Println("Stopping Discord send PCM")
+	defer dd.Bridge.Logger.Info("DISCORD_SEND", "Stopping Discord send PCM")
 
 	for {
 		select {
@@ -140,14 +142,14 @@ func (dd *DiscordDuplex) discordSendPCM(ctx context.Context, cancel context.Canc
 				go func() {
 					// This call will prevent discordSendPCM from exiting if the discord connection is lost
 					if err := dd.Bridge.DiscordVoice.Speaking(true); err != nil {
-						log.Println("Error setting speaking status to true:", err)
+						dd.Bridge.Logger.Error("DISCORD_SEND", fmt.Sprintf("Error setting speaking status to true: %v", err))
 					}
 					done <- true
 				}()
 				select {
 				case <-done:
 				case <-time.After(5 * time.Second):
-					fmt.Println("Discord speaking timeout :(")
+					dd.Bridge.Logger.Error("DISCORD_SEND", "Discord speaking timeout")
 					cancel()
 					return
 				case <-ctx.Done():
@@ -176,7 +178,7 @@ func (dd *DiscordDuplex) discordSendPCM(ctx context.Context, cancel context.Canc
 				// The problem delays result in choppy or stuttering sounds, especially when the silence frames are introduced into the opus frames below.
 				// Multiple short cycle delays can result in a discord rate limiter being trigger due to of multiple JSON speaking/not-speaking state changes
 				if time.Since(speakingStart).Milliseconds() < 50 {
-					log.Println("Warning: Short Mumble to Discord speaking cycle. Consider increaseing the size of the to Discord jitter buffer.")
+					dd.Bridge.Logger.Warn("DISCORD_SEND", "Short Mumble to Discord speaking cycle. Consider increasing the size of the to Discord jitter buffer.")
 				}
 
 				// Send silence as suggested by Discord Documentation.
@@ -189,7 +191,7 @@ func (dd *DiscordDuplex) discordSendPCM(ctx context.Context, cancel context.Canc
 				}
 
 				if err := dd.Bridge.DiscordVoice.Speaking(false); err != nil {
-					log.Println("Error setting speaking status to false:", err)
+					dd.Bridge.Logger.Error("DISCORD_SEND", fmt.Sprintf("Error setting speaking status to false: %v", err))
 				}
 				streaming = false
 			}
@@ -216,7 +218,7 @@ func (dd *DiscordDuplex) discordReceivePCM(ctx context.Context, cancel context.C
 			if lastReady {
 				OnError(fmt.Sprintf("Discordgo not to receive opus packets. %+v : %+v", dd.Bridge.DiscordVoice.Ready, dd.Bridge.DiscordVoice.OpusSend), nil)
 				readyTimeout = time.AfterFunc(30*time.Second, func() {
-					log.Println("Debug: Set ready timeout")
+					dd.Bridge.Logger.Debug("DISCORD_RECEIVE", "Set ready timeout")
 					cancel()
 				})
 				lastReady = false
@@ -224,7 +226,7 @@ func (dd *DiscordDuplex) discordReceivePCM(ctx context.Context, cancel context.C
 			dd.Bridge.DiscordVoice.RUnlock()
 			continue
 		} else if !lastReady {
-			fmt.Println("Discordgo ready to receive packets")
+			dd.Bridge.Logger.Info("DISCORD_RECEIVE", "Discordgo ready to receive packets")
 			lastReady = true
 			readyTimeout.Stop()
 		}
@@ -235,13 +237,13 @@ func (dd *DiscordDuplex) discordReceivePCM(ctx context.Context, cancel context.C
 
 		select {
 		case <-ctx.Done():
-			log.Println("Stopping Discord receive PCM")
+			dd.Bridge.Logger.Info("DISCORD_RECEIVE", "Stopping Discord receive PCM")
 			return
 		case p, ok = <-dd.Bridge.DiscordVoice.OpusRecv:
 		}
 
 		if !ok {
-			log.Println("Opus not ok")
+			dd.Bridge.Logger.Debug("DISCORD_RECEIVE", "Opus not ok")
 			continue
 		}
 
@@ -306,7 +308,7 @@ func (dd *DiscordDuplex) discordReceivePCM(ctx context.Context, cancel context.C
 			select {
 			case dd.fromDiscordMap[p.SSRC].pcm <- next:
 			default:
-				log.Println("From Discord buffer full. Dropping packet")
+				dd.Bridge.Logger.Debug("DISCORD_RECEIVE", "From Discord buffer full. Dropping packet")
 			}
 		}
 		dd.discordMutex.Unlock()
@@ -330,7 +332,7 @@ func (dd *DiscordDuplex) fromDiscordMixer(ctx context.Context, toMumble chan<- g
 	for {
 		select {
 		case <-ctx.Done():
-			log.Println("Stopping from Discord mixer")
+			dd.Bridge.Logger.Info("DISCORD_MIXER", "Stopping from Discord mixer")
 			return
 		default:
 		}
@@ -392,7 +394,7 @@ func (dd *DiscordDuplex) fromDiscordMixer(ctx context.Context, toMumble chan<- g
 			case toMumble <- outBuf:
 				promSentMumblePackets.Inc()
 			case <-timeout:
-				log.Println("To Mumble timeout. Dropping packet")
+				dd.Bridge.Logger.Debug("DISCORD_MIXER", "To Mumble timeout. Dropping packet")
 				promToMumbleDropped.Inc()
 			}
 		}
@@ -412,7 +414,7 @@ func (dd *DiscordDuplex) fromDiscordMixer(ctx context.Context, toMumble chan<- g
 			// Send opus silence to mumble
 			// See note above about jitter buffer warning
 			if time.Since(speakingStart).Milliseconds() < 50 {
-				log.Println("Warning: Short Discord to Mumble speaking cycle. Consider increaseing the size of the to Mumble jitter buffer.", time.Since(speakingStart).Milliseconds())
+				dd.Bridge.Logger.Warn("DISCORD_MIXER", fmt.Sprintf("Short Discord to Mumble speaking cycle. Consider increasing the size of the to Mumble jitter buffer. Duration: %d ms", time.Since(speakingStart).Milliseconds()))
 			}
 
 			for i := 0; i < 5; i++ {

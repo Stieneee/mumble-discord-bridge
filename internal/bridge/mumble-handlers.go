@@ -2,7 +2,6 @@ package bridge
 
 import (
 	"fmt"
-	"log"
 	"strings"
 	"time"
 
@@ -42,7 +41,7 @@ func (l *MumbleListener) MumbleConnect(e *gumble.ConnectEvent) {
 	time.AfterFunc(5*time.Second, func() {
 		defer func() {
 			if r := recover(); r != nil {
-				fmt.Printf("Failed to mumble user list %v \n", r)
+				l.Bridge.Logger.Error("MUMBLE_HANDLER", fmt.Sprintf("Failed to mumble user list: %v", r))
 			}
 		}()
 		l.updateUsers()
@@ -54,7 +53,7 @@ func (l *MumbleListener) MumbleUserChange(e *gumble.UserChangeEvent) {
 
 	if e.Type.Has(gumble.UserChangeConnected) {
 
-		log.Println("User connected to mumble " + e.User.Name)
+		l.Bridge.Logger.Info("MUMBLE_HANDLER", fmt.Sprintf("User connected to mumble: %s", e.User.Name))
 
 		if !l.Bridge.BridgeConfig.MumbleDisableText {
 			e.User.Send("Mumble-Discord-Bridge " + l.Bridge.BridgeConfig.Version)
@@ -85,7 +84,7 @@ func (l *MumbleListener) MumbleUserChange(e *gumble.UserChangeEvent) {
 
 	if e.Type.Has(gumble.UserChangeDisconnected) {
 		l.Bridge.discordSendMessage(e.User.Name + " has left mumble")
-		log.Println("User disconnected from mumble " + e.User.Name)
+		l.Bridge.Logger.Info("MUMBLE_HANDLER", fmt.Sprintf("User disconnected from mumble: %s", e.User.Name))
 	}
 }
 
@@ -93,7 +92,7 @@ func (l *MumbleListener) MumbleUserChange(e *gumble.UserChangeEvent) {
 func (l *MumbleListener) MumbleTextMessage(e *gumble.TextMessageEvent) {
 	// ignore non-user messages
 	if e.Sender == nil {
-		log.Println("Received message from nil sender")
+		l.Bridge.Logger.Warn("MUMBLE_HANDLER", "Received message from nil sender")
 		return
 	}
 

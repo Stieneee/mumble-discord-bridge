@@ -1,7 +1,6 @@
 package bridge
 
 import (
-	"log"
 	"strings"
 	"time"
 )
@@ -19,13 +18,13 @@ import (
 
 func (b *BridgeState) HandleCommand(msg string, userResponse func(string)) {
 
-	log.Println("Handling command: " + msg)
+	b.Logger.Debug("COMMAND_HANDLER", "Handling command: "+msg)
 
 	prefix := "!" + b.BridgeConfig.Command
 
 	// TODO auto - toggle between auto and manual mode
 	if strings.HasPrefix(msg, prefix+" help") {
-		log.Println("Sending help message")
+		b.Logger.Debug("COMMAND_HANDLER", "Sending help message")
 		userResponse(`Commands:
   help - display this message
 	version - display the version of mumble-discord-bridge
