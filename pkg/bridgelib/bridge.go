@@ -1,6 +1,7 @@
 package bridgelib
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strconv"
@@ -83,16 +84,22 @@ type BridgeInstance struct {
 
 	// The lock for protecting access to the bridge
 	mu sync.Mutex
-
-	// Channel to signal bridge to stop
-	stopChan chan bool
 	
 	// Flag to track if the bridge has been stopped
 	stopped bool
+
+	// Context for graceful shutdown
+	ctx    context.Context
+	cancel context.CancelFunc
 }
 
 // NewBridgeInstance creates a new bridge instance
 func NewBridgeInstance(id string, config *BridgeConfig, discordProvider DiscordProvider) (*BridgeInstance, error) {
+	return NewBridgeInstanceWithContext(context.Background(), id, config, discordProvider)
+}
+
+// NewBridgeInstanceWithContext creates a new bridge instance with context
+func NewBridgeInstanceWithContext(ctx context.Context, id string, config *BridgeConfig, discordProvider DiscordProvider) (*BridgeInstance, error) {
 	// Use provided logger or create a default console logger
 	logger := config.Logger
 	if logger == nil {
@@ -106,13 +113,17 @@ func NewBridgeInstance(id string, config *BridgeConfig, discordProvider DiscordP
 	bridgeLogger.Debug("BRIDGE_INIT", fmt.Sprintf("Configuration: Mumble=%s:%d, Discord=%s:%s, Mode=%s", 
 		config.MumbleAddress, config.MumblePort, config.DiscordGID, config.DiscordCID, config.Mode))
 	
+	// Create context for this bridge instance
+	bridgeCtx, cancel := context.WithCancel(ctx)
+
 	// Create the bridge instance
 	inst := &BridgeInstance{
 		ID:              id,
 		config:          config,
 		discordProvider: discordProvider,
 		logger:          bridgeLogger,
-		stopChan:        make(chan bool),
+		ctx:             bridgeCtx,
+		cancel:          cancel,
 	}
 	
 	bridgeLogger.Debug("BRIDGE_INIT", "Bridge instance struct created successfully")
@@ -222,11 +233,10 @@ func (b *BridgeInstance) Start() error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	// Reset the stopped flag and create new stopChan if previously stopped
+	// Reset the stopped flag if previously stopped
 	b.logger.Debug("BRIDGE_START", fmt.Sprintf("Bridge stopped state: %v", b.stopped))
 	if b.stopped {
 		b.stopped = false
-		b.stopChan = make(chan bool)
 		b.logger.Info("BRIDGE_START", "Resetting stopped bridge for restart")
 	}
 
@@ -289,8 +299,8 @@ func (b *BridgeInstance) Start() error {
 		go func() {
 			for {
 				select {
-				case <-b.stopChan:
-					b.logger.Info("BRIDGE_STOP", "Received stop signal, exiting constant mode loop")
+				case <-b.ctx.Done():
+					b.logger.Info("BRIDGE_STOP", "Context cancelled, exiting constant mode loop")
 					return
 				default:
 					b.logger.Info("BRIDGE_MODE", "Starting bridge in constant mode")
@@ -312,7 +322,15 @@ func (b *BridgeInstance) Start() error {
 					}
 					
 					b.logger.Info("BRIDGE_STATUS", "Bridge exited, waiting 5 seconds before restarting")
-					time.Sleep(5 * time.Second)
+					
+					// Wait 5 seconds, but check for context cancellation
+					select {
+					case <-b.ctx.Done():
+						b.logger.Info("BRIDGE_STOP", "Context cancelled during wait, exiting constant mode loop")
+						return
+					case <-time.After(5 * time.Second):
+						// Continue to next iteration
+					}
 				}
 			}
 		}()
@@ -357,10 +375,12 @@ func (b *BridgeInstance) Stop() error {
 	}
 
 	b.logger.Info("BRIDGE_STOP", "Stopping bridge")
-	b.logger.Debug("BRIDGE_STOP", "Closing stop channel")
+	b.logger.Debug("BRIDGE_STOP", "Cancelling context")
 	
-	// Signal to the bridge to stop
-	close(b.stopChan)
+	// Cancel the context to signal all operations to stop
+	b.cancel()
+	
+	// Mark bridge as stopped
 	b.stopped = true
 	b.logger.Debug("BRIDGE_STOP", "Bridge marked as stopped")
 

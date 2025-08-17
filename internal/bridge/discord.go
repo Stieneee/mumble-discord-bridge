@@ -97,6 +97,18 @@ func (dd *DiscordDuplex) discordSendPCM(ctx context.Context, cancel context.Canc
 	// }()
 
 	internalSend := func(opus []byte) {
+		if dd.Bridge.DiscordVoice == nil {
+			if lastReady {
+				OnError("Discord voice connection is nil", nil)
+				readyTimeout = time.AfterFunc(30*time.Second, func() {
+					dd.Bridge.Logger.Debug("DISCORD_SEND", "Set ready timeout")
+					cancel()
+				})
+				lastReady = false
+			}
+			return
+		}
+		
 		dd.Bridge.DiscordVoice.RLock()
 		if !dd.Bridge.DiscordVoice.Ready || dd.Bridge.DiscordVoice.OpusSend == nil {
 			if lastReady {
@@ -141,8 +153,12 @@ func (dd *DiscordDuplex) discordSendPCM(ctx context.Context, cancel context.Canc
 				done := make(chan bool, 1)
 				go func() {
 					// This call will prevent discordSendPCM from exiting if the discord connection is lost
-					if err := dd.Bridge.DiscordVoice.Speaking(true); err != nil {
-						dd.Bridge.Logger.Error("DISCORD_SEND", fmt.Sprintf("Error setting speaking status to true: %v", err))
+					if dd.Bridge.DiscordVoice != nil {
+						if err := dd.Bridge.DiscordVoice.Speaking(true); err != nil {
+							dd.Bridge.Logger.Error("DISCORD_SEND", fmt.Sprintf("Error setting speaking status to true: %v", err))
+						}
+					} else {
+						dd.Bridge.Logger.Error("DISCORD_SEND", "Discord voice connection is nil when trying to set speaking status")
 					}
 					done <- true
 				}()
@@ -190,8 +206,12 @@ func (dd *DiscordDuplex) discordSendPCM(ctx context.Context, cancel context.Canc
 
 				}
 
-				if err := dd.Bridge.DiscordVoice.Speaking(false); err != nil {
-					dd.Bridge.Logger.Error("DISCORD_SEND", fmt.Sprintf("Error setting speaking status to false: %v", err))
+				if dd.Bridge.DiscordVoice != nil {
+					if err := dd.Bridge.DiscordVoice.Speaking(false); err != nil {
+						dd.Bridge.Logger.Error("DISCORD_SEND", fmt.Sprintf("Error setting speaking status to false: %v", err))
+					}
+				} else {
+					dd.Bridge.Logger.Error("DISCORD_SEND", "Discord voice connection is nil when trying to set speaking status to false")
 				}
 				streaming = false
 			}
@@ -213,6 +233,23 @@ func (dd *DiscordDuplex) discordReceivePCM(ctx context.Context, cancel context.C
 	}
 
 	for {
+		if dd.Bridge.DiscordVoice == nil {
+			if lastReady {
+				OnError("Discord voice connection is nil", nil)
+				readyTimeout = time.AfterFunc(30*time.Second, func() {
+					dd.Bridge.Logger.Debug("DISCORD_RECEIVE", "Set ready timeout")
+					cancel()
+				})
+				lastReady = false
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(100 * time.Millisecond):
+				continue
+			}
+		}
+		
 		dd.Bridge.DiscordVoice.RLock()
 		if !dd.Bridge.DiscordVoice.Ready || dd.Bridge.DiscordVoice.OpusRecv == nil {
 			if lastReady {

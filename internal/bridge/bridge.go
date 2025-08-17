@@ -195,19 +195,25 @@ func (b *BridgeState) StartBridge() {
 
 	if err != nil {
 		b.Logger.Error("BRIDGE", fmt.Sprintf("Discord voice connection error: %v", err))
-		if err := b.DiscordVoice.Disconnect(); err != nil {
-			b.Logger.Error("BRIDGE", fmt.Sprintf("Error disconnecting from Discord voice: %v", err))
+		if b.DiscordVoice != nil {
+			if err := b.DiscordVoice.Disconnect(); err != nil {
+				b.Logger.Error("BRIDGE", fmt.Sprintf("Error disconnecting from Discord voice: %v", err))
+			}
 		}
 		return
 	}
 	defer func() {
-		if err := b.DiscordVoice.Disconnect(); err != nil {
-			b.Logger.Error("BRIDGE", fmt.Sprintf("Error disconnecting from Discord voice: %v", err))
+		if b.DiscordVoice != nil {
+			if err := b.DiscordVoice.Disconnect(); err != nil {
+				b.Logger.Error("BRIDGE", fmt.Sprintf("Error disconnecting from Discord voice: %v", err))
+			}
 		}
 	}()
 	defer func() {
-		if err := b.DiscordVoice.Speaking(false); err != nil {
-			b.Logger.Error("BRIDGE", fmt.Sprintf("Error setting speaking status to false: %v", err))
+		if b.DiscordVoice != nil {
+			if err := b.DiscordVoice.Speaking(false); err != nil {
+				b.Logger.Error("BRIDGE", fmt.Sprintf("Error setting speaking status to false: %v", err))
+			}
 		}
 	}()
 	b.Logger.Info("BRIDGE", "Discord Voice Connected")
