@@ -25,8 +25,11 @@ test-chart:
 lint:
 	golangci-lint run
 
+format:
+	go fmt ./...
+
 clean:
 	rm -rf dist
 	rm -rf LICENSES.zip LICENSES
 
-.PHONY: mumble-discord-bridge release dev dev-profile dev-race test-chart clean
+.PHONY: mumble-discord-bridge release dev dev-profile dev-race test-chart clean lint format
