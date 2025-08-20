@@ -257,30 +257,8 @@ func (b *BridgeInstance) Start() error {
 	}
 	b.logger.Debug("BRIDGE_START", "Discord session validation passed")
 	
-	// Ensure Discord event handlers are properly registered
-	b.logger.Info("BRIDGE_VERIFY", "Verifying Discord event handlers")
-	
-	// Re-register with the shared client's routing system to ensure handlers are registered
-	if sharedClient, ok := b.discordProvider.(*SharedDiscordClient); ok {
-		b.logger.Info("BRIDGE_VERIFY", fmt.Sprintf("Re-registering with SharedDiscordClient's message router for GID: %s, CID: %s", b.config.DiscordGID, b.config.DiscordCID))
-		
-		// First unregister any existing handlers to avoid duplicates
-		// Then register the handler
-		key := b.config.DiscordGID + ":" + b.config.DiscordCID
-		sharedClient.messageHandlerMutex.Lock()
-		delete(sharedClient.messageHandlers, key)
-		sharedClient.messageHandlerMutex.Unlock()
-		
-		// Register the handler again
-		sharedClient.RegisterMessageHandler(
-			b.config.DiscordGID, 
-			b.config.DiscordCID, 
-			b.State.DiscordListener.MessageCreate)
-			
-		b.logger.Info("BRIDGE_VERIFY", "Message handler re-registered successfully")
-	} else {
-		b.logger.Warn("BRIDGE_VERIFY", "Not using SharedDiscordClient, message routing will use global handlers only")
-	}
+	// Discord event handlers were already registered during bridge creation
+	b.logger.Debug("BRIDGE_VERIFY", "Discord event handlers already registered during bridge creation")
 
 	// Start the bridge based on its mode
 	b.logger.Info("BRIDGE_MODE", fmt.Sprintf("Starting bridge in mode: %s", b.State.Mode))
@@ -405,6 +383,16 @@ func (b *BridgeInstance) Stop() error {
 		b.logger.Debug("BRIDGE_STOP", "Bridge is not connected, skipping die signal")
 	}
 	b.State.BridgeMutex.Unlock()
+
+	// Clean up message handlers from SharedDiscordClient
+	if sharedClient, ok := b.discordProvider.(*SharedDiscordClient); ok {
+		b.logger.Debug("BRIDGE_STOP", fmt.Sprintf("Unregistering message handler for GID: %s, CID: %s", b.config.DiscordGID, b.config.DiscordCID))
+		sharedClient.UnregisterMessageHandler(
+			b.config.DiscordGID,
+			b.config.DiscordCID,
+			b.State.DiscordListener.MessageCreate)
+		b.logger.Debug("BRIDGE_STOP", "Message handler unregistered successfully")
+	}
 
 	b.logger.Info("BRIDGE_STOP", "Bridge stopped successfully")
 	return nil

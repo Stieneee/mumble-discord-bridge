@@ -29,21 +29,37 @@ func (l *MumbleListener) updateUsers() {
 }
 
 func (l *MumbleListener) MumbleConnect(e *gumble.ConnectEvent) {
-	//join specified channel
-	startingChannel := e.Client.Channels.Find(l.Bridge.BridgeConfig.MumbleChannel...)
-	if startingChannel != nil {
-		e.Client.Self.Move(startingChannel)
+	l.Bridge.Logger.Info("MUMBLE_HANDLER", fmt.Sprintf("Connected to Mumble server: %s", e.Client.Conn.RemoteAddr()))
+	l.Bridge.Logger.Debug("MUMBLE_HANDLER", fmt.Sprintf("Mumble client info: Username=%s, SessionID=%d", e.Client.Self.Name, e.Client.Self.Session))
+	
+	// Join specified channel
+	if len(l.Bridge.BridgeConfig.MumbleChannel) > 0 {
+		channelPath := strings.Join(l.Bridge.BridgeConfig.MumbleChannel, "/")
+		l.Bridge.Logger.Info("MUMBLE_HANDLER", fmt.Sprintf("Attempting to join Mumble channel: %s", channelPath))
+		
+		startingChannel := e.Client.Channels.Find(l.Bridge.BridgeConfig.MumbleChannel...)
+		if startingChannel != nil {
+			l.Bridge.Logger.Debug("MUMBLE_HANDLER", fmt.Sprintf("Found target channel (ID: %d, Name: %s), moving to it", startingChannel.ID, startingChannel.Name))
+			e.Client.Self.Move(startingChannel)
+			l.Bridge.Logger.Info("MUMBLE_HANDLER", fmt.Sprintf("Successfully moved to Mumble channel: %s", channelPath))
+		} else {
+			l.Bridge.Logger.Warn("MUMBLE_HANDLER", fmt.Sprintf("Target Mumble channel not found: %s, staying in root channel", channelPath))
+		}
+	} else {
+		l.Bridge.Logger.Debug("MUMBLE_HANDLER", "No specific Mumble channel specified, staying in root channel")
 	}
 
 	// l.updateUsers() // patch below
 
 	// This is an ugly patch Mumble Client state is slow to update
+	l.Bridge.Logger.Debug("MUMBLE_HANDLER", "Scheduling user list update in 5 seconds to allow Mumble state to stabilize")
 	time.AfterFunc(5*time.Second, func() {
 		defer func() {
 			if r := recover(); r != nil {
-				l.Bridge.Logger.Error("MUMBLE_HANDLER", fmt.Sprintf("Failed to mumble user list: %v", r))
+				l.Bridge.Logger.Error("MUMBLE_HANDLER", fmt.Sprintf("Failed to update mumble user list: %v", r))
 			}
 		}()
+		l.Bridge.Logger.Debug("MUMBLE_HANDLER", "Updating Mumble user list after connection stabilization")
 		l.updateUsers()
 	})
 }

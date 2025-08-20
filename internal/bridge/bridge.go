@@ -186,16 +186,24 @@ func (b *BridgeState) StartBridge() {
 	b.StartTime = time.Now()
 
 	// DISCORD Connect Voice
-	b.Logger.Debug("BRIDGE", "Attempting to join Discord voice channel")
+	b.Logger.Info("BRIDGE", "Starting Discord voice connection process")
+	b.Logger.Debug("BRIDGE", fmt.Sprintf("Discord session state: Ready=%v, UserID=%s", b.DiscordSession.State.Ready, b.DiscordSession.State.User.ID))
+	
 	if b.DiscordChannelID == "" {
 		b.Logger.Error("BRIDGE", "Tried to start bridge but no Discord channel specified")
 		return
 	}
+	
+	// Log detailed connection attempt information
+	b.Logger.Info("BRIDGE", fmt.Sprintf("Attempting Discord voice connection: GuildID=%s, ChannelID=%s", b.BridgeConfig.GID, b.DiscordChannelID))
+	b.Logger.Debug("BRIDGE", "Calling ChannelVoiceJoin with mute=false, deaf=false")
+	
 	b.DiscordVoice, err = b.DiscordSession.ChannelVoiceJoin(b.BridgeConfig.GID, b.DiscordChannelID, false, false)
 
 	if err != nil {
-		b.Logger.Error("BRIDGE", fmt.Sprintf("Discord voice connection error: %v", err))
+		b.Logger.Error("BRIDGE", fmt.Sprintf("Discord voice connection failed: GuildID=%s, ChannelID=%s, Error=%v", b.BridgeConfig.GID, b.DiscordChannelID, err))
 		if b.DiscordVoice != nil {
+			b.Logger.Debug("BRIDGE", "Cleaning up partial Discord voice connection")
 			if err := b.DiscordVoice.Disconnect(); err != nil {
 				b.Logger.Error("BRIDGE", fmt.Sprintf("Error disconnecting from Discord voice: %v", err))
 			}
@@ -216,38 +224,60 @@ func (b *BridgeState) StartBridge() {
 			}
 		}
 	}()
-	b.Logger.Info("BRIDGE", "Discord Voice Connected")
+	// Log successful Discord connection with details
+	b.Logger.Info("BRIDGE", fmt.Sprintf("Discord voice connected successfully: GuildID=%s, ChannelID=%s", b.BridgeConfig.GID, b.DiscordChannelID))
+	b.Logger.Debug("BRIDGE", fmt.Sprintf("Discord voice connection details: Ready=%v, GuildID=%s", b.DiscordVoice.Ready, b.DiscordVoice.GuildID))
 
 	// MUMBLE Connect
+	b.Logger.Info("BRIDGE", "Starting Mumble connection process")
 
 	b.MumbleStream = NewMumbleDuplex(b.Logger)
 	det := b.BridgeConfig.MumbleConfig.AudioListeners.Attach(b.MumbleStream)
 	defer det.Detach()
 
+	// Configure TLS settings with detailed logging
 	var tlsConfig tls.Config
 	if b.BridgeConfig.MumbleInsecure {
+		b.Logger.Debug("BRIDGE", "Using insecure TLS configuration (skipping certificate verification)")
 		tlsConfig.InsecureSkipVerify = true
+	} else {
+		b.Logger.Debug("BRIDGE", "Using secure TLS configuration (certificate verification enabled)")
 	}
 
 	if b.BridgeConfig.MumbleCertificate != "" {
+		b.Logger.Debug("BRIDGE", fmt.Sprintf("Loading client certificate: %s", b.BridgeConfig.MumbleCertificate))
 		keyFile := b.BridgeConfig.MumbleCertificate
 		if certificate, err := tls.LoadX509KeyPair(keyFile, keyFile); err != nil {
+			b.Logger.Error("BRIDGE", fmt.Sprintf("Failed to load client certificate %s: %v", keyFile, err))
 			fmt.Fprintf(os.Stderr, "%s: %s\n", os.Args[0], err)
 			os.Exit(1)
 		} else {
 			tlsConfig.Certificates = append(tlsConfig.Certificates, certificate)
+			b.Logger.Debug("BRIDGE", "Client certificate loaded successfully")
 		}
+	} else {
+		b.Logger.Debug("BRIDGE", "No client certificate specified")
 	}
 
 	if b.BridgeConfig.MumbleBotFlag {
+		b.Logger.Debug("BRIDGE", "Setting Mumble client type to BOT")
 		b.BridgeConfig.MumbleConfig.ClientType = 1 // BOT
+	} else {
+		b.Logger.Debug("BRIDGE", "Using default Mumble client type")
 	}
 
-	b.Logger.Debug("BRIDGE", "Attempting to join Mumble")
+	// Log detailed connection attempt information
+	b.Logger.Info("BRIDGE", fmt.Sprintf("Attempting Mumble connection: Address=%s, Username=%s, Insecure=%v", 
+		b.BridgeConfig.MumbleAddr, b.BridgeConfig.MumbleConfig.Username, b.BridgeConfig.MumbleInsecure))
+	b.Logger.Debug("BRIDGE", fmt.Sprintf("Mumble config: Password=%s, Username=%s", 
+		func() string { if b.BridgeConfig.MumbleConfig.Password != "" { return "[REDACTED]" } else { return "[NONE]" } }(),
+		b.BridgeConfig.MumbleConfig.Username))
+	
 	b.MumbleClient, err = gumble.DialWithDialer(new(net.Dialer), b.BridgeConfig.MumbleAddr, b.BridgeConfig.MumbleConfig, &tlsConfig)
 
 	if err != nil {
-		b.Logger.Error("BRIDGE", fmt.Sprintf("Mumble connection error: %v", err))
+		b.Logger.Error("BRIDGE", fmt.Sprintf("Mumble connection failed: Address=%s, Username=%s, Error=%v", 
+			b.BridgeConfig.MumbleAddr, b.BridgeConfig.MumbleConfig.Username, err))
 		return
 	}
 	defer func() {
@@ -255,7 +285,11 @@ func (b *BridgeState) StartBridge() {
 			b.Logger.Error("BRIDGE", fmt.Sprintf("Error disconnecting from Mumble: %v", err))
 		}
 	}()
-	b.Logger.Info("BRIDGE", "Mumble Connected")
+	// Log successful Mumble connection with details
+	b.Logger.Info("BRIDGE", fmt.Sprintf("Mumble connected successfully: Address=%s, Username=%s", 
+		b.BridgeConfig.MumbleAddr, b.BridgeConfig.MumbleConfig.Username))
+	b.Logger.Debug("BRIDGE", fmt.Sprintf("Mumble connection details: ClientType=%d", 
+		b.BridgeConfig.MumbleConfig.ClientType))
 
 	// Shared Channels
 	// Shared channels pass PCM information in 10ms chunks [480]int16

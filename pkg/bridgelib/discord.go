@@ -237,9 +237,10 @@ func (c *SharedDiscordClient) RegisterMessageHandler(guildID, channelID string, 
 }
 
 // UnregisterMessageHandler unregisters a message handler for a specific guild and channel
+// Note: Since function pointers can't be compared directly, this clears all handlers for the key
 func (c *SharedDiscordClient) UnregisterMessageHandler(guildID, channelID string, handlerFunc interface{}) {
 	key := guildID + ":" + channelID
-	c.logger.Debug("DISCORD_CLIENT", fmt.Sprintf("Unregistering message handler for key: %s (handler type: %T)", key, handlerFunc))
+	c.logger.Debug("DISCORD_CLIENT", fmt.Sprintf("Clearing all message handlers for key: %s", key))
 
 	c.messageHandlerMutex.Lock()
 	defer c.messageHandlerMutex.Unlock()
@@ -250,30 +251,11 @@ func (c *SharedDiscordClient) UnregisterMessageHandler(guildID, channelID string
 		return
 	}
 
-	c.logger.Debug("DISCORD_CLIENT", fmt.Sprintf("Found %d handlers for key: %s", len(handlers), key))
+	c.logger.Debug("DISCORD_CLIENT", fmt.Sprintf("Removing %d handlers for key: %s", len(handlers), key))
 
-	// Find and remove the handler
-	found := false
-	for i, h := range handlers {
-		if h == handlerFunc {
-			c.logger.Debug("DISCORD_CLIENT", fmt.Sprintf("Found handler at index %d, removing it", i))
-			c.messageHandlers[key] = append(handlers[:i], handlers[i+1:]...)
-			found = true
-			break
-		}
-	}
-
-	if !found {
-		c.logger.Debug("DISCORD_CLIENT", fmt.Sprintf("Handler not found for key: %s", key))
-	}
-
-	// Remove the key if there are no more handlers
-	if len(c.messageHandlers[key]) == 0 {
-		c.logger.Debug("DISCORD_CLIENT", fmt.Sprintf("No more handlers for key: %s, removing key", key))
-		delete(c.messageHandlers, key)
-	} else {
-		c.logger.Debug("DISCORD_CLIENT", fmt.Sprintf("%d handlers remaining for key: %s", len(c.messageHandlers[key]), key))
-	}
+	// Remove all handlers for this key since we can't compare function pointers
+	delete(c.messageHandlers, key)
+	c.logger.Debug("DISCORD_CLIENT", fmt.Sprintf("All handlers cleared for key: %s", key))
 }
 
 // onMessageCreate routes message create events to the appropriate handlers
