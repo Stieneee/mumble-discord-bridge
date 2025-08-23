@@ -132,6 +132,48 @@ var (
 		Help:    "Timer performance for the Mumble mixer",
 		Buckets: []float64{1000, 2000, 5000, 10000, 20000},
 	})
+
+	// Managed Connection Metrics
+
+	promDiscordConnectionStatus = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "mdb_discord_connection_status",
+		Help: "Discord connection status (0=disconnected, 1=connecting, 2=connected, 3=reconnecting, 4=failed)",
+	})
+
+	promMumbleConnectionStatus = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "mdb_mumble_connection_status",
+		Help: "Mumble connection status (0=disconnected, 1=connecting, 2=connected, 3=reconnecting, 4=failed)",
+	})
+
+	promDiscordReconnectAttempts = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "mdb_discord_reconnect_attempts_total",
+		Help: "Total number of Discord reconnection attempts",
+	})
+
+	promMumbleReconnectAttempts = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "mdb_mumble_reconnect_attempts_total",
+		Help: "Total number of Mumble reconnection attempts",
+	})
+
+	promDiscordConnectionUptime = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "mdb_discord_connection_uptime_seconds",
+		Help: "Duration in seconds that Discord connection has been up",
+	})
+
+	promMumbleConnectionUptime = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "mdb_mumble_connection_uptime_seconds",
+		Help: "Duration in seconds that Mumble connection has been up",
+	})
+
+	promConnectionManagerEvents = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "mdb_connection_manager_events_total",
+		Help: "Total number of connection manager events by type and service",
+	}, []string{"service", "event_type"})
+
+	promPacketsSunk = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "mdb_packets_sunk_total",
+		Help: "Total number of packets sunk due to disconnected state",
+	}, []string{"service", "direction"})
 )
 
 func StartPromServer(port int, b *BridgeState) {

@@ -128,7 +128,7 @@ func main() {
 	// check if chat bridge is enabled
 	log.Printf("Chat bridge settings - mumbleDisableText: %v, discordTextMode: %s, chatBridge flag: %v",
 		*mumbleDisableText, *discordTextMode, *chatBridge)
-	
+
 	// Override chatBridge if conditions aren't met
 	if *mumbleDisableText {
 		log.Println("Warning: Chat bridge disabled because mumbleDisableText is set to true")
@@ -141,7 +141,7 @@ func main() {
 	} else {
 		log.Println("Chat bridge is ENABLED")
 	}
-	
+
 	log.Printf("Final chat bridge status: %v", *chatBridge)
 
 	var discordStartStreamingCount = int(math.Round(float64(*discordSendBuffer) / 10.0))
@@ -176,7 +176,7 @@ func main() {
 	if err != nil {
 		log.Fatalln("Failed to create Discord client:", err)
 	}
-	
+
 	// Connect to Discord
 	err = discordClient.Connect()
 	if err != nil {
@@ -187,7 +187,7 @@ func main() {
 			log.Printf("Error disconnecting from Discord: %v", err)
 		}
 	}()
-	
+
 	// Create bridge configuration
 	config := &bridgelib.BridgeConfig{
 		Command:                 *command,
@@ -212,33 +212,33 @@ func main() {
 		Mode:                    *mode,
 		Version:                 version,
 	}
-	
+
 	// Create and start bridge instance
 	bridgeInstance, err := bridgelib.NewBridgeInstance("default", config, discordClient)
 	if err != nil {
 		log.Fatalln("Failed to create bridge instance:", err)
 	}
-	
+
 	// Start metrics server if enabled
 	if *promEnable {
 		go bridge.StartPromServer(*promPort, nil) // Pass nil since we're using bridgelib
 	}
-	
+
 	// Set prometheus start time metric
 	bridge.PromApplicationStartTime.SetToCurrentTime()
-	
+
 	// Start the bridge
 	if err := bridgeInstance.Start(); err != nil {
 		log.Fatalln("Failed to start bridge:", err)
 	}
-	
+
 	// Wait for termination signal
 	sc := make(chan os.Signal, 1)
 	signal.Notify(sc, syscall.SIGINT, syscall.SIGTERM, os.Interrupt)
 	<-sc
-	
+
 	log.Println("OS Signal. Bot shutting down")
-	
+
 	if err := bridgeInstance.Stop(); err != nil {
 		log.Println("Error stopping bridge:", err)
 	}

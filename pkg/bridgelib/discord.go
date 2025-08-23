@@ -1,7 +1,6 @@
 package bridgelib
 
 import (
-	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -20,10 +19,6 @@ type SharedDiscordClient struct {
 	// Mapping of guild:channel to message handlers
 	messageHandlers     map[string][]interface{}
 	messageHandlerMutex sync.RWMutex
-
-	// Mapping of guild to voice connections
-	voiceConnections     map[string]*discordgo.VoiceConnection
-	voiceConnectionMutex sync.RWMutex
 }
 
 // NewSharedDiscordClient creates a new shared Discord client
@@ -32,9 +27,9 @@ func NewSharedDiscordClient(token string, logger Logger) (*SharedDiscordClient, 
 	if logger == nil {
 		logger = NewConsoleLogger()
 	}
-	
+
 	logger.Debug("DISCORD_CLIENT", "Starting Discord client creation")
-	
+
 	// Create the Discord session
 	logger.Debug("DISCORD_CLIENT", "Creating Discord session")
 	session, err := discordgo.New("Bot " + token)
@@ -51,21 +46,20 @@ func NewSharedDiscordClient(token string, logger Logger) (*SharedDiscordClient, 
 	// Set up the client
 	logger.Debug("DISCORD_CLIENT", "Creating SharedDiscordClient struct")
 	client := &SharedDiscordClient{
-		session:          session,
-		logger:           logger,
-		messageHandlers:  make(map[string][]interface{}),
-		voiceConnections: make(map[string]*discordgo.VoiceConnection),
+		session:         session,
+		logger:          logger,
+		messageHandlers: make(map[string][]interface{}),
 	}
 	logger.Debug("DISCORD_CLIENT", "SharedDiscordClient struct created")
 
 	// Set up intents
 	logger.Debug("DISCORD_CLIENT", "Setting up Discord intents")
-	intents := discordgo.MakeIntent(discordgo.IntentsGuildVoiceStates |
-		discordgo.IntentsGuildMessages |
+	intents := discordgo.MakeIntent(discordgo.IntentsGuildMessages |
 		discordgo.IntentsGuildMessageReactions |
 		discordgo.IntentsDirectMessages |
 		discordgo.IntentsDirectMessageReactions |
-		discordgo.IntentsMessageContent)
+		discordgo.IntentsMessageContent |
+		discordgo.IntentsGuildVoiceStates)
 	logger.Debug("DISCORD_CLIENT", fmt.Sprintf("Discord intents configured: %d", intents))
 
 	logger.Debug("DISCORD_CLIENT", "Configuring Discord session settings")
@@ -77,7 +71,6 @@ func NewSharedDiscordClient(token string, logger Logger) (*SharedDiscordClient, 
 	// Register handlers for routing messages
 	logger.Debug("DISCORD_CLIENT", "Registering Discord event handlers")
 	session.AddHandler(client.onMessageCreate)
-	session.AddHandler(client.onVoiceStateUpdate)
 	session.AddHandler(client.onGuildCreate)
 	logger.Debug("DISCORD_CLIENT", "Discord event handlers registered")
 
@@ -101,23 +94,6 @@ func (c *SharedDiscordClient) Connect() error {
 // Disconnect disconnects from Discord
 func (c *SharedDiscordClient) Disconnect() error {
 	c.logger.Info("DISCORD_CLIENT", "Disconnecting from Discord")
-	
-	// Close all voice connections
-	c.logger.Debug("DISCORD_CLIENT", "Closing all voice connections")
-	c.voiceConnectionMutex.Lock()
-	voiceCount := len(c.voiceConnections)
-	c.logger.Debug("DISCORD_CLIENT", fmt.Sprintf("Found %d voice connections to close", voiceCount))
-	
-	for key, vc := range c.voiceConnections {
-		c.logger.Debug("DISCORD_CLIENT", fmt.Sprintf("Closing voice connection: %s", key))
-		if err := vc.Disconnect(); err != nil {
-			c.logger.Error("DISCORD_CLIENT", fmt.Sprintf("Error disconnecting voice connection %s: %v", key, err))
-		}
-	}
-	c.voiceConnections = make(map[string]*discordgo.VoiceConnection)
-	c.voiceConnectionMutex.Unlock()
-	c.logger.Debug("DISCORD_CLIENT", "All voice connections closed")
-
 	c.logger.Debug("DISCORD_CLIENT", "Closing Discord session")
 	err := c.session.Close()
 	if err != nil {
@@ -133,68 +109,6 @@ func (c *SharedDiscordClient) RegisterHandler(handlerFunc interface{}) {
 	c.session.AddHandler(handlerFunc)
 }
 
-// JoinVoiceChannel joins a voice channel
-func (c *SharedDiscordClient) JoinVoiceChannel(guildID, channelID string) (*discordgo.VoiceConnection, error) {
-	key := guildID + ":" + channelID
-	c.logger.Debug("DISCORD_CLIENT", fmt.Sprintf("Attempting to join voice channel: %s", key))
-
-	// Check if we already have a voice connection for this channel
-	c.voiceConnectionMutex.RLock()
-	vc, exists := c.voiceConnections[key]
-	c.voiceConnectionMutex.RUnlock()
-
-	if exists {
-		c.logger.Debug("DISCORD_CLIENT", fmt.Sprintf("Reusing existing voice connection for: %s", key))
-		return vc, nil
-	}
-
-	// Join the voice channel
-	c.logger.Debug("DISCORD_CLIENT", fmt.Sprintf("Creating new voice connection for: %s", key))
-	vc, err := c.session.ChannelVoiceJoin(guildID, channelID, false, true)
-	if err != nil {
-		c.logger.Error("DISCORD_CLIENT", fmt.Sprintf("Failed to join voice channel %s: %v", key, err))
-		return nil, err
-	}
-
-	// Store the voice connection
-	c.voiceConnectionMutex.Lock()
-	c.voiceConnections[key] = vc
-	c.voiceConnectionMutex.Unlock()
-	
-	c.logger.Info("DISCORD_CLIENT", fmt.Sprintf("Successfully joined voice channel: %s", key))
-	return vc, nil
-}
-
-// LeaveVoiceChannel leaves a voice channel
-func (c *SharedDiscordClient) LeaveVoiceChannel(guildID, channelID string) error {
-	key := guildID + ":" + channelID
-	c.logger.Debug("DISCORD_CLIENT", fmt.Sprintf("Attempting to leave voice channel: %s", key))
-
-	// Check if we have a voice connection for this channel
-	c.voiceConnectionMutex.Lock()
-	defer c.voiceConnectionMutex.Unlock()
-
-	vc, exists := c.voiceConnections[key]
-	if !exists {
-		c.logger.Warn("DISCORD_CLIENT", fmt.Sprintf("No voice connection found for channel: %s", key))
-		return errors.New("no voice connection for this channel")
-	}
-
-	// Disconnect from the voice channel
-	c.logger.Debug("DISCORD_CLIENT", fmt.Sprintf("Disconnecting from voice channel: %s", key))
-	err := vc.Disconnect()
-	if err != nil {
-		c.logger.Error("DISCORD_CLIENT", fmt.Sprintf("Failed to disconnect from voice channel %s: %v", key, err))
-		return err
-	}
-
-	// Remove the voice connection
-	delete(c.voiceConnections, key)
-	c.logger.Info("DISCORD_CLIENT", fmt.Sprintf("Successfully left voice channel: %s", key))
-
-	return nil
-}
-
 // SendMessage sends a message to a channel
 func (c *SharedDiscordClient) SendMessage(channelID, content string) (*discordgo.Message, error) {
 	// Truncate content for logging if it's too long
@@ -203,13 +117,13 @@ func (c *SharedDiscordClient) SendMessage(channelID, content string) (*discordgo
 		logContent = logContent[:97] + "..."
 	}
 	c.logger.Debug("DISCORD_CLIENT", fmt.Sprintf("Sending message to channel %s: %s", channelID, logContent))
-	
+
 	msg, err := c.session.ChannelMessageSend(channelID, content)
 	if err != nil {
 		c.logger.Error("DISCORD_CLIENT", fmt.Sprintf("Failed to send message to channel %s: %v", channelID, err))
 		return nil, err
 	}
-	
+
 	c.logger.Debug("DISCORD_CLIENT", fmt.Sprintf("Message sent successfully to channel %s", channelID))
 	return msg, nil
 }
@@ -361,45 +275,6 @@ func (c *SharedDiscordClient) onMessageCreate(s *discordgo.Session, m *discordgo
 	}
 
 	c.logger.Info("DISCORD_HANDLER", fmt.Sprintf("Successfully called %d handlers for message (errors: %d)", handlersCalled, handlerErrors))
-}
-
-// onVoiceStateUpdate routes voice state update events to the appropriate handlers
-func (c *SharedDiscordClient) onVoiceStateUpdate(s *discordgo.Session, v *discordgo.VoiceStateUpdate) {
-	c.logger.Debug("DISCORD_HANDLER", fmt.Sprintf("Voice state update for user ID: %s in guild: %s, channel: %s", v.UserID, v.GuildID, v.ChannelID))
-
-	// If channel is empty, this is likely a user disconnecting
-	if v.ChannelID == "" {
-		c.logger.Debug("DISCORD_HANDLER", fmt.Sprintf("User %s disconnected from voice", v.UserID))
-		return
-	}
-
-	// Get the key for this voice state
-	key := v.GuildID + ":" + v.ChannelID
-	c.logger.Debug("DISCORD_HANDLER", fmt.Sprintf("Voice state key: %s", key))
-
-	// Get the handlers for this key
-	c.messageHandlerMutex.RLock()
-	handlers, exists := c.messageHandlers[key]
-	c.messageHandlerMutex.RUnlock()
-
-	if !exists {
-		c.logger.Debug("DISCORD_HANDLER", fmt.Sprintf("No voice state handlers found for key: %s", key))
-		return
-	}
-
-	c.logger.Debug("DISCORD_HANDLER", fmt.Sprintf("Found %d voice state handlers for key: %s", len(handlers), key))
-
-	// Call all handlers
-	handlersCalled := 0
-	for i, h := range handlers {
-		if handler, ok := h.(func(*discordgo.Session, *discordgo.VoiceStateUpdate)); ok {
-			c.logger.Debug("DISCORD_HANDLER", fmt.Sprintf("Calling voice state handler #%d", i+1))
-			handler(s, v)
-			handlersCalled++
-		}
-	}
-
-	c.logger.Debug("DISCORD_HANDLER", fmt.Sprintf("Called %d voice state handlers", handlersCalled))
 }
 
 // onGuildCreate routes guild create events to the appropriate handlers

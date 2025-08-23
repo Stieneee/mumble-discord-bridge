@@ -18,13 +18,15 @@ type MumbleDuplex struct {
 	streams         []chan gumble.AudioBuffer
 	mumbleSleepTick sleepct.SleepCT
 	logger          logger.Logger
+	bridge          *BridgeState // Reference to bridge for connection state checking
 }
 
-func NewMumbleDuplex(log logger.Logger) *MumbleDuplex {
+func NewMumbleDuplex(log logger.Logger, bridge *BridgeState) *MumbleDuplex {
 	return &MumbleDuplex{
 		streams:         make([]chan gumble.AudioBuffer, 0),
 		mumbleSleepTick: sleepct.SleepCT{},
 		logger:          log,
+		bridge:          bridge,
 	}
 }
 
@@ -106,7 +108,6 @@ func (m *MumbleDuplex) fromMumbleMixer(ctx context.Context, cancel context.Cance
 		promMumbleStreaming.Set(float64(streamingCount))
 
 		if sendAudio {
-
 			outBuf := make([]int16, 480)
 
 			for i := 0; i < len(outBuf); i++ {
@@ -115,6 +116,7 @@ func (m *MumbleDuplex) fromMumbleMixer(ctx context.Context, cancel context.Cance
 				}
 			}
 
+			// Always try to send to Discord - let Discord side handle its own connection state
 			promToDiscordBufferSize.Set(float64(len(toDiscord)))
 			select {
 			case toDiscord <- outBuf:
@@ -132,9 +134,10 @@ func (m *MumbleDuplex) fromMumbleMixer(ctx context.Context, cancel context.Cance
 				}
 				droppingPacketCount++
 				promToDiscordDropped.Inc()
+				// Don't cancel the entire bridge for Discord buffer issues in managed mode
 				if droppingPacketCount > 250 {
-					m.logger.Error("MUMBLE_MIXER", "Discord Timeout")
-					cancel()
+					m.logger.Warn("MUMBLE_MIXER", "Discord buffer overflowing, packets will be sunk")
+					droppingPacketCount = 0 // Reset to avoid spam
 				}
 			}
 		}

@@ -97,41 +97,56 @@ func (dd *DiscordDuplex) discordSendPCM(ctx context.Context, cancel context.Canc
 	// }()
 
 	internalSend := func(opus []byte) {
-		if dd.Bridge.DiscordVoice == nil {
+		// Check if Discord connection manager is available and connected
+		if dd.Bridge.DiscordConnectionManager == nil || !dd.Bridge.DiscordConnectionManager.IsConnected() {
 			if lastReady {
-				OnError("Discord voice connection is nil", nil)
-				readyTimeout = time.AfterFunc(30*time.Second, func() {
-					dd.Bridge.Logger.Debug("DISCORD_SEND", "Set ready timeout")
-					cancel()
-				})
+				dd.Bridge.Logger.Debug("DISCORD_SEND", "Discord connection not available, sinking packet")
 				lastReady = false
 			}
+			// Track sunk packets due to Discord disconnection
+			promPacketsSunk.WithLabelValues("discord", "outbound").Inc()
 			return
 		}
-		
-		dd.Bridge.DiscordVoice.RLock()
-		if !dd.Bridge.DiscordVoice.Ready || dd.Bridge.DiscordVoice.OpusSend == nil {
+
+		// Get the current connection from the manager
+		connection := dd.Bridge.DiscordConnectionManager.GetConnection()
+		if connection == nil {
 			if lastReady {
-				OnError(fmt.Sprintf("Discordgo not ready for opus packets. %+v : %+v", dd.Bridge.DiscordVoice.Ready, dd.Bridge.DiscordVoice.OpusSend), nil)
-				readyTimeout = time.AfterFunc(30*time.Second, func() {
-					dd.Bridge.Logger.Debug("DISCORD_SEND", "Set ready timeout")
-					cancel()
-				})
+				dd.Bridge.Logger.Debug("DISCORD_SEND", "Discord voice connection is nil, sinking packet")
 				lastReady = false
 			}
-		} else if !lastReady {
-			dd.Bridge.Logger.Info("DISCORD_SEND", "Discordgo ready to send opus packets")
-			lastReady = true
-			readyTimeout.Stop()
-		} else {
-			select {
-			case dd.Bridge.DiscordVoice.OpusSend <- opus:
-			case <-ctx.Done():
-			}
-
-			promDiscordSentPackets.Inc()
+			// Track sunk packets due to Discord connection being nil
+			promPacketsSunk.WithLabelValues("discord", "outbound").Inc()
+			return
 		}
-		dd.Bridge.DiscordVoice.RUnlock()
+
+		connection.RLock()
+		if !connection.Ready || connection.OpusSend == nil {
+			if lastReady {
+				dd.Bridge.Logger.Debug("DISCORD_SEND", "Discord connection not ready, sinking packet")
+				lastReady = false
+			}
+			connection.RUnlock()
+			// Track sunk packets due to Discord connection not ready
+			promPacketsSunk.WithLabelValues("discord", "outbound").Inc()
+			return
+		} else if !lastReady {
+			dd.Bridge.Logger.Info("DISCORD_SEND", "Discord ready to send opus packets")
+			lastReady = true
+			if readyTimeout != nil {
+				readyTimeout.Stop()
+				readyTimeout = nil
+			}
+		}
+
+		select {
+		case connection.OpusSend <- opus:
+			promDiscordSentPackets.Inc()
+		case <-ctx.Done():
+		default:
+			dd.Bridge.Logger.Debug("DISCORD_SEND", "Discord send channel full, dropping packet")
+		}
+		connection.RUnlock()
 	}
 
 	defer dd.Bridge.Logger.Info("DISCORD_SEND", "Stopping Discord send PCM")
@@ -152,13 +167,18 @@ func (dd *DiscordDuplex) discordSendPCM(ctx context.Context, cancel context.Canc
 				speakingStart = time.Now()
 				done := make(chan bool, 1)
 				go func() {
-					// This call will prevent discordSendPCM from exiting if the discord connection is lost
-					if dd.Bridge.DiscordVoice != nil {
-						if err := dd.Bridge.DiscordVoice.Speaking(true); err != nil {
-							dd.Bridge.Logger.Error("DISCORD_SEND", fmt.Sprintf("Error setting speaking status to true: %v", err))
+					// Use connection manager to set speaking status
+					if dd.Bridge.DiscordConnectionManager != nil && dd.Bridge.DiscordConnectionManager.IsConnected() {
+						connection := dd.Bridge.DiscordConnectionManager.GetConnection()
+						if connection != nil {
+							if err := connection.Speaking(true); err != nil {
+								dd.Bridge.Logger.Error("DISCORD_SEND", fmt.Sprintf("Error setting speaking status to true: %v", err))
+							}
+						} else {
+							dd.Bridge.Logger.Debug("DISCORD_SEND", "Discord connection not available for speaking status")
 						}
 					} else {
-						dd.Bridge.Logger.Error("DISCORD_SEND", "Discord voice connection is nil when trying to set speaking status")
+						dd.Bridge.Logger.Debug("DISCORD_SEND", "Discord connection manager not ready for speaking status")
 					}
 					done <- true
 				}()
@@ -206,12 +226,13 @@ func (dd *DiscordDuplex) discordSendPCM(ctx context.Context, cancel context.Canc
 
 				}
 
-				if dd.Bridge.DiscordVoice != nil {
-					if err := dd.Bridge.DiscordVoice.Speaking(false); err != nil {
-						dd.Bridge.Logger.Error("DISCORD_SEND", fmt.Sprintf("Error setting speaking status to false: %v", err))
+				if dd.Bridge.DiscordConnectionManager != nil && dd.Bridge.DiscordConnectionManager.IsConnected() {
+					connection := dd.Bridge.DiscordConnectionManager.GetConnection()
+					if connection != nil {
+						if err := connection.Speaking(false); err != nil {
+							dd.Bridge.Logger.Error("DISCORD_SEND", fmt.Sprintf("Error setting speaking status to false: %v", err))
+						}
 					}
-				} else {
-					dd.Bridge.Logger.Error("DISCORD_SEND", "Discord voice connection is nil when trying to set speaking status to false")
 				}
 				streaming = false
 			}
@@ -233,41 +254,45 @@ func (dd *DiscordDuplex) discordReceivePCM(ctx context.Context, cancel context.C
 	}
 
 	for {
-		if dd.Bridge.DiscordVoice == nil {
+		// Check if Discord connection manager is available and connected
+		if dd.Bridge.DiscordConnectionManager == nil || !dd.Bridge.DiscordConnectionManager.IsConnected() {
 			if lastReady {
-				OnError("Discord voice connection is nil", nil)
-				readyTimeout = time.AfterFunc(30*time.Second, func() {
-					dd.Bridge.Logger.Debug("DISCORD_RECEIVE", "Set ready timeout")
-					cancel()
-				})
+				dd.Bridge.Logger.Debug("DISCORD_RECEIVE", "Discord connection not available, waiting")
 				lastReady = false
 			}
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(100 * time.Millisecond):
-				continue
-			}
+			continue
 		}
-		
-		dd.Bridge.DiscordVoice.RLock()
-		if !dd.Bridge.DiscordVoice.Ready || dd.Bridge.DiscordVoice.OpusRecv == nil {
+
+		// Get the current connection from the manager
+		connection := dd.Bridge.DiscordConnectionManager.GetConnection()
+		if connection == nil {
 			if lastReady {
-				OnError(fmt.Sprintf("Discordgo not to receive opus packets. %+v : %+v", dd.Bridge.DiscordVoice.Ready, dd.Bridge.DiscordVoice.OpusSend), nil)
-				readyTimeout = time.AfterFunc(30*time.Second, func() {
-					dd.Bridge.Logger.Debug("DISCORD_RECEIVE", "Set ready timeout")
-					cancel()
-				})
+				dd.Bridge.Logger.Debug("DISCORD_RECEIVE", "Discord voice connection is nil, waiting")
 				lastReady = false
 			}
-			dd.Bridge.DiscordVoice.RUnlock()
+			continue
+		}
+
+		connection.RLock()
+		if !connection.Ready || connection.OpusRecv == nil {
+			if lastReady {
+				dd.Bridge.Logger.Debug("DISCORD_RECEIVE", "Discord connection not ready for receiving")
+				lastReady = false
+			}
+			connection.RUnlock()
 			continue
 		} else if !lastReady {
-			dd.Bridge.Logger.Info("DISCORD_RECEIVE", "Discordgo ready to receive packets")
+			dd.Bridge.Logger.Info("DISCORD_RECEIVE", "Discord ready to receive packets")
 			lastReady = true
-			readyTimeout.Stop()
+			if readyTimeout != nil {
+				readyTimeout.Stop()
+				readyTimeout = nil
+			}
 		}
-		dd.Bridge.DiscordVoice.RUnlock()
+
+		// Get reference to OpusRecv channel before unlocking
+		opusRecv := connection.OpusRecv
+		connection.RUnlock()
 
 		var ok bool
 		var p *discordgo.Packet
@@ -276,7 +301,7 @@ func (dd *DiscordDuplex) discordReceivePCM(ctx context.Context, cancel context.C
 		case <-ctx.Done():
 			dd.Bridge.Logger.Info("DISCORD_RECEIVE", "Stopping Discord receive PCM")
 			return
-		case p, ok = <-dd.Bridge.DiscordVoice.OpusRecv:
+		case p, ok = <-opusRecv:
 		}
 
 		if !ok {

@@ -26,17 +26,20 @@ func (l *MumbleListener) updateUsers() {
 	}
 	promMumbleUsers.Set(float64(len(l.Bridge.MumbleUsers)))
 	l.Bridge.MumbleUsersMutex.Unlock()
+
+	// Notify metrics change for user count change
+	l.Bridge.notifyMetricsChange()
 }
 
 func (l *MumbleListener) MumbleConnect(e *gumble.ConnectEvent) {
 	l.Bridge.Logger.Info("MUMBLE_HANDLER", fmt.Sprintf("Connected to Mumble server: %s", e.Client.Conn.RemoteAddr()))
 	l.Bridge.Logger.Debug("MUMBLE_HANDLER", fmt.Sprintf("Mumble client info: Username=%s, SessionID=%d", e.Client.Self.Name, e.Client.Self.Session))
-	
+
 	// Join specified channel
 	if len(l.Bridge.BridgeConfig.MumbleChannel) > 0 {
 		channelPath := strings.Join(l.Bridge.BridgeConfig.MumbleChannel, "/")
 		l.Bridge.Logger.Info("MUMBLE_HANDLER", fmt.Sprintf("Attempting to join Mumble channel: %s", channelPath))
-		
+
 		startingChannel := e.Client.Channels.Find(l.Bridge.BridgeConfig.MumbleChannel...)
 		if startingChannel != nil {
 			l.Bridge.Logger.Debug("MUMBLE_HANDLER", fmt.Sprintf("Found target channel (ID: %d, Name: %s), moving to it", startingChannel.ID, startingChannel.Name))

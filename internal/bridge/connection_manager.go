@@ -1,0 +1,238 @@
+package bridge
+
+import (
+	"context"
+	"fmt"
+	"sync"
+	"time"
+
+	"github.com/stieneee/mumble-discord-bridge/pkg/logger"
+)
+
+// ConnectionStatus represents the status of a connection
+type ConnectionStatus int
+
+const (
+	ConnectionDisconnected ConnectionStatus = iota
+	ConnectionConnecting
+	ConnectionConnected
+	ConnectionReconnecting
+	ConnectionFailed
+)
+
+func (c ConnectionStatus) String() string {
+	switch c {
+	case ConnectionDisconnected:
+		return "Disconnected"
+	case ConnectionConnecting:
+		return "Connecting"
+	case ConnectionConnected:
+		return "Connected"
+	case ConnectionReconnecting:
+		return "Reconnecting"
+	case ConnectionFailed:
+		return "Failed"
+	default:
+		return "Unknown"
+	}
+}
+
+// ConnectionEvent represents a connection state change event
+type ConnectionEvent struct {
+	Type     ConnectionEventType
+	Status   ConnectionStatus
+	Error    error
+	Metadata map[string]interface{}
+}
+
+// ConnectionEventType represents the type of connection event
+type ConnectionEventType int
+
+const (
+	EventConnecting ConnectionEventType = iota
+	EventConnected
+	EventDisconnected
+	EventReconnecting
+	EventFailed
+	EventHealthCheck
+)
+
+func (c ConnectionEventType) String() string {
+	switch c {
+	case EventConnecting:
+		return "Connecting"
+	case EventConnected:
+		return "Connected"
+	case EventDisconnected:
+		return "Disconnected"
+	case EventReconnecting:
+		return "Reconnecting"
+	case EventFailed:
+		return "Failed"
+	case EventHealthCheck:
+		return "HealthCheck"
+	default:
+		return "Unknown"
+	}
+}
+
+// ConnectionManager defines the interface for managing a single connection type
+type ConnectionManager interface {
+	// Start begins the connection process
+	Start(ctx context.Context) error
+
+	// Stop gracefully shuts down the connection
+	Stop() error
+
+	// IsConnected returns true if the connection is established and healthy
+	IsConnected() bool
+
+	// GetStatus returns the current connection status
+	GetStatus() ConnectionStatus
+
+	// GetEventChannel returns a channel for connection events
+	GetEventChannel() <-chan ConnectionEvent
+
+	// GetConnectionInfo returns connection-specific information
+	GetConnectionInfo() map[string]interface{}
+}
+
+// BaseConnectionManager provides common functionality for connection managers
+type BaseConnectionManager struct {
+	status      ConnectionStatus
+	statusMutex sync.RWMutex
+	eventChan   chan ConnectionEvent
+	logger      logger.Logger
+	ctx         context.Context
+	cancel      context.CancelFunc
+
+	// Health check settings
+	healthCheckInterval time.Duration
+}
+
+// NewBaseConnectionManager creates a new base connection manager
+func NewBaseConnectionManager(logger logger.Logger) *BaseConnectionManager {
+	return &BaseConnectionManager{
+		status:              ConnectionDisconnected,
+		eventChan:           make(chan ConnectionEvent, 100), // Increased buffer to prevent blocking
+		logger:              logger,
+		ctx:                 nil, // Will be set when Start() is called with parent context
+		cancel:              nil,
+		healthCheckInterval: time.Second * 30,
+	}
+}
+
+// SetStatus updates the connection status and sends an event
+func (b *BaseConnectionManager) SetStatus(status ConnectionStatus, err error) {
+	b.statusMutex.Lock()
+	oldStatus := b.status
+	b.status = status
+	b.statusMutex.Unlock()
+
+	if oldStatus != status {
+		eventType := b.statusToEventType(status)
+		event := ConnectionEvent{
+			Type:   eventType,
+			Status: status,
+			Error:  err,
+		}
+
+		select {
+		case b.eventChan <- event:
+		default:
+			// Event channel is full - try to drop oldest event and add new one
+			select {
+			case <-b.eventChan:
+				// Successfully dropped oldest event, try to add new one
+				select {
+				case b.eventChan <- event:
+				default:
+					b.logger.Warn("CONNECTION", "Event channel still full after dropping oldest event")
+				}
+			default:
+				b.logger.Warn("CONNECTION", "Event channel full or closed, dropping event")
+			}
+		}
+
+		b.logger.Debug("CONNECTION", fmt.Sprintf("Status changed: %s -> %s", oldStatus, status))
+	}
+}
+
+// GetStatus returns the current connection status
+func (b *BaseConnectionManager) GetStatus() ConnectionStatus {
+	b.statusMutex.RLock()
+	defer b.statusMutex.RUnlock()
+	return b.status
+}
+
+// IsConnected returns true if the connection is established
+func (b *BaseConnectionManager) IsConnected() bool {
+	return b.GetStatus() == ConnectionConnected
+}
+
+// GetEventChannel returns the event channel
+func (b *BaseConnectionManager) GetEventChannel() <-chan ConnectionEvent {
+	return b.eventChan
+}
+
+// InitContext initializes the context for the connection manager
+func (b *BaseConnectionManager) InitContext(parentCtx context.Context) {
+	b.ctx, b.cancel = context.WithCancel(parentCtx)
+}
+
+// Stop cancels the context and sets status to disconnected
+func (b *BaseConnectionManager) Stop() error {
+	if b.cancel != nil {
+		b.cancel()
+	}
+	b.SetStatus(ConnectionDisconnected, nil)
+
+	// Close the event channel to signal no more events will be sent
+	go func() {
+		// Small delay to allow any pending SetStatus calls to complete
+		time.Sleep(100 * time.Millisecond)
+		close(b.eventChan)
+	}()
+
+	return nil
+}
+
+// statusToEventType converts a ConnectionStatus to ConnectionEventType
+func (b *BaseConnectionManager) statusToEventType(status ConnectionStatus) ConnectionEventType {
+	switch status {
+	case ConnectionConnecting:
+		return EventConnecting
+	case ConnectionConnected:
+		return EventConnected
+	case ConnectionDisconnected:
+		return EventDisconnected
+	case ConnectionReconnecting:
+		return EventReconnecting
+	case ConnectionFailed:
+		return EventFailed
+	default:
+		return EventDisconnected
+	}
+}
+
+// Note: DiscordConnectionManager and MumbleConnectionManager are defined in their respective files
+
+// ConnectionManagerConfig holds configuration for connection managers
+type ConnectionManagerConfig struct {
+	MaxRetries          int           `json:"maxRetries"`
+	BaseRetryDelay      time.Duration `json:"baseRetryDelay"`
+	MaxRetryDelay       time.Duration `json:"maxRetryDelay"`
+	RetryMultiplier     float64       `json:"retryMultiplier"`
+	HealthCheckInterval time.Duration `json:"healthCheckInterval"`
+}
+
+// DefaultConnectionManagerConfig returns default configuration
+func DefaultConnectionManagerConfig() *ConnectionManagerConfig {
+	return &ConnectionManagerConfig{
+		MaxRetries:          5,
+		BaseRetryDelay:      time.Second * 2,
+		MaxRetryDelay:       time.Minute * 2,
+		RetryMultiplier:     2.0,
+		HealthCheckInterval: time.Second * 30,
+	}
+}
