@@ -60,7 +60,7 @@ func (l *DiscordListener) GuildCreate(s *discordgo.Session, event *discordgo.Gui
 }
 
 func (l *DiscordListener) MessageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
-	l.Bridge.Logger.Debug("DISCORD_HANDLER", fmt.Sprintf("MessageCreate called from Discord: %s from %s", m.Content, m.Author.Username))
+	l.Bridge.Logger.Debug("DISCORD_HANDLER", fmt.Sprintf("MessageCreate called from Discord user: %s", m.Author.Username))
 
 	// Ignore all messages created by the bot itself
 	if m.Author.ID == s.State.User.ID {
@@ -336,7 +336,7 @@ func (l *DiscordListener) MessageCreate(s *discordgo.Session, m *discordgo.Messa
 			return
 		}
 
-		l.Bridge.Logger.Debug("DISCORD→MUMBLE", fmt.Sprintf("Forwarding message from %s: %s", m.Author.Username, content))
+		l.Bridge.Logger.Debug("DISCORD→MUMBLE", fmt.Sprintf("Forwarding message from %s", m.Author.Username))
 
 		// Perform null checks
 		if l.Bridge.MumbleClient == nil ||

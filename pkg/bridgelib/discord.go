@@ -179,7 +179,7 @@ func (c *SharedDiscordClient) onMessageCreate(s *discordgo.Session, m *discordgo
 	if len(content) > 50 {
 		content = content[:47] + "..."
 	}
-	c.logger.Debug("DISCORD_HANDLER", fmt.Sprintf("Message received from %s: %s", m.Author.Username, content))
+	c.logger.Debug("DISCORD_HANDLER", fmt.Sprintf("Message received from %s", m.Author.Username))
 
 	// Skip messages from the bot itself
 	if m.Author.ID == s.State.User.ID {
