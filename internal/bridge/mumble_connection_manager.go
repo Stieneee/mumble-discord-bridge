@@ -92,11 +92,11 @@ func (m *MumbleConnectionManager) connectionLoop(ctx context.Context) {
 // connect establishes a Mumble connection
 func (m *MumbleConnectionManager) connect() error {
 	m.SetStatus(ConnectionConnecting, nil)
-	
+
 	// Log connection attempt with redacted sensitive info
 	configDebug := m.getRedactedConfigInfo()
 	tlsDebug := m.getRedactedTLSInfo()
-	m.logger.Debug("MUMBLE_CONN", fmt.Sprintf("Connecting to Mumble: Address=%s, Config=%+v, TLS=%+v", 
+	m.logger.Debug("MUMBLE_CONN", fmt.Sprintf("Connecting to Mumble: Address=%s, Config=%+v, TLS=%+v",
 		m.address, configDebug, tlsDebug))
 
 	// Disconnect any existing connection
@@ -114,7 +114,7 @@ func (m *MumbleConnectionManager) connect() error {
 	m.client = client
 	m.clientMutex.Unlock()
 
-	m.logger.Debug("MUMBLE_CONN", fmt.Sprintf("Mumble connection established successfully to %s, client state: %d", 
+	m.logger.Debug("MUMBLE_CONN", fmt.Sprintf("Mumble connection established successfully to %s, client state: %d",
 		m.address, client.State()))
 	return nil
 }
@@ -319,7 +319,7 @@ func (m *MumbleConnectionManager) getRedactedTLSInfo() map[string]interface{} {
 		"MaxVersion":         m.tlsConfig.MaxVersion,
 		"CipherSuites":       "[REDACTED]",
 		"Certificates":       fmt.Sprintf("[%d certificates]", len(m.tlsConfig.Certificates)),
-		"RootCAs":           fmt.Sprintf("[%v]", m.tlsConfig.RootCAs != nil),
-		"ClientCAs":         fmt.Sprintf("[%v]", m.tlsConfig.ClientCAs != nil),
+		"RootCAs":            fmt.Sprintf("[%v]", m.tlsConfig.RootCAs != nil),
+		"ClientCAs":          fmt.Sprintf("[%v]", m.tlsConfig.ClientCAs != nil),
 	}
 }

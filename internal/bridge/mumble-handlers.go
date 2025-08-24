@@ -119,13 +119,13 @@ func (l *MumbleListener) logChannelTree(channel *gumble.Channel, depth int) {
 	if channel == nil {
 		return
 	}
-	
+
 	// Create indentation based on depth
 	indent := strings.Repeat("  ", depth)
-	
+
 	// Log this channel
 	l.Bridge.Logger.Info("MUMBLE_HANDLER", fmt.Sprintf("%s- %s (ID: %d)", indent, channel.Name, channel.ID))
-	
+
 	// Log child channels
 	for _, child := range channel.Children {
 		l.logChannelTree(child, depth+1)
