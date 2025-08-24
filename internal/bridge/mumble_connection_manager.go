@@ -92,7 +92,12 @@ func (m *MumbleConnectionManager) connectionLoop(ctx context.Context) {
 // connect establishes a Mumble connection
 func (m *MumbleConnectionManager) connect() error {
 	m.SetStatus(ConnectionConnecting, nil)
-	m.logger.Debug("MUMBLE_CONN", fmt.Sprintf("Connecting to Mumble: Address=%s, Username=%s", m.address, m.config.Username))
+	
+	// Log connection attempt with redacted sensitive info
+	configDebug := m.getRedactedConfigInfo()
+	tlsDebug := m.getRedactedTLSInfo()
+	m.logger.Debug("MUMBLE_CONN", fmt.Sprintf("Connecting to Mumble: Address=%s, Config=%+v, TLS=%+v", 
+		m.address, configDebug, tlsDebug))
 
 	// Disconnect any existing connection
 	m.disconnectInternal()
@@ -100,6 +105,7 @@ func (m *MumbleConnectionManager) connect() error {
 	// Attempt Mumble connection
 	client, err := gumble.DialWithDialer(new(net.Dialer), m.address, m.config, m.tlsConfig)
 	if err != nil {
+		m.logger.Error("MUMBLE_CONN", fmt.Sprintf("Failed to dial Mumble server %s: %v", m.address, err))
 		return fmt.Errorf("failed to connect to Mumble server: %w", err)
 	}
 
@@ -108,7 +114,8 @@ func (m *MumbleConnectionManager) connect() error {
 	m.client = client
 	m.clientMutex.Unlock()
 
-	m.logger.Debug("MUMBLE_CONN", "Mumble connection established successfully")
+	m.logger.Debug("MUMBLE_CONN", fmt.Sprintf("Mumble connection established successfully to %s, client state: %d", 
+		m.address, client.State()))
 	return nil
 }
 
@@ -280,4 +287,39 @@ func (m *MumbleConnectionManager) GetAddress() string {
 // GetConfig returns the Mumble configuration
 func (m *MumbleConnectionManager) GetConfig() *gumble.Config {
 	return m.config
+}
+
+// getRedactedConfigInfo returns config info with sensitive fields redacted for logging
+func (m *MumbleConnectionManager) getRedactedConfigInfo() map[string]interface{} {
+	if m.config == nil {
+		return map[string]interface{}{"config": "nil"}
+	}
+
+	return map[string]interface{}{
+		"Username":       m.config.Username,
+		"Password":       fmt.Sprintf("[REDACTED - %d chars]", len(m.config.Password)),
+		"Tokens":         fmt.Sprintf("[%d tokens]", len(m.config.Tokens)),
+		"AudioInterval":  m.config.AudioInterval.String(),
+		"AudioDataBytes": m.config.AudioDataBytes,
+		"AudioFrameSize": m.config.AudioFrameSize(),
+		"ClientType":     m.config.ClientType,
+	}
+}
+
+// getRedactedTLSInfo returns TLS config info with sensitive fields redacted for logging
+func (m *MumbleConnectionManager) getRedactedTLSInfo() map[string]interface{} {
+	if m.tlsConfig == nil {
+		return map[string]interface{}{"tls": "nil"}
+	}
+
+	return map[string]interface{}{
+		"InsecureSkipVerify": m.tlsConfig.InsecureSkipVerify,
+		"ServerName":         m.tlsConfig.ServerName,
+		"MinVersion":         m.tlsConfig.MinVersion,
+		"MaxVersion":         m.tlsConfig.MaxVersion,
+		"CipherSuites":       "[REDACTED]",
+		"Certificates":       fmt.Sprintf("[%d certificates]", len(m.tlsConfig.Certificates)),
+		"RootCAs":           fmt.Sprintf("[%v]", m.tlsConfig.RootCAs != nil),
+		"ClientCAs":         fmt.Sprintf("[%v]", m.tlsConfig.ClientCAs != nil),
+	}
 }
