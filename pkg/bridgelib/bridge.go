@@ -455,7 +455,17 @@ func splitChannel(channel string) []string {
 		return []string{}
 	}
 
+	// Strip leading and trailing quotes (both single and double)
+	channel = strings.Trim(channel, "'\"")
+	
 	// Split the channel string by "/"
 	// Example: "Root/Games/Minecraft" => ["Root", "Games", "Minecraft"]
-	return strings.Split(channel, "/")
+	parts := strings.Split(channel, "/")
+	
+	// Trim whitespace from each part
+	for i, part := range parts {
+		parts[i] = strings.TrimSpace(part)
+	}
+	
+	return parts
 }

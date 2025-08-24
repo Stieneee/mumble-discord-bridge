@@ -47,6 +47,7 @@ func (l *MumbleListener) MumbleConnect(e *gumble.ConnectEvent) {
 			l.Bridge.Logger.Info("MUMBLE_HANDLER", fmt.Sprintf("Successfully moved to Mumble channel: %s", channelPath))
 		} else {
 			l.Bridge.Logger.Warn("MUMBLE_HANDLER", fmt.Sprintf("Target Mumble channel not found: %s, staying in root channel", channelPath))
+			l.logAvailableChannels(e.Client)
 		}
 	} else {
 		l.Bridge.Logger.Debug("MUMBLE_HANDLER", "No specific Mumble channel specified, staying in root channel")
@@ -104,6 +105,30 @@ func (l *MumbleListener) MumbleUserChange(e *gumble.UserChangeEvent) {
 	if e.Type.Has(gumble.UserChangeDisconnected) {
 		l.Bridge.discordSendMessage(e.User.Name + " has left mumble")
 		l.Bridge.Logger.Info("MUMBLE_HANDLER", fmt.Sprintf("User disconnected from mumble: %s", e.User.Name))
+	}
+}
+
+// logAvailableChannels logs all available channels on the Mumble server for debugging
+func (l *MumbleListener) logAvailableChannels(client *gumble.Client) {
+	l.Bridge.Logger.Info("MUMBLE_HANDLER", "Available channels on server:")
+	l.logChannelTree(client.Channels[0], 0) // Start from root channel
+}
+
+// logChannelTree recursively logs the channel tree structure
+func (l *MumbleListener) logChannelTree(channel *gumble.Channel, depth int) {
+	if channel == nil {
+		return
+	}
+	
+	// Create indentation based on depth
+	indent := strings.Repeat("  ", depth)
+	
+	// Log this channel
+	l.Bridge.Logger.Info("MUMBLE_HANDLER", fmt.Sprintf("%s- %s (ID: %d)", indent, channel.Name, channel.ID))
+	
+	// Log child channels
+	for _, child := range channel.Children {
+		l.logChannelTree(child, depth+1)
 	}
 }
 
