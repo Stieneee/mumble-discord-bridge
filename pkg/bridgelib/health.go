@@ -20,7 +20,7 @@ type BackoffConfig struct {
 func DefaultBackoffConfig() BackoffConfig {
 	return BackoffConfig{
 		InitialDelay: 2 * time.Second,
-		MaxDelay:     2 * time.Minute,
+		MaxDelay:     1 * time.Minute,
 		Multiplier:   2.0,
 		Jitter:       true,
 	}
@@ -65,7 +65,7 @@ type HealthConfig struct {
 func DefaultHealthConfig() HealthConfig {
 	return HealthConfig{
 		CheckInterval:           30 * time.Second,
-		MaxRecoveryAttempts:     5,
+		MaxRecoveryAttempts:     0, // 0 = infinite recovery attempts
 		RecoveryBackoff:         DefaultBackoffConfig(),
 		AutoRecovery:            true,
 		ConnectionTimeout:       10 * time.Second,
@@ -409,8 +409,8 @@ func (hm *HealthMonitor) attemptRecovery(serviceName string) {
 		return
 	}
 	
-	// Check if we've exceeded max recovery attempts
-	if serviceHealth.RecoveryAttempts >= hm.config.MaxRecoveryAttempts {
+	// Check if we've exceeded max recovery attempts (0 = infinite attempts)
+	if hm.config.MaxRecoveryAttempts > 0 && serviceHealth.RecoveryAttempts >= hm.config.MaxRecoveryAttempts {
 		hm.mutex.Unlock()
 		hm.logger.Error("HEALTH", fmt.Sprintf("Max recovery attempts reached for %s, giving up", serviceName))
 		
@@ -435,8 +435,13 @@ func (hm *HealthMonitor) attemptRecovery(serviceName string) {
 	serviceHealth.LastRecoveryAttempt = time.Now()
 	hm.mutex.Unlock()
 	
-	hm.logger.Info("HEALTH", fmt.Sprintf("Attempting recovery for %s (attempt %d/%d)", 
-		serviceName, attempt+1, hm.config.MaxRecoveryAttempts))
+	if hm.config.MaxRecoveryAttempts > 0 {
+		hm.logger.Info("HEALTH", fmt.Sprintf("Attempting recovery for %s (attempt %d/%d)", 
+			serviceName, attempt+1, hm.config.MaxRecoveryAttempts))
+	} else {
+		hm.logger.Info("HEALTH", fmt.Sprintf("Attempting recovery for %s (attempt %d)", 
+			serviceName, attempt+1))
+	}
 	
 	// Emit recovery attempt event
 	if hm.bridge.eventDispatcher != nil {
