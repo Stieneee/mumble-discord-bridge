@@ -89,6 +89,7 @@ type ServiceHealth struct {
 	ConnectionQuality   float64 // 0.0-1.0 based on connection stability
 	LastErrors          []error // Circular buffer of recent errors
 	StuckSince          time.Time
+	LastHealthy         *bool   // Track last health status for change detection
 }
 
 // IsHealthy returns true if the service is considered healthy
@@ -337,10 +338,10 @@ func (hm *HealthMonitor) performHealthCheck() {
 			hm.logger.Warn("HEALTH", fmt.Sprintf("Bridge health degraded (Discord: %v, Mumble: %v)", 
 				discordHealthy, mumbleHealthy))
 		}
+		// Debug log only when overall status changes
+		hm.logger.Debug("HEALTH", fmt.Sprintf("Health check completed - overall: %v (Discord: %v, Mumble: %v) (CHANGED)", 
+			hm.overallHealthy, discordHealthy, mumbleHealthy))
 	}
-	
-	hm.logger.Debug("HEALTH", fmt.Sprintf("Health check completed - overall: %v (Discord: %v, Mumble: %v)", 
-		hm.overallHealthy, discordHealthy, mumbleHealthy))
 }
 
 // checkServiceHealth checks the health of a specific service and triggers recovery if needed
@@ -362,9 +363,13 @@ func (hm *HealthMonitor) checkServiceHealth(serviceName string) bool {
 	shouldRecover := hm.config.AutoRecovery && !isHealthy && 
 		(isStuck || serviceHealth.ConsecutiveFailures > 3)
 	
-	// Debug logging
-	hm.logger.Debug("HEALTH_CHECK", fmt.Sprintf("%s health: Connected=%t, ConsecutiveFailures=%d, IsHealthy=%t", 
-		serviceName, serviceHealth.Connected, serviceHealth.ConsecutiveFailures, isHealthy))
+	// Debug logging only when health status changes
+	if serviceHealth.LastHealthy == nil || *serviceHealth.LastHealthy != isHealthy {
+		hm.logger.Debug("HEALTH_CHECK", fmt.Sprintf("%s health: Connected=%t, ConsecutiveFailures=%d, IsHealthy=%t (CHANGED)", 
+			serviceName, serviceHealth.Connected, serviceHealth.ConsecutiveFailures, isHealthy))
+		// Update the last health status
+		serviceHealth.LastHealthy = &isHealthy
+	}
 	
 	hm.mutex.RUnlock()
 	
