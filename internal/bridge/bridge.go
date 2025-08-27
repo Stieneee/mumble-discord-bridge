@@ -165,6 +165,11 @@ type BridgeState struct {
 	// Connection event handling context and cancellation
 	connectionCtx    context.Context
 	connectionCancel context.CancelFunc
+
+	// Reference to BridgeInstance for event forwarding (if available)
+	BridgeInstance interface {
+		EmitConnectionEvent(service string, eventType int, connected bool, err error)
+	}
 }
 
 // notifyMetricsChange triggers the metrics change callback if it's set
@@ -173,6 +178,47 @@ func (b *BridgeState) notifyMetricsChange() {
 		// Run callback in a goroutine to avoid blocking the event handler
 		go b.MetricsChangeCallback()
 	}
+}
+
+// EmitConnectionEvent implements BridgeEventEmitter interface
+func (b *BridgeState) EmitConnectionEvent(service string, eventType int, connected bool, err error) {
+	// Forward the event to BridgeInstance if available (for bridgelib integration)
+	if b.BridgeInstance != nil {
+		b.BridgeInstance.EmitConnectionEvent(service, eventType, connected, err)
+	}
+
+	// Also update internal connection state for compatibility
+	b.BridgeMutex.Lock()
+	defer b.BridgeMutex.Unlock()
+
+	switch service {
+	case "discord":
+		b.DiscordConnected = connected
+		if connected {
+			b.Logger.Info("BRIDGE", "Discord connected via connection manager")
+		} else {
+			b.Logger.Info("BRIDGE", "Discord disconnected via connection manager")
+			if err != nil {
+				b.Logger.Error("BRIDGE", fmt.Sprintf("Discord disconnection error: %v", err))
+			}
+		}
+	case "mumble":
+		b.MumbleConnected = connected
+		if connected {
+			b.Logger.Info("BRIDGE", "Mumble connected via connection manager")
+		} else {
+			b.Logger.Info("BRIDGE", "Mumble disconnected via connection manager")
+			if err != nil {
+				b.Logger.Error("BRIDGE", fmt.Sprintf("Mumble disconnection error: %v", err))
+			}
+		}
+	}
+
+	// Update overall connection state
+	b.Connected = b.DiscordConnected && b.MumbleConnected
+
+	// Notify metrics change for event-driven updates
+	b.notifyMetricsChange()
 }
 
 // initializeConnectionManagers creates and initializes the connection managers
@@ -189,6 +235,7 @@ func (b *BridgeState) initializeConnectionManagers() error {
 			b.BridgeConfig.GID,
 			b.DiscordChannelID,
 			b.Logger,
+			b,
 		)
 		b.Logger.Debug("BRIDGE", "Discord connection manager initialized")
 	} else {
@@ -217,6 +264,7 @@ func (b *BridgeState) initializeConnectionManagers() error {
 			b.BridgeConfig.MumbleConfig,
 			&tlsConfig,
 			b.Logger,
+			b, // BridgeState implements BridgeEventEmitter
 		)
 		b.Logger.Debug("BRIDGE", "Mumble connection manager initialized")
 	} else {

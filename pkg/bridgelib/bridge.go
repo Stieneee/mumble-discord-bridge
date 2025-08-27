@@ -58,6 +58,13 @@ type BridgeConfig struct {
 	Mode       string
 	Version    string
 
+	// Health monitoring configuration
+	HealthConfig HealthConfig
+
+	// Event configuration
+	EmitHealthEvents bool
+	EventBufferSize  int
+
 	// Logger for the bridge instance
 	Logger Logger
 }
@@ -78,6 +85,12 @@ type BridgeInstance struct {
 
 	// Logger for this bridge instance
 	logger Logger
+
+	// Event handling
+	eventDispatcher *EventDispatcher
+
+	// Health monitoring
+	healthMonitor *HealthMonitor
 
 	// The lock for protecting access to the bridge
 	mu sync.Mutex
@@ -125,6 +138,26 @@ func NewBridgeInstanceWithContext(ctx context.Context, id string, config *Bridge
 
 	bridgeLogger.Debug("BRIDGE_INIT", "Bridge instance struct created successfully")
 
+	// Initialize event dispatcher
+	bufferSize := config.EventBufferSize
+	if bufferSize <= 0 {
+		bufferSize = 100 // Default buffer size
+	}
+	inst.eventDispatcher = NewEventDispatcher(id, bufferSize)
+	inst.eventDispatcher.Start()
+	bridgeLogger.Debug("BRIDGE_INIT", "Event dispatcher created and started")
+
+	// Initialize health monitor with defaults if not configured
+	healthConfig := config.HealthConfig
+	if healthConfig.CheckInterval == 0 {
+		healthConfig = DefaultHealthConfig()
+		if config.EmitHealthEvents {
+			healthConfig.EmitHealthEvents = true
+		}
+	}
+	inst.healthMonitor = NewHealthMonitor(inst, healthConfig, bridgeLogger)
+	bridgeLogger.Debug("BRIDGE_INIT", "Health monitor created")
+
 	// Create the internal bridge state
 	bridgeLogger.Debug("BRIDGE_INIT", "Creating internal bridge state")
 	inst.State = &bridge.BridgeState{
@@ -152,6 +185,9 @@ func NewBridgeInstanceWithContext(ctx context.Context, id string, config *Bridge
 		MumbleUsers:  make(map[string]bool),
 		Logger:       bridgeLogger,
 	}
+	
+	// Set back-reference to enable event forwarding to health monitor
+	inst.State.BridgeInstance = inst
 
 	// Setup Mumble config
 	bridgeLogger.Debug("BRIDGE_INIT", "Setting up Mumble configuration")
@@ -241,6 +277,23 @@ func (b *BridgeInstance) Start() error {
 
 	// Log important configuration values
 	b.logger.Info("BRIDGE_CONFIG", fmt.Sprintf("ChatBridge=%v, MumbleDisableText=%v, DiscordTextMode=%s", b.config.ChatBridge, b.config.MumbleDisableText, b.config.DiscordTextMode))
+
+	// Start health monitor
+	if b.healthMonitor != nil {
+		b.healthMonitor.Start(b.ctx)
+		b.logger.Debug("BRIDGE_START", "Health monitor started")
+	}
+
+	// Emit bridge starting event
+	if b.eventDispatcher != nil {
+		b.eventDispatcher.EmitEvent(EventBridgeStarting, map[string]interface{}{
+			"discord_gid": b.config.DiscordGID,
+			"discord_cid": b.config.DiscordCID,
+			"mumble_address": b.config.MumbleAddress,
+			"mumble_port": b.config.MumblePort,
+			"mode": b.config.Mode,
+		}, nil)
+	}
 
 	// Set the Discord channel ID
 	b.logger.Debug("BRIDGE_START", fmt.Sprintf("Setting Discord channel ID: %s", b.config.DiscordCID))
@@ -333,6 +386,13 @@ func (b *BridgeInstance) Start() error {
 		}()
 	}
 
+	// Emit bridge started event
+	if b.eventDispatcher != nil {
+		b.eventDispatcher.EmitEvent(EventBridgeStarted, map[string]interface{}{
+			"mode": b.config.Mode,
+		}, nil)
+	}
+
 	return nil
 }
 
@@ -350,10 +410,22 @@ func (b *BridgeInstance) Stop() error {
 	}
 
 	b.logger.Info("BRIDGE_STOP", "Stopping bridge")
+
+	// Emit bridge stopping event
+	if b.eventDispatcher != nil {
+		b.eventDispatcher.EmitEventSync(EventBridgeStopping, map[string]interface{}{}, nil)
+	}
+
 	b.logger.Debug("BRIDGE_STOP", "Cancelling context")
 
 	// Cancel the context to signal all operations to stop
 	b.cancel()
+
+	// Stop health monitor
+	if b.healthMonitor != nil {
+		b.healthMonitor.Stop()
+		b.logger.Debug("BRIDGE_STOP", "Health monitor stopped")
+	}
 
 	// Mark bridge as stopped
 	b.stopped = true
@@ -391,11 +463,33 @@ func (b *BridgeInstance) Stop() error {
 		b.logger.Debug("BRIDGE_STOP", "Message handler unregistered successfully")
 	}
 
+	// Emit bridge stopped event and stop event dispatcher
+	if b.eventDispatcher != nil {
+		b.eventDispatcher.EmitEventSync(EventBridgeStopped, map[string]interface{}{}, nil)
+		b.eventDispatcher.Stop()
+		b.logger.Debug("BRIDGE_STOP", "Event dispatcher stopped")
+	}
+
 	b.logger.Info("BRIDGE_STOP", "Bridge stopped successfully")
 	return nil
 }
 
-// GetStatus returns the status of the bridge
+// BridgeStatus represents comprehensive bridge status information
+type BridgeStatus struct {
+	ID                  string                 `json:"id"`
+	State              string                 `json:"state"`
+	DiscordConnected   bool                   `json:"discord_connected"`
+	MumbleConnected    bool                   `json:"mumble_connected"`
+	DiscordUsers       int                    `json:"discord_users"`
+	MumbleUsers        int                    `json:"mumble_users"`
+	Uptime             time.Duration          `json:"uptime"`
+	LastHealthCheck    time.Time              `json:"last_health_check"`
+	HealthStatus       string                 `json:"health_status"`
+	ConnectionQuality  map[string]float64     `json:"connection_quality"`
+	Config             map[string]interface{} `json:"config"`
+}
+
+// GetStatus returns the basic status of the bridge (legacy method)
 func (b *BridgeInstance) GetStatus() map[string]interface{} {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -425,7 +519,88 @@ func (b *BridgeInstance) GetStatus() map[string]interface{} {
 		"mumblePort":    b.config.MumblePort,
 		"discordGID":    b.config.DiscordGID,
 		"discordCID":    b.config.DiscordCID,
+		"stopped":       b.stopped,
 	}
+}
+
+// GetDetailedStatus returns comprehensive bridge status information
+func (b *BridgeInstance) GetDetailedStatus() BridgeStatus {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	status := BridgeStatus{
+		ID: b.ID,
+		ConnectionQuality: make(map[string]float64),
+		Config: make(map[string]interface{}),
+	}
+
+	// Get basic state
+	if b.stopped {
+		status.State = "stopped"
+	} else if b.State.Connected {
+		status.State = "running"
+	} else {
+		status.State = "starting"
+	}
+
+	// Get health information
+	if b.healthMonitor != nil {
+		discordHealth, mumbleHealth, overallHealthy := b.healthMonitor.GetHealth()
+		
+		status.DiscordConnected = discordHealth.Connected
+		status.MumbleConnected = mumbleHealth.Connected
+		status.LastHealthCheck = discordHealth.LastHealthCheck
+		if mumbleHealth.LastHealthCheck.After(discordHealth.LastHealthCheck) {
+			status.LastHealthCheck = mumbleHealth.LastHealthCheck
+		}
+		
+		status.ConnectionQuality["discord"] = discordHealth.ConnectionQuality
+		status.ConnectionQuality["mumble"] = mumbleHealth.ConnectionQuality
+		
+		if overallHealthy {
+			status.HealthStatus = "healthy"
+		} else {
+			status.HealthStatus = "unhealthy"
+		}
+	}
+
+	// Get user counts from bridge state
+	if b.State != nil {
+		b.State.MumbleUsersMutex.Lock()
+		b.State.DiscordUsersMutex.Lock()
+		status.MumbleUsers = len(b.State.MumbleUsers)
+		status.DiscordUsers = len(b.State.DiscordUsers)
+		b.State.DiscordUsersMutex.Unlock()
+		b.State.MumbleUsersMutex.Unlock()
+
+		// Calculate uptime
+		if b.State.Connected && !b.State.StartTime.IsZero() {
+			status.Uptime = time.Since(b.State.StartTime)
+		}
+	}
+
+	// Add configuration information
+	status.Config["mumble_address"] = b.config.MumbleAddress
+	status.Config["mumble_port"] = b.config.MumblePort
+	status.Config["discord_gid"] = b.config.DiscordGID
+	status.Config["discord_cid"] = b.config.DiscordCID
+	status.Config["mode"] = b.config.Mode
+
+	return status
+}
+
+// UpdateConfig updates the bridge configuration (requires restart)
+func (b *BridgeInstance) UpdateConfig(config *BridgeConfig) error {
+	// For now, configuration updates require a restart
+	// In the future, we could support some hot-swappable configurations
+	
+	if b.eventDispatcher != nil {
+		b.eventDispatcher.EmitEvent(EventConfigUpdateRequired, map[string]interface{}{
+			"reason": "configuration_changed",
+		}, nil)
+	}
+	
+	return fmt.Errorf("restart required to apply configuration changes")
 }
 
 // setBridgeMode sets the bridge mode based on a string
@@ -447,6 +622,88 @@ func (b *BridgeInstance) setBridgeMode(mode string) {
 // SetMetricsChangeCallback sets a callback function that will be called when metrics change
 func (b *BridgeInstance) SetMetricsChangeCallback(callback func()) {
 	b.State.MetricsChangeCallback = callback
+}
+
+// RegisterHandler registers a handler for a specific event type
+func (b *BridgeInstance) RegisterHandler(eventType BridgeEventType, handler BridgeEventHandler) {
+	if b.eventDispatcher != nil {
+		b.eventDispatcher.RegisterHandler(eventType, handler)
+	}
+}
+
+// UnregisterHandler removes a handler for a specific event type
+func (b *BridgeInstance) UnregisterHandler(eventType BridgeEventType, handler BridgeEventHandler) {
+	if b.eventDispatcher != nil {
+		b.eventDispatcher.UnregisterHandler(eventType, handler)
+	}
+}
+
+// RegisterGlobalHandler registers a handler that receives all events
+func (b *BridgeInstance) RegisterGlobalHandler(handler BridgeEventHandler) {
+	if b.eventDispatcher != nil {
+		b.eventDispatcher.RegisterGlobalHandler(handler)
+	}
+}
+
+// UnregisterGlobalHandler removes a global handler
+func (b *BridgeInstance) UnregisterGlobalHandler(handler BridgeEventHandler) {
+	if b.eventDispatcher != nil {
+		b.eventDispatcher.UnregisterGlobalHandler(handler)
+	}
+}
+
+// EmitConnectionEvent emits a connection event (implements BridgeEventEmitter)
+func (b *BridgeInstance) EmitConnectionEvent(service string, eventTypeInt int, connected bool, err error) {
+	if b.eventDispatcher == nil {
+		return
+	}
+
+	// Map service and event type to BridgeEventType
+	var eventType BridgeEventType
+	if service == "discord" {
+		switch eventTypeInt {
+		case 0:
+			eventType = EventDiscordConnecting
+		case 1:
+			eventType = EventDiscordConnected
+		case 2:
+			eventType = EventDiscordDisconnected
+		case 3:
+			eventType = EventDiscordReconnecting
+		case 4:
+			eventType = EventDiscordConnectionFailed
+		default:
+			return
+		}
+	} else if service == "mumble" {
+		switch eventTypeInt {
+		case 0:
+			eventType = EventMumbleConnecting
+		case 1:
+			eventType = EventMumbleConnected
+		case 2:
+			eventType = EventMumbleDisconnected
+		case 3:
+			eventType = EventMumbleReconnecting
+		case 4:
+			eventType = EventMumbleConnectionFailed
+		default:
+			return
+		}
+	} else {
+		return
+	}
+
+	// Update health monitor
+	if b.healthMonitor != nil {
+		b.healthMonitor.UpdateConnectionStatus(service, connected, err)
+	}
+
+	// Emit event
+	b.eventDispatcher.EmitEvent(eventType, map[string]interface{}{
+		"service":   service,
+		"connected": connected,
+	}, err)
 }
 
 // Helper function to split the channel string into a slice of strings

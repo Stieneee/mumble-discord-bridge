@@ -23,8 +23,8 @@ type MumbleConnectionManager struct {
 }
 
 // NewMumbleConnectionManager creates a new Mumble connection manager
-func NewMumbleConnectionManager(address string, config *gumble.Config, tlsConfig *tls.Config, logger logger.Logger) *MumbleConnectionManager {
-	base := NewBaseConnectionManager(logger)
+func NewMumbleConnectionManager(address string, config *gumble.Config, tlsConfig *tls.Config, logger logger.Logger, eventEmitter BridgeEventEmitter) *MumbleConnectionManager {
+	base := NewBaseConnectionManager(logger, "mumble", eventEmitter)
 
 	return &MumbleConnectionManager{
 		BaseConnectionManager: base,

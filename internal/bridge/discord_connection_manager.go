@@ -21,8 +21,8 @@ type DiscordConnectionManager struct {
 }
 
 // NewDiscordConnectionManager creates a new Discord connection manager
-func NewDiscordConnectionManager(session *discordgo.Session, guildID, channelID string, logger logger.Logger) *DiscordConnectionManager {
-	base := NewBaseConnectionManager(logger)
+func NewDiscordConnectionManager(session *discordgo.Session, guildID, channelID string, logger logger.Logger, eventEmitter BridgeEventEmitter) *DiscordConnectionManager {
+	base := NewBaseConnectionManager(logger, "discord", eventEmitter)
 
 	return &DiscordConnectionManager{
 		BaseConnectionManager: base,
@@ -101,8 +101,10 @@ func (d *DiscordConnectionManager) connect() error {
 	d.disconnectInternal()
 
 	// Attempt voice connection
+	d.logger.Debug("DISCORD_CONN", fmt.Sprintf("Attempting voice connection to Guild=%s, Channel=%s", d.guildID, d.channelID))
 	connection, err := d.session.ChannelVoiceJoin(d.guildID, d.channelID, false, false)
 	if err != nil {
+		d.logger.Error("DISCORD_CONN", fmt.Sprintf("Voice connection failed: %v", err))
 		return fmt.Errorf("failed to join voice channel: %w", err)
 	}
 
@@ -217,24 +219,6 @@ func (d *DiscordConnectionManager) GetConnectionInfo() map[string]interface{} {
 	}
 
 	return info
-}
-
-// SetChannelID updates the target Discord channel (will reconnect if connected)
-func (d *DiscordConnectionManager) SetChannelID(channelID string) {
-	if d.channelID == channelID {
-		return // No change needed
-	}
-
-	d.logger.Info("DISCORD_CONN", fmt.Sprintf("Changing Discord channel from %s to %s", d.channelID, channelID))
-	d.channelID = channelID
-
-	// If currently connected, trigger reconnection to new channel
-	if d.IsConnected() {
-		d.logger.Info("DISCORD_CONN", "Triggering reconnection for channel change")
-		go func() {
-			d.disconnectInternal()
-		}()
-	}
 }
 
 // GetGuildID returns the Discord guild ID

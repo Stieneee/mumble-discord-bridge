@@ -9,6 +9,11 @@ import (
 	"github.com/stieneee/mumble-discord-bridge/pkg/logger"
 )
 
+// BridgeEventEmitter defines interface for emitting bridge events
+type BridgeEventEmitter interface {
+	EmitConnectionEvent(service string, eventType int, connected bool, err error)
+}
+
 // ConnectionStatus represents the status of a connection
 type ConnectionStatus int
 
@@ -108,10 +113,14 @@ type BaseConnectionManager struct {
 
 	// Health check settings
 	healthCheckInterval time.Duration
+	
+	// Bridge event emission
+	eventEmitter BridgeEventEmitter
+	serviceName  string
 }
 
 // NewBaseConnectionManager creates a new base connection manager
-func NewBaseConnectionManager(logger logger.Logger) *BaseConnectionManager {
+func NewBaseConnectionManager(logger logger.Logger, serviceName string, eventEmitter BridgeEventEmitter) *BaseConnectionManager {
 	return &BaseConnectionManager{
 		status:              ConnectionDisconnected,
 		eventChan:           make(chan ConnectionEvent, 100), // Increased buffer to prevent blocking
@@ -119,6 +128,8 @@ func NewBaseConnectionManager(logger logger.Logger) *BaseConnectionManager {
 		ctx:                 nil, // Will be set when Start() is called with parent context
 		cancel:              nil,
 		healthCheckInterval: time.Second * 30,
+		eventEmitter:        eventEmitter,
+		serviceName:         serviceName,
 	}
 }
 
@@ -154,7 +165,33 @@ func (b *BaseConnectionManager) SetStatus(status ConnectionStatus, err error) {
 			}
 		}
 
-		b.logger.Debug("CONNECTION", fmt.Sprintf("Status changed: %s -> %s", oldStatus, status))
+		// Emit bridge-level event if emitter is available
+		if b.eventEmitter != nil {
+			var bridgeEventType int
+			var connected bool
+			
+			switch status {
+			case ConnectionConnecting:
+				bridgeEventType = 0 // EventDiscordConnecting or EventMumbleConnecting
+				connected = false
+			case ConnectionConnected:
+				bridgeEventType = 1 // EventDiscordConnected or EventMumbleConnected
+				connected = true
+			case ConnectionDisconnected:
+				bridgeEventType = 2 // EventDiscordDisconnected or EventMumbleDisconnected
+				connected = false
+			case ConnectionReconnecting:
+				bridgeEventType = 3 // EventDiscordReconnecting or EventMumbleReconnecting
+				connected = false
+			case ConnectionFailed:
+				bridgeEventType = 4 // EventDiscordConnectionFailed or EventMumbleConnectionFailed
+				connected = false
+			}
+			
+			b.eventEmitter.EmitConnectionEvent(b.serviceName, bridgeEventType, connected, err)
+		}
+
+		b.logger.Debug("CONNECTION", fmt.Sprintf("%s status changed: %s -> %s", b.serviceName, oldStatus, status))
 	}
 }
 
