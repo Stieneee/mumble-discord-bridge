@@ -296,7 +296,6 @@ func (hm *HealthMonitor) monitorLoop() {
 
 // performHealthCheck performs a comprehensive health check
 func (hm *HealthMonitor) performHealthCheck() {
-	hm.logger.Debug("HEALTH", "Performing health check")
 	
 	now := time.Now()
 	hm.mutex.Lock()
