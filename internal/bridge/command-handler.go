@@ -70,9 +70,15 @@ func (b *BridgeState) HandleCommand(msg string, userResponse func(string)) {
 	}
 
 	if strings.HasPrefix(msg, prefix+" status") {
-		if b.Connected {
-			uptime := time.Since(b.StartTime).String()
-			userResponse("Bridge is running, uptime: " + uptime + " mode: " + b.Mode.String())
+		b.BridgeMutex.Lock()
+		connected := b.Connected
+		startTime := b.StartTime
+		mode := b.Mode
+		b.BridgeMutex.Unlock()
+		
+		if connected {
+			uptime := time.Since(startTime).String()
+			userResponse("Bridge is running, uptime: " + uptime + " mode: " + mode.String())
 		} else {
 			userResponse("Bridge is not running")
 		}

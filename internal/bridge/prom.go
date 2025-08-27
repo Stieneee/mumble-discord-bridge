@@ -186,7 +186,11 @@ func StartPromServer(port int, b *BridgeState) {
 		}
 	})
 	http.HandleFunc("/ready", func(w http.ResponseWriter, r *http.Request) {
-		if b.Connected {
+		b.BridgeMutex.Lock()
+		connected := b.Connected
+		b.BridgeMutex.Unlock()
+		
+		if connected {
 			w.WriteHeader(http.StatusOK)
 			if _, err := w.Write([]byte("OK")); err != nil {
 				b.Logger.Error("METRICS_SERVER", fmt.Sprintf("Error writing response: %v", err))

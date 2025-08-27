@@ -357,6 +357,7 @@ func (b *BridgeState) handleDiscordConnectionEvent(event ConnectionEvent) {
 	b.BridgeMutex.Lock()
 	oldState := b.DiscordConnected
 	b.DiscordConnected = event.Status == ConnectionConnected
+	newState := b.DiscordConnected
 
 	// Update legacy field for compatibility
 	if b.DiscordConnected {
@@ -368,11 +369,11 @@ func (b *BridgeState) handleDiscordConnectionEvent(event ConnectionEvent) {
 	b.updateOverallConnectionState()
 	b.BridgeMutex.Unlock()
 
-	if oldState != b.DiscordConnected {
-		b.Logger.Info("BRIDGE", fmt.Sprintf("Discord connection state changed: %v -> %v", oldState, b.DiscordConnected))
+	if oldState != newState {
+		b.Logger.Info("BRIDGE", fmt.Sprintf("Discord connection state changed: %v -> %v", oldState, newState))
 
 		// When Discord connects, populate existing users in the voice channel
-		if b.DiscordConnected && !oldState {
+		if newState && !oldState {
 			go b.populateExistingDiscordUsers()
 
 			// Force immediate Discord user count metric update
@@ -412,6 +413,7 @@ func (b *BridgeState) handleMumbleConnectionEvent(event ConnectionEvent) {
 	b.BridgeMutex.Lock()
 	oldState := b.MumbleConnected
 	b.MumbleConnected = event.Status == ConnectionConnected
+	newState := b.MumbleConnected
 
 	// Update legacy field for compatibility
 	if b.MumbleConnected {
@@ -423,8 +425,8 @@ func (b *BridgeState) handleMumbleConnectionEvent(event ConnectionEvent) {
 	b.updateOverallConnectionState()
 	b.BridgeMutex.Unlock()
 
-	if oldState != b.MumbleConnected {
-		b.Logger.Info("BRIDGE", fmt.Sprintf("Mumble connection state changed: %v -> %v", oldState, b.MumbleConnected))
+	if oldState != newState {
+		b.Logger.Info("BRIDGE", fmt.Sprintf("Mumble connection state changed: %v -> %v", oldState, newState))
 		b.notifyMetricsChange()
 	}
 
@@ -434,13 +436,7 @@ func (b *BridgeState) handleMumbleConnectionEvent(event ConnectionEvent) {
 }
 
 // updateOverallConnectionState updates the overall bridge connection state based on bridge mode
-//
-// Bridge Connection State Logic:
-// - BridgeModeConstant: Always connected (legacy behavior for backwards compatibility)
-// - BridgeModeAuto:     Connected when at least one service (Discord OR Mumble) is connected
-// - BridgeModeManual:   Connected only when both services (Discord AND Mumble) are connected
-//
-// This state determines whether the bridge should actively process audio packets.
+// This version requires the caller to hold the BridgeMutex
 func (b *BridgeState) updateOverallConnectionState() {
 	// Bridge is considered connected if both connections are up
 	// or if in auto mode and at least one connection is up
@@ -465,6 +461,13 @@ func (b *BridgeState) updateOverallConnectionState() {
 		b.Logger.Info("BRIDGE", fmt.Sprintf("Overall bridge connection state changed: %v -> %v (Discord: %v, Mumble: %v)",
 			oldConnected, b.Connected, b.DiscordConnected, b.MumbleConnected))
 	}
+}
+
+// UpdateOverallConnectionState is the public thread-safe version
+func (b *BridgeState) UpdateOverallConnectionState() {
+	b.BridgeMutex.Lock()
+	defer b.BridgeMutex.Unlock()
+	b.updateOverallConnectionState()
 }
 
 // stopConnectionManagers stops both connection managers
@@ -791,7 +794,10 @@ func (b *BridgeState) StartBridge() {
 
 	promBridgeStarts.Inc()
 	promBridgeStartTime.SetToCurrentTime()
+	
+	b.BridgeMutex.Lock()
 	b.StartTime = time.Now()
+	b.BridgeMutex.Unlock()
 
 	// Initialize connection managers
 	if err := b.initializeConnectionManagers(); err != nil {
@@ -805,7 +811,6 @@ func (b *BridgeState) StartBridge() {
 		b.stopConnectionManagers()
 		return
 	}
-	defer b.stopConnectionManagers()
 
 	// Set up audio streams
 	b.MumbleStream = NewMumbleDuplex(b.Logger, b)
@@ -816,8 +821,20 @@ func (b *BridgeState) StartBridge() {
 	var det gumble.Detacher
 	if b.BridgeConfig.MumbleConfig != nil {
 		det = b.BridgeConfig.MumbleConfig.AudioListeners.Attach(b.MumbleStream)
-		defer det.Detach()
 	}
+
+	// Ensure proper cleanup order: detach audio listener before stopping connection managers
+	defer func() {
+		// First detach audio listener to prevent race with ongoing audio processing
+		if det != nil {
+			b.Logger.Debug("BRIDGE", "Detaching Mumble audio listener")
+			det.Detach()
+			// Small delay to allow any in-flight audio processing to complete
+			time.Sleep(50 * time.Millisecond)
+		}
+		// Then stop connection managers
+		b.stopConnectionManagers()
+	}()
 
 	// Set up audio channels with proper lifecycle management
 	var toMumbleInternal = make(chan gumble.AudioBuffer, 100)

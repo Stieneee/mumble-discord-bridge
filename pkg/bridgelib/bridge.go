@@ -504,13 +504,20 @@ func (b *BridgeInstance) GetStatus() map[string]interface{} {
 	defer b.State.DiscordUsersMutex.Unlock()
 
 	uptime := int64(0)
-	if b.State.Connected && !b.State.StartTime.IsZero() {
-		uptime = time.Since(b.State.StartTime).Milliseconds()
+	var connected bool
+	
+	b.State.BridgeMutex.Lock()
+	connected = b.State.Connected
+	startTime := b.State.StartTime
+	b.State.BridgeMutex.Unlock()
+	
+	if connected && !startTime.IsZero() {
+		uptime = time.Since(startTime).Milliseconds()
 	}
 
 	return map[string]interface{}{
 		"id":            b.ID,
-		"connected":     b.State.Connected,
+		"connected":     connected,
 		"mode":          b.State.Mode.String(),
 		"mumbleUsers":   len(b.State.MumbleUsers),
 		"discordUsers":  len(b.State.DiscordUsers),
@@ -537,10 +544,16 @@ func (b *BridgeInstance) GetDetailedStatus() BridgeStatus {
 	// Get basic state
 	if b.stopped {
 		status.State = "stopped"
-	} else if b.State.Connected {
-		status.State = "running"
 	} else {
-		status.State = "starting"
+		b.State.BridgeMutex.Lock()
+		connected := b.State.Connected
+		b.State.BridgeMutex.Unlock()
+		
+		if connected {
+			status.State = "running"
+		} else {
+			status.State = "starting"
+		}
 	}
 
 	// Get health information
@@ -574,8 +587,13 @@ func (b *BridgeInstance) GetDetailedStatus() BridgeStatus {
 		b.State.MumbleUsersMutex.Unlock()
 
 		// Calculate uptime
-		if b.State.Connected && !b.State.StartTime.IsZero() {
-			status.Uptime = time.Since(b.State.StartTime)
+		b.State.BridgeMutex.Lock()
+		connected := b.State.Connected
+		startTime := b.State.StartTime
+		b.State.BridgeMutex.Unlock()
+		
+		if connected && !startTime.IsZero() {
+			status.Uptime = time.Since(startTime)
 		}
 	}
 
