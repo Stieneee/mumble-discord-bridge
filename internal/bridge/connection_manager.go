@@ -113,10 +113,14 @@ type BaseConnectionManager struct {
 
 	// Health check settings
 	healthCheckInterval time.Duration
-	
+
 	// Bridge event emission
 	eventEmitter BridgeEventEmitter
 	serviceName  string
+
+	// Stop synchronization
+	stopOnce sync.Once
+	stopped  bool
 }
 
 // NewBaseConnectionManager creates a new base connection manager
@@ -169,7 +173,7 @@ func (b *BaseConnectionManager) SetStatus(status ConnectionStatus, err error) {
 		if b.eventEmitter != nil {
 			var bridgeEventType int
 			var connected bool
-			
+
 			switch status {
 			case ConnectionConnecting:
 				bridgeEventType = 0 // EventDiscordConnecting or EventMumbleConnecting
@@ -187,7 +191,7 @@ func (b *BaseConnectionManager) SetStatus(status ConnectionStatus, err error) {
 				bridgeEventType = 4 // EventDiscordConnectionFailed or EventMumbleConnectionFailed
 				connected = false
 			}
-			
+
 			b.eventEmitter.EmitConnectionEvent(b.serviceName, bridgeEventType, connected, err)
 		}
 
@@ -219,17 +223,29 @@ func (b *BaseConnectionManager) InitContext(parentCtx context.Context) {
 
 // Stop cancels the context and sets status to disconnected
 func (b *BaseConnectionManager) Stop() error {
-	if b.cancel != nil {
-		b.cancel()
-	}
-	b.SetStatus(ConnectionDisconnected, nil)
+	// Use sync.Once to ensure Stop logic only executes once
+	b.stopOnce.Do(func() {
+		// Check if already stopped (additional safety)
+		b.statusMutex.Lock()
+		if b.stopped {
+			b.statusMutex.Unlock()
+			return
+		}
+		b.stopped = true
+		b.statusMutex.Unlock()
 
-	// Close the event channel to signal no more events will be sent
-	go func() {
-		// Small delay to allow any pending SetStatus calls to complete
-		time.Sleep(100 * time.Millisecond)
-		close(b.eventChan)
-	}()
+		if b.cancel != nil {
+			b.cancel()
+		}
+		b.SetStatus(ConnectionDisconnected, nil)
+
+		// Close the event channel to signal no more events will be sent
+		go func() {
+			// Small delay to allow any pending SetStatus calls to complete
+			time.Sleep(100 * time.Millisecond)
+			close(b.eventChan)
+		}()
+	})
 
 	return nil
 }
