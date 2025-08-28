@@ -1,3 +1,4 @@
+// Package main implements the mumble-discord-bridge application.
 package main
 
 import (
@@ -9,13 +10,14 @@ import (
 	"strings"
 )
 
-//BridgeConfig holds configuration information set at startup
-//It should not change during runtime
+// BridgeConfig holds configuration information set at startup
+// It should not change during runtime
 
-func lookupEnvOrString(key string, defaultVal string) string {
+func lookupEnvOrString(key, defaultVal string) string {
 	if val, ok := os.LookupEnv(key); ok {
 		return strings.TrimSpace(val)
 	}
+
 	return defaultVal
 }
 
@@ -25,8 +27,10 @@ func lookupEnvOrInt(key string, defaultVal int) int {
 		if err != nil {
 			log.Fatalf("LookupEnvOrInt[%s]: %v", key, err)
 		}
+
 		return v
 	}
+
 	return defaultVal
 }
 
@@ -36,8 +40,10 @@ func lookupEnvOrBool(key string, defaultVal bool) bool {
 		if err != nil {
 			log.Fatalf("LookupEnvOrInt[%s]: %v", key, err)
 		}
+
 		return v
 	}
+
 	return defaultVal
 }
 

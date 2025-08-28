@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/stieneee/gumble/gumble"
-	_ "github.com/stieneee/gumble/opus"
+	_ "github.com/stieneee/gumble/opus" // Register opus codec
 	"github.com/stieneee/mumble-discord-bridge/pkg/logger"
 	"github.com/stieneee/mumble-discord-bridge/pkg/sleepct"
 )
@@ -21,6 +21,7 @@ type MumbleDuplex struct {
 	bridge          *BridgeState // Reference to bridge for connection state checking
 }
 
+// NewMumbleDuplex creates a new Mumble audio duplex handler.
 func NewMumbleDuplex(log logger.Logger, bridge *BridgeState) *MumbleDuplex {
 	return &MumbleDuplex{
 		streams:         make([]chan gumble.AudioBuffer, 0),
@@ -32,7 +33,6 @@ func NewMumbleDuplex(log logger.Logger, bridge *BridgeState) *MumbleDuplex {
 
 // OnAudioStream - Spawn routines to handle incoming packets
 func (m *MumbleDuplex) OnAudioStream(e *gumble.AudioStreamEvent) {
-
 	stream := make(chan gumble.AudioBuffer, 100)
 
 	m.mutex.Lock()
@@ -55,12 +55,13 @@ func (m *MumbleDuplex) OnAudioStream(e *gumble.AudioStreamEvent) {
 			m.mumbleSleepTick.Notify()
 		}
 		m.logger.Info("MUMBLE_STREAM", fmt.Sprintf("Mumble audio stream ended: %s", name))
-		//remove the MumbleStream from the array
+		// remove the MumbleStream from the array
 		m.mutex.Lock()
 		defer m.mutex.Unlock()
 		for i := 0; i < len(m.streams); i++ {
 			if m.streams[i] == stream {
 				m.streams = append(m.streams[:i], m.streams[i+1:]...)
+
 				break
 			}
 		}
@@ -69,7 +70,7 @@ func (m *MumbleDuplex) OnAudioStream(e *gumble.AudioStreamEvent) {
 	}()
 }
 
-func (m *MumbleDuplex) fromMumbleMixer(ctx context.Context, cancel context.CancelFunc, toDiscord chan []int16) {
+func (m *MumbleDuplex) fromMumbleMixer(ctx context.Context, _ context.CancelFunc, toDiscord chan []int16) {
 	m.mumbleSleepTick.Start(10 * time.Millisecond)
 
 	sendAudio := false
@@ -81,6 +82,7 @@ func (m *MumbleDuplex) fromMumbleMixer(ctx context.Context, cancel context.Cance
 		select {
 		case <-ctx.Done():
 			m.logger.Info("MUMBLE_MIXER", "Stopping From Mumble Mixer")
+
 			return
 		default:
 		}

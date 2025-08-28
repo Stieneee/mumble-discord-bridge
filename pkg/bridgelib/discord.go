@@ -35,6 +35,7 @@ func NewSharedDiscordClient(token string, logger Logger) (*SharedDiscordClient, 
 	session, err := discordgo.New("Bot " + token)
 	if err != nil {
 		logger.Error("DISCORD_CLIENT", fmt.Sprintf("Failed to create Discord session: %v", err))
+
 		return nil, err
 	}
 	logger.Debug("DISCORD_CLIENT", "Discord session created successfully")
@@ -75,6 +76,7 @@ func NewSharedDiscordClient(token string, logger Logger) (*SharedDiscordClient, 
 	logger.Debug("DISCORD_CLIENT", "Discord event handlers registered")
 
 	logger.Info("DISCORD_CLIENT", "SharedDiscordClient created successfully")
+
 	return client, nil
 }
 
@@ -85,9 +87,11 @@ func (c *SharedDiscordClient) Connect() error {
 	err := c.session.Open()
 	if err != nil {
 		c.logger.Error("DISCORD_CLIENT", fmt.Sprintf("Failed to connect to Discord: %v", err))
+
 		return err
 	}
 	c.logger.Info("DISCORD_CLIENT", "Successfully connected to Discord")
+
 	return nil
 }
 
@@ -98,9 +102,11 @@ func (c *SharedDiscordClient) Disconnect() error {
 	err := c.session.Close()
 	if err != nil {
 		c.logger.Error("DISCORD_CLIENT", fmt.Sprintf("Error closing Discord session: %v", err))
+
 		return err
 	}
 	c.logger.Info("DISCORD_CLIENT", "Successfully disconnected from Discord")
+
 	return nil
 }
 
@@ -121,10 +127,12 @@ func (c *SharedDiscordClient) SendMessage(channelID, content string) (*discordgo
 	msg, err := c.session.ChannelMessageSend(channelID, content)
 	if err != nil {
 		c.logger.Error("DISCORD_CLIENT", fmt.Sprintf("Failed to send message to channel %s: %v", channelID, err))
+
 		return nil, err
 	}
 
 	c.logger.Debug("DISCORD_CLIENT", fmt.Sprintf("Message sent successfully to channel %s", channelID))
+
 	return msg, nil
 }
 
@@ -152,7 +160,7 @@ func (c *SharedDiscordClient) RegisterMessageHandler(guildID, channelID string, 
 
 // UnregisterMessageHandler unregisters a message handler for a specific guild and channel
 // Note: Since function pointers can't be compared directly, this clears all handlers for the key
-func (c *SharedDiscordClient) UnregisterMessageHandler(guildID, channelID string, handlerFunc interface{}) {
+func (c *SharedDiscordClient) UnregisterMessageHandler(guildID, channelID string, _ interface{}) {
 	key := guildID + ":" + channelID
 	c.logger.Debug("DISCORD_CLIENT", fmt.Sprintf("Clearing all message handlers for key: %s", key))
 
@@ -162,6 +170,7 @@ func (c *SharedDiscordClient) UnregisterMessageHandler(guildID, channelID string
 	handlers, exists := c.messageHandlers[key]
 	if !exists {
 		c.logger.Debug("DISCORD_CLIENT", fmt.Sprintf("No handlers found for key: %s", key))
+
 		return
 	}
 
@@ -179,11 +188,12 @@ func (c *SharedDiscordClient) onMessageCreate(s *discordgo.Session, m *discordgo
 	if len(content) > 50 {
 		content = content[:47] + "..."
 	}
-	c.logger.Debug("DISCORD_HANDLER", fmt.Sprintf("Message received from %s", m.Author.Username))
+	c.logger.Debug("DISCORD_HANDLER", fmt.Sprintf("Message received from %s: %s", m.Author.Username, content))
 
 	// Skip messages from the bot itself
 	if m.Author.ID == s.State.User.ID {
 		c.logger.Debug("DISCORD_HANDLER", "Skipping message from self")
+
 		return
 	}
 

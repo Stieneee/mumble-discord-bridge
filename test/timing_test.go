@@ -14,12 +14,14 @@ import (
 	"github.com/stieneee/tickerct"
 )
 
-const testCount int64 = 10000
-const maxSleepInterval time.Duration = 15 * time.Millisecond
-const tickerInterval time.Duration = 10 * time.Millisecond
-const testDuration time.Duration = time.Duration(testCount * 10 * int64(time.Millisecond))
+const (
+	testCount        int64         = 10000
+	maxSleepInterval time.Duration = 15 * time.Millisecond
+	tickerInterval   time.Duration = 10 * time.Millisecond
+	testDuration     time.Duration = time.Duration(testCount * 10 * int64(time.Millisecond))
+)
 
-func testTickerBaseCase(wg *sync.WaitGroup, test *testing.T) {
+func testTickerBaseCase(wg *sync.WaitGroup, _ *testing.T) {
 	wg.Add(1)
 	go func(interval time.Duration) {
 		start := time.Now()
@@ -53,7 +55,7 @@ func testTickerLoaded(wg *sync.WaitGroup) {
 		var i int64
 		for i = 0; i < testCount; i++ {
 			if i+1 < testCount {
-				time.Sleep(time.Duration(float64(maxSleepInterval) * rand.Float64()))
+				time.Sleep(time.Duration(float64(maxSleepInterval) * rand.Float64())) // nolint: gosec // Test code only
 			}
 			<-t.C
 			// fmt.Println(now)
@@ -64,7 +66,7 @@ func testTickerLoaded(wg *sync.WaitGroup) {
 	}(tickerInterval)
 }
 
-func TestTicker(t *testing.T) {
+func TestTicker(_ *testing.T) {
 	wg := sync.WaitGroup{}
 
 	testTickerLoaded(&wg)
@@ -81,7 +83,7 @@ func testTickerCT(wg *sync.WaitGroup) {
 		var i int64
 		for i = 0; i < testCount; i++ {
 			if i+1 < testCount {
-				time.Sleep(time.Duration(float64(maxSleepInterval) * rand.Float64()))
+				time.Sleep(time.Duration(float64(maxSleepInterval) * rand.Float64())) // nolint: gosec // Test code only
 			}
 			<-t.C
 			// fmt.Println(now)
@@ -92,7 +94,7 @@ func testTickerCT(wg *sync.WaitGroup) {
 	}(tickerInterval)
 }
 
-func TestTickerCT(t *testing.T) {
+func TestTickerCT(_ *testing.T) {
 	wg := sync.WaitGroup{}
 
 	testTickerCT(&wg)
@@ -110,7 +112,7 @@ func testSleepCT(wg *sync.WaitGroup) {
 		var i int64
 		for i = 0; i < testCount; i++ {
 			if i+1 < testCount {
-				time.Sleep(time.Duration(float64(maxSleepInterval) * rand.Float64()))
+				time.Sleep(time.Duration(float64(maxSleepInterval) * rand.Float64())) // nolint: gosec // Test code only
 			}
 			s.SleepNextTarget(context.TODO(), false)
 		}
@@ -119,7 +121,7 @@ func testSleepCT(wg *sync.WaitGroup) {
 	}(tickerInterval)
 }
 
-func TestSleepCT(t *testing.T) {
+func TestSleepCT(_ *testing.T) {
 	wg := sync.WaitGroup{}
 
 	testSleepCT(&wg)
@@ -137,7 +139,7 @@ func testSleepCTPause(wg *sync.WaitGroup) {
 		var i int64
 		for i = 0; i < testCount; i++ {
 			if i+1 < testCount {
-				time.Sleep(time.Duration(float64(maxSleepInterval) * rand.Float64()))
+				time.Sleep(time.Duration(float64(maxSleepInterval) * rand.Float64())) // nolint: gosec // Test code only
 			}
 			s.Notify()
 			s.SleepNextTarget(context.TODO(), true)
@@ -147,7 +149,7 @@ func testSleepCTPause(wg *sync.WaitGroup) {
 	}(tickerInterval)
 }
 
-func TestSleepCTPause(t *testing.T) {
+func TestSleepCTPause(_ *testing.T) {
 	wg := sync.WaitGroup{}
 
 	testSleepCTPause(&wg)
@@ -155,7 +157,7 @@ func TestSleepCTPause(t *testing.T) {
 	wg.Wait()
 }
 
-func TestIdleJitter(t *testing.T) {
+func TestIdleJitter(_ *testing.T) {
 	wg := sync.WaitGroup{}
 
 	const testSize = 100000
@@ -176,7 +178,7 @@ func TestIdleJitter(t *testing.T) {
 		return res[i] < res[j]
 	})
 
-	var total float64 = 0
+	var total float64
 	for i := 0; i < testSize; i++ {
 		total += float64(res[i])
 	}

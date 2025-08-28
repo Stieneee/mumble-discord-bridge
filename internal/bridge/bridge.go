@@ -1,3 +1,4 @@
+// Package bridge provides the core bridge functionality for connecting Mumble and Discord.
 package bridge
 
 import (
@@ -12,13 +13,15 @@ import (
 	"github.com/stieneee/mumble-discord-bridge/pkg/logger"
 )
 
+// DiscordUser represents a Discord user in the bridge.
 type DiscordUser struct {
 	username string
 	seen     bool
 	dm       *discordgo.Channel
 }
 
-type BridgeMode int
+// BridgeMode represents the operational mode of the bridge.
+type BridgeMode int //nolint:revive // API consistency: keeping Bridge prefix for public types
 
 // define a String method for the BridgeMode type
 func (b BridgeMode) String() string {
@@ -26,12 +29,16 @@ func (b BridgeMode) String() string {
 }
 
 const (
+	// BridgeModeAuto automatically starts/stops bridge based on user presence.
 	BridgeModeAuto BridgeMode = iota
+	// BridgeModeManual requires manual start/stop control.
 	BridgeModeManual
+	// BridgeModeConstant keeps the bridge always running.
 	BridgeModeConstant
 )
 
-type BridgeConfig struct {
+// BridgeConfig holds the configuration for a bridge instance.
+type BridgeConfig struct { //nolint:revive // API consistency: keeping Bridge prefix for public types
 	// The command prefix for the bot
 	Command string
 
@@ -90,12 +97,14 @@ type BridgeConfig struct {
 // BridgeState manages dynamic information about the bridge during runtime
 //
 // CONCURRENCY NOTES:
-// - BridgeMutex protects: Connected, DiscordConnected, MumbleConnected, Mode, 
-//   MumbleClient, DiscordVoice, StartTime
-// - DiscordUsersMutex protects: DiscordUsers map
-// - MumbleUsersMutex protects: MumbleUsers map, MumbleUserCount
-// - Lock order: BridgeMutex -> MumbleUsersMutex -> DiscordUsersMutex
-type BridgeState struct {
+//   - BridgeMutex protects: Connected, DiscordConnected, MumbleConnected, Mode,
+//     MumbleClient, DiscordVoice, StartTime
+//   - DiscordUsersMutex protects: DiscordUsers map
+//   - MumbleUsersMutex protects: MumbleUsers map, MumbleUserCount
+//   - Lock order: BridgeMutex -> MumbleUsersMutex -> DiscordUsersMutex
+//
+// BridgeState manages dynamic information about the bridge during runtime.
+type BridgeState struct { //nolint:revive // API consistency: keeping Bridge prefix for public types
 	// The configuration data for this bridge
 	BridgeConfig *BridgeConfig
 
@@ -254,16 +263,16 @@ func (b *BridgeState) initializeConnectionManagers() error {
 		// Configure TLS settings
 		var tlsConfig tls.Config
 		if b.BridgeConfig.MumbleInsecure {
-			tlsConfig.InsecureSkipVerify = true
+			tlsConfig.InsecureSkipVerify = true // nolint: gosec // Intentionally insecure for testing
 		}
 
 		if b.BridgeConfig.MumbleCertificate != "" {
 			keyFile := b.BridgeConfig.MumbleCertificate
-			if certificate, err := tls.LoadX509KeyPair(keyFile, keyFile); err != nil {
+			certificate, err := tls.LoadX509KeyPair(keyFile, keyFile)
+			if err != nil {
 				return fmt.Errorf("failed to load Mumble client certificate %s: %w", keyFile, err)
-			} else {
-				tlsConfig.Certificates = append(tlsConfig.Certificates, certificate)
 			}
+			tlsConfig.Certificates = append(tlsConfig.Certificates, certificate)
 		}
 
 		b.MumbleConnectionManager = NewMumbleConnectionManager(
@@ -302,6 +311,7 @@ func (b *BridgeState) startConnectionManagers() error {
 	go b.updateConnectionMetrics()
 
 	b.Logger.Info("BRIDGE", "Connection managers started successfully")
+
 	return nil
 }
 
@@ -326,11 +336,13 @@ func (b *BridgeState) monitorConnectionEvents() {
 		select {
 		case <-b.connectionCtx.Done():
 			b.Logger.Debug("BRIDGE", "Connection event monitoring stopped")
+
 			return
 
 		case event, ok := <-b.DiscordConnectionManager.GetEventChannel():
 			if !ok {
 				b.Logger.Warn("BRIDGE", "Discord connection event channel closed")
+
 				return
 			}
 			b.handleDiscordConnectionEvent(event)
@@ -338,6 +350,7 @@ func (b *BridgeState) monitorConnectionEvents() {
 		case event, ok := <-b.MumbleConnectionManager.GetEventChannel():
 			if !ok {
 				b.Logger.Warn("BRIDGE", "Mumble connection event channel closed")
+
 				return
 			}
 			b.handleMumbleConnectionEvent(event)
@@ -532,6 +545,7 @@ func (b *BridgeState) forwardToMumble(ctx context.Context, internalChan <-chan g
 		select {
 		case <-ctx.Done():
 			b.Logger.Debug("MUMBLE_FORWARDER", "Stopping Mumble audio forwarder")
+
 			return
 
 		case packet := <-internalChan:
@@ -588,6 +602,7 @@ func (b *BridgeState) populateExistingDiscordUsers() {
 
 	if b.DiscordSession == nil || b.DiscordChannelID == "" || b.BridgeConfig.GID == "" {
 		b.Logger.Debug("BRIDGE", "Cannot populate users - missing Discord session, channel ID, or guild ID")
+
 		return
 	}
 
@@ -598,6 +613,7 @@ func (b *BridgeState) populateExistingDiscordUsers() {
 		guild, err = b.DiscordSession.Guild(b.BridgeConfig.GID)
 		if err != nil {
 			b.Logger.Error("BRIDGE", fmt.Sprintf("Could not get guild: %v", err))
+
 			return
 		}
 	}
@@ -628,6 +644,7 @@ func (b *BridgeState) populateExistingDiscordUsers() {
 
 			if exists {
 				b.Logger.Debug("BRIDGE", fmt.Sprintf("User %s already tracked", vs.UserID))
+
 				continue
 			}
 
@@ -635,6 +652,7 @@ func (b *BridgeState) populateExistingDiscordUsers() {
 			user, err := b.DiscordSession.User(vs.UserID)
 			if err != nil {
 				b.Logger.Error("BRIDGE", fmt.Sprintf("Error looking up username for %s: %v", vs.UserID, err))
+
 				continue
 			}
 
@@ -781,6 +799,7 @@ func (b *BridgeState) StartBridge() {
 	if b.Connected {
 		b.Logger.Info("BRIDGE", "Bridge already connected, aborting start")
 		b.BridgeMutex.Unlock()
+
 		return
 	}
 	b.BridgeMutex.Unlock()
@@ -801,7 +820,7 @@ func (b *BridgeState) StartBridge() {
 
 	promBridgeStarts.Inc()
 	promBridgeStartTime.SetToCurrentTime()
-	
+
 	b.BridgeMutex.Lock()
 	b.StartTime = time.Now()
 	b.BridgeMutex.Unlock()
@@ -809,6 +828,7 @@ func (b *BridgeState) StartBridge() {
 	// Initialize connection managers
 	if err := b.initializeConnectionManagers(); err != nil {
 		b.Logger.Error("BRIDGE", fmt.Sprintf("Failed to initialize connection managers: %v", err))
+
 		return
 	}
 
@@ -816,6 +836,7 @@ func (b *BridgeState) StartBridge() {
 	if err := b.startConnectionManagers(); err != nil {
 		b.Logger.Error("BRIDGE", fmt.Sprintf("Failed to start connection managers: %v", err))
 		b.stopConnectionManagers()
+
 		return
 	}
 
@@ -844,8 +865,8 @@ func (b *BridgeState) StartBridge() {
 	}()
 
 	// Set up audio channels with proper lifecycle management
-	var toMumbleInternal = make(chan gumble.AudioBuffer, 100)
-	var toDiscord = make(chan []int16, 200) // Increased buffer size
+	toMumbleInternal := make(chan gumble.AudioBuffer, 100)
+	toDiscord := make(chan []int16, 200) // Increased buffer size
 	defer close(toMumbleInternal)
 	defer close(toDiscord)
 
@@ -906,6 +927,7 @@ func (b *BridgeState) StartBridge() {
 					if !discordConnected && !mumbleConnected {
 						b.Logger.Info("BRIDGE", "Both connections lost in auto mode, stopping bridge")
 						cancel()
+
 						return
 					}
 				}
@@ -926,7 +948,7 @@ func (b *BridgeState) StartBridge() {
 	b.notifyMetricsChange()
 	b.Logger.Info("BRIDGE", "Bridge started with managed connections")
 
-	// Hold until cancelled or external die request
+	// Hold until canceled or external die request
 	select {
 	case <-ctx.Done():
 		b.Logger.Debug("BRIDGE", "Bridge internal context cancel")
@@ -975,6 +997,7 @@ func (b *BridgeState) StopBridge() {
 func (b *BridgeState) IsConnected() bool {
 	b.BridgeMutex.Lock()
 	defer b.BridgeMutex.Unlock()
+
 	return b.Connected
 }
 
@@ -982,9 +1005,11 @@ func (b *BridgeState) IsConnected() bool {
 func (b *BridgeState) GetConnectionStates() (discord, mumble, overall bool) {
 	b.BridgeMutex.Lock()
 	defer b.BridgeMutex.Unlock()
+
 	return b.DiscordConnected, b.MumbleConnected, b.Connected
 }
 
+// DiscordStatusUpdate periodically updates Discord bot status and collects metrics.
 func (b *BridgeState) DiscordStatusUpdate() {
 	if b.BridgeConfig.DiscordDisableBotStatus {
 		// force clear any previous status
@@ -993,8 +1018,7 @@ func (b *BridgeState) DiscordStatusUpdate() {
 		}
 	}
 
-	m, _ := time.ParseDuration("30s")
-
+	m := 30 * time.Second
 	// even if disabled we still want to do the loop to ping mumble and collect metrics
 	for {
 		time.Sleep(3 * time.Second)
@@ -1009,7 +1033,6 @@ func (b *BridgeState) DiscordStatusUpdate() {
 				}
 			}
 		} else {
-
 			promMumblePing.Set(float64(resp.Ping.Milliseconds()))
 
 			// Use consistent lock ordering: BridgeMutex -> MumbleUsersMutex
@@ -1017,7 +1040,7 @@ func (b *BridgeState) DiscordStatusUpdate() {
 			b.MumbleUsersMutex.Lock()
 			b.MumbleUserCount = resp.ConnectedUsers
 			if b.Connected {
-				b.MumbleUserCount = b.MumbleUserCount - 1
+				b.MumbleUserCount--
 			}
 			if b.MumbleUserCount == 0 {
 				status = "No users in Mumble"
@@ -1042,7 +1065,6 @@ func (b *BridgeState) DiscordStatusUpdate() {
 		if discordHeartBeat > 0 {
 			promDiscordHeartBeat.Set(float64(discordHeartBeat))
 		}
-
 	}
 }
 
@@ -1058,6 +1080,7 @@ func (b *BridgeState) AutoBridge() {
 		case <-ticker.C:
 		case <-b.AutoChanDie:
 			b.Logger.Info("BRIDGE", "Ending automode")
+
 			return
 		}
 
@@ -1092,6 +1115,7 @@ func (b *BridgeState) discordSendMessage(msg string) {
 	switch b.BridgeConfig.DiscordTextMode {
 	case "disabled":
 		b.Logger.Debug("MUMBLE→DISCORD", "Message not sent - Discord text mode is disabled")
+
 		return
 	case "channel":
 		b.Logger.Debug("MUMBLE→DISCORD", fmt.Sprintf("Sending message to Discord channel: %s", b.DiscordChannelID))
@@ -1101,6 +1125,7 @@ func (b *BridgeState) discordSendMessage(msg string) {
 		} else {
 			b.Logger.Debug("MUMBLE→DISCORD", "Successfully sent message to Discord channel")
 		}
+
 		return
 	case "user":
 		b.Logger.Debug("MUMBLE→DISCORD", fmt.Sprintf("Sending direct messages to %d Discord users", len(b.DiscordUsers)))
@@ -1121,9 +1146,11 @@ func (b *BridgeState) discordSendMessage(msg string) {
 				b.Logger.Debug("MUMBLE→DISCORD", fmt.Sprintf("No DM channel available for user: %s", du.username))
 			}
 		}
+
 		return
 	default:
 		b.Logger.Warn("MUMBLE→DISCORD", "Invalid DiscordTextMode")
+
 		return
 	}
 }

@@ -1,3 +1,4 @@
+// Package sleepct provides precise sleep timing functionality.
 package sleepct
 
 import (
@@ -18,6 +19,7 @@ type SleepCT struct {
 	drift  int64     // last wake drift microseconds
 }
 
+// Start initializes the sleep controller with a target duration.
 func (s *SleepCT) Start(d time.Duration) {
 	s.resume = make(chan bool, 2)
 	if s.t.IsZero() {
@@ -28,12 +30,11 @@ func (s *SleepCT) Start(d time.Duration) {
 	}
 }
 
-// Sleep to the next target duration.
+// SleepNextTarget sleeps to the next target duration.
 // If pause it set to true will sleep the duration and wait to be notified.
 // The notification channel will be cleared when the thread wakes.
-// SleepNextTarget should not be call more than once concurrently.
+// SleepNextTarget should not be called more than once concurrently.
 func (s *SleepCT) SleepNextTarget(ctx context.Context, pause bool) int64 {
-
 	now := time.Now()
 
 	// if target is zero safety net

@@ -22,6 +22,11 @@ var (
 	date    string
 )
 
+const (
+	// Command modes
+	commandModeNone = "none"
+)
+
 func main() {
 	var err error
 
@@ -80,10 +85,10 @@ func main() {
 	if *discordTextMode != "channel" && *discordTextMode != "user" && *discordTextMode != "disabled" {
 		log.Fatalln("invalid discord text mode set")
 	}
-	if *commandMode != "both" && *commandMode != "mumble" && *commandMode != "discord" && *commandMode != "none" {
+	if *commandMode != "both" && *commandMode != "mumble" && *commandMode != "discord" && *commandMode != commandModeNone {
 		log.Fatalln("invalid command mode set")
 	}
-	if *commandMode != "none" {
+	if *commandMode != commandModeNone {
 		if *command == "" {
 			log.Fatalln("missing command")
 		}
@@ -105,14 +110,17 @@ func main() {
 		if err != nil {
 			log.Fatal("could not create CPU profile: ", err)
 		}
+		if err := pprof.StartCPUProfile(f); err != nil {
+			if closeErr := f.Close(); closeErr != nil {
+				log.Printf("Error closing CPU profile file: %v", closeErr)
+			}
+			log.Fatal("could not start CPU profile: ", err)
+		}
 		defer func() {
 			if err := f.Close(); err != nil {
 				log.Println("could not close CPU profile: ", err)
 			}
 		}()
-		if err := pprof.StartCPUProfile(f); err != nil {
-			log.Fatal("could not start CPU profile: ", err)
-		}
 		defer pprof.StopCPUProfile()
 	}
 
@@ -130,13 +138,16 @@ func main() {
 		*mumbleDisableText, *discordTextMode, *chatBridge)
 
 	// Override chatBridge if conditions aren't met
-	if *mumbleDisableText {
+	switch {
+	case *mumbleDisableText:
 		log.Println("Warning: Chat bridge disabled because mumbleDisableText is set to true")
 		*chatBridge = false
-	} else if *discordTextMode != "channel" {
+	case *discordTextMode != "channel":
 		log.Printf("Warning: Chat bridge disabled because discordTextMode is '%s' instead of 'channel'", *discordTextMode)
 		*chatBridge = false
-	} else if !*chatBridge {
+	}
+
+	if !*chatBridge {
 		log.Println("Warning: Chat bridge disabled because chatBridge flag is set to false")
 	} else {
 		log.Println("Chat bridge is ENABLED")
@@ -144,10 +155,10 @@ func main() {
 
 	log.Printf("Final chat bridge status: %v", *chatBridge)
 
-	var discordStartStreamingCount = int(math.Round(float64(*discordSendBuffer) / 10.0))
+	discordStartStreamingCount := int(math.Round(float64(*discordSendBuffer) / 10.0))
 	log.Println("To Discord Jitter Buffer: ", discordStartStreamingCount*10, " ms")
 
-	var mumbleStartStreamCount = int(math.Round(float64(*mumbleSendBuffer) / 10.0))
+	mumbleStartStreamCount := int(math.Round(float64(*mumbleSendBuffer) / 10.0))
 	log.Println("To Mumble Jitter Buffer: ", mumbleStartStreamCount*10, " ms")
 
 	// create a command flag for each command mode
@@ -174,12 +185,18 @@ func main() {
 	// Create shared Discord client
 	discordClient, err := bridgelib.NewSharedDiscordClient(*discordToken, nil)
 	if err != nil {
-		log.Fatalln("Failed to create Discord client:", err)
+		if *cpuprofile != "" {
+			pprof.StopCPUProfile()
+		}
+		log.Fatalln("Failed to create Discord client:", err) //nolint:gocritic // exitAfterDefer: StopCPUProfile is called manually before exit
 	}
 
 	// Connect to Discord
 	err = discordClient.Connect()
 	if err != nil {
+		if *cpuprofile != "" {
+			pprof.StopCPUProfile()
+		}
 		log.Fatalln("Failed to connect to Discord:", err)
 	}
 	defer func() {
@@ -216,6 +233,9 @@ func main() {
 	// Create and start bridge instance
 	bridgeInstance, err := bridgelib.NewBridgeInstance("default", config, discordClient)
 	if err != nil {
+		if *cpuprofile != "" {
+			pprof.StopCPUProfile()
+		}
 		log.Fatalln("Failed to create bridge instance:", err)
 	}
 
@@ -229,6 +249,9 @@ func main() {
 
 	// Start the bridge
 	if err := bridgeInstance.Start(); err != nil {
+		if *cpuprofile != "" {
+			pprof.StopCPUProfile()
+		}
 		log.Fatalln("Failed to start bridge:", err)
 	}
 

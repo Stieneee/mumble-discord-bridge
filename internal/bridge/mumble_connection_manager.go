@@ -52,8 +52,9 @@ func (m *MumbleConnectionManager) connectionLoop(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			m.logger.Info("MUMBLE_CONN", "Connection loop cancelled")
+			m.logger.Info("MUMBLE_CONN", "Connection loop canceled")
 			m.disconnectInternal()
+
 			return
 		default:
 		}
@@ -106,6 +107,7 @@ func (m *MumbleConnectionManager) connect() error {
 	client, err := gumble.DialWithDialer(new(net.Dialer), m.address, m.config, m.tlsConfig)
 	if err != nil {
 		m.logger.Error("MUMBLE_CONN", fmt.Sprintf("Failed to dial Mumble server %s: %v", m.address, err))
+
 		return fmt.Errorf("failed to connect to Mumble server: %w", err)
 	}
 
@@ -116,6 +118,7 @@ func (m *MumbleConnectionManager) connect() error {
 
 	m.logger.Debug("MUMBLE_CONN", fmt.Sprintf("Mumble connection established successfully to %s, client state: %d",
 		m.address, client.State()))
+
 	return nil
 }
 
@@ -173,6 +176,7 @@ func (m *MumbleConnectionManager) waitForConnectionLoss(ctx context.Context) <-c
 					default:
 						// Channel is full or closed, connection already considered lost
 					}
+
 					return
 				}
 			}
@@ -201,6 +205,7 @@ func (m *MumbleConnectionManager) Stop() error {
 func (m *MumbleConnectionManager) GetClient() *gumble.Client {
 	m.clientMutex.RLock()
 	defer m.clientMutex.RUnlock()
+
 	return m.client
 }
 

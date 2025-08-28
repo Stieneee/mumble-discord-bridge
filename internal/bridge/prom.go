@@ -13,6 +13,7 @@ import (
 var (
 	// Bridge General
 
+	// PromApplicationStartTime tracks when the application started.
 	PromApplicationStartTime = promauto.NewGauge(prometheus.GaugeOpts{
 		Name: "mdb_bridge_start_time",
 		Help: "The time the application started",
@@ -64,7 +65,7 @@ var (
 		Help: "The array size of mumble streams",
 	})
 
-	promMumbleStreaming = promauto.NewGauge(prometheus.GaugeOpts{ //SUMMARY?
+	promMumbleStreaming = promauto.NewGauge(prometheus.GaugeOpts{ // SUMMARY?
 		Name: "mdb_mumble_streaming_gauge",
 		Help: "The number of active audio streams streaming audio from mumble",
 	})
@@ -176,20 +177,21 @@ var (
 	}, []string{"service", "direction"})
 )
 
+// StartPromServer starts the Prometheus metrics HTTP server.
 func StartPromServer(port int, b *BridgeState) {
 	b.Logger.Info("METRICS_SERVER", "Starting Metrics Server")
 	http.Handle("/metrics", promhttp.Handler())
-	http.HandleFunc("/live", func(w http.ResponseWriter, r *http.Request) {
+	http.HandleFunc("/live", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		if _, err := w.Write([]byte("OK")); err != nil {
 			b.Logger.Error("METRICS_SERVER", fmt.Sprintf("Error writing response: %v", err))
 		}
 	})
-	http.HandleFunc("/ready", func(w http.ResponseWriter, r *http.Request) {
+	http.HandleFunc("/ready", func(w http.ResponseWriter, _ *http.Request) {
 		b.BridgeMutex.Lock()
 		connected := b.Connected
 		b.BridgeMutex.Unlock()
-		
+
 		if connected {
 			w.WriteHeader(http.StatusOK)
 			if _, err := w.Write([]byte("OK")); err != nil {

@@ -10,7 +10,7 @@ import (
 )
 
 // BridgeEventEmitter defines interface for emitting bridge events
-type BridgeEventEmitter interface {
+type BridgeEventEmitter interface { //nolint:revive // API consistency: keeping Bridge prefix for public types
 	EmitConnectionEvent(service string, eventType int, connected bool, err error)
 }
 
@@ -18,10 +18,15 @@ type BridgeEventEmitter interface {
 type ConnectionStatus int
 
 const (
+	// ConnectionDisconnected indicates the service is disconnected.
 	ConnectionDisconnected ConnectionStatus = iota
+	// ConnectionConnecting indicates the service is attempting to connect.
 	ConnectionConnecting
+	// ConnectionConnected indicates the service is connected.
 	ConnectionConnected
+	// ConnectionReconnecting indicates the service is attempting to reconnect.
 	ConnectionReconnecting
+	// ConnectionFailed indicates the service connection has failed.
 	ConnectionFailed
 )
 
@@ -54,11 +59,17 @@ type ConnectionEvent struct {
 type ConnectionEventType int
 
 const (
+	// EventConnecting indicates a connection attempt is starting.
 	EventConnecting ConnectionEventType = iota
+	// EventConnected indicates a successful connection.
 	EventConnected
+	// EventDisconnected indicates the connection has been lost.
 	EventDisconnected
+	// EventReconnecting indicates a reconnection attempt is starting.
 	EventReconnecting
+	// EventFailed indicates the connection has failed.
 	EventFailed
+	// EventHealthCheck indicates a health check event.
 	EventHealthCheck
 )
 
@@ -203,6 +214,7 @@ func (b *BaseConnectionManager) SetStatus(status ConnectionStatus, err error) {
 func (b *BaseConnectionManager) GetStatus() ConnectionStatus {
 	b.statusMutex.RLock()
 	defer b.statusMutex.RUnlock()
+
 	return b.status
 }
 
@@ -229,6 +241,7 @@ func (b *BaseConnectionManager) Stop() error {
 		b.statusMutex.Lock()
 		if b.stopped {
 			b.statusMutex.Unlock()
+
 			return
 		}
 		b.stopped = true

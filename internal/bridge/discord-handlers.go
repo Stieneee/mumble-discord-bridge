@@ -14,6 +14,7 @@ type DiscordListener struct {
 	Bridge *BridgeState
 }
 
+// GuildCreate handles Discord guild creation events.
 func (l *DiscordListener) GuildCreate(s *discordgo.Session, event *discordgo.GuildCreate) {
 	if event.ID != l.Bridge.BridgeConfig.GID {
 		return
@@ -65,12 +66,14 @@ func (l *DiscordListener) GuildCreate(s *discordgo.Session, event *discordgo.Gui
 	}
 }
 
+// MessageCreate handles Discord message creation events.
 func (l *DiscordListener) MessageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 	l.Bridge.Logger.Debug("DISCORD_HANDLER", fmt.Sprintf("MessageCreate called from Discord user: %s", m.Author.Username))
 
 	// Ignore all messages created by the bot itself
 	if m.Author.ID == s.State.User.ID {
 		l.Bridge.Logger.Debug("DISCORD_HANDLER", "Ignoring message from self")
+
 		return
 	}
 
@@ -129,6 +132,7 @@ func (l *DiscordListener) MessageCreate(s *discordgo.Session, m *discordgo.Messa
 		// Use the guild ID we extracted earlier
 		if guildID != l.Bridge.BridgeConfig.GID {
 			l.Bridge.Logger.Debug("DISCORD_HANDLER", "Guild ID mismatch using message guild ID, ignoring message")
+
 			return
 		}
 
@@ -142,6 +146,7 @@ func (l *DiscordListener) MessageCreate(s *discordgo.Session, m *discordgo.Messa
 		// If a user wants multiple bridges in one guild they will need to define multiple bots
 		if g.ID != l.Bridge.BridgeConfig.GID {
 			l.Bridge.Logger.Debug("DISCORD_HANDLER", "Guild ID mismatch, ignoring message")
+
 			return
 		}
 
@@ -157,7 +162,6 @@ func (l *DiscordListener) MessageCreate(s *discordgo.Session, m *discordgo.Messa
 	// If the message starts with "!" then send it to HandleCommand else process as chat
 	// the HandleCommand function is also used by the mumble listener
 	if strings.HasPrefix(m.Content, "!") {
-
 		// check if discord command is enabled
 		if !l.Bridge.BridgeConfig.DiscordCommand {
 			return
@@ -179,6 +183,7 @@ func (l *DiscordListener) MessageCreate(s *discordgo.Session, m *discordgo.Messa
 				if err != nil {
 					l.Bridge.Logger.Error("DISCORD_HANDLER", fmt.Sprintf("Error sending constant mode message: %v", err))
 				}
+
 				return
 			}
 			// Look for the message sender in that guild's current voice states.
@@ -187,6 +192,7 @@ func (l *DiscordListener) MessageCreate(s *discordgo.Session, m *discordgo.Messa
 				if err != nil {
 					l.Bridge.Logger.Error("DISCORD_HANDLER", fmt.Sprintf("Error sending bridge status message: %v", err))
 				}
+
 				return
 			}
 
@@ -198,6 +204,7 @@ func (l *DiscordListener) MessageCreate(s *discordgo.Session, m *discordgo.Messa
 						l.Bridge.Logger.Info("DISCORD_HANDLER", fmt.Sprintf("Trying to join GID %v and VID %v", g.ID, vs.ChannelID))
 						l.Bridge.DiscordChannelID = vs.ChannelID
 						go l.Bridge.StartBridge()
+
 						return
 					}
 				}
@@ -211,6 +218,7 @@ func (l *DiscordListener) MessageCreate(s *discordgo.Session, m *discordgo.Messa
 					if err != nil {
 						l.Bridge.Logger.Error("DISCORD_HANDLER", fmt.Sprintf("Error sending voice channel message: %v", err))
 					}
+
 					return
 				}
 
@@ -223,6 +231,7 @@ func (l *DiscordListener) MessageCreate(s *discordgo.Session, m *discordgo.Messa
 							l.Bridge.Logger.Info("DISCORD_HANDLER", fmt.Sprintf("Trying to join GID %v and VID %v", guildID, vs.ChannelID))
 							l.Bridge.DiscordChannelID = vs.ChannelID
 							go l.Bridge.StartBridge()
+
 							return
 						}
 					}
@@ -247,6 +256,7 @@ func (l *DiscordListener) MessageCreate(s *discordgo.Session, m *discordgo.Messa
 				if err != nil {
 					l.Bridge.Logger.Error("DISCORD_HANDLER", fmt.Sprintf("Error sending constant mode message: %v", err))
 				}
+
 				return
 			}
 			// Look for the message sender in that guild's current voice states.
@@ -255,6 +265,7 @@ func (l *DiscordListener) MessageCreate(s *discordgo.Session, m *discordgo.Messa
 				if err != nil {
 					l.Bridge.Logger.Error("DISCORD_HANDLER", fmt.Sprintf("Error sending bridge status message: %v", err))
 				}
+
 				return
 			}
 
@@ -262,6 +273,7 @@ func (l *DiscordListener) MessageCreate(s *discordgo.Session, m *discordgo.Messa
 			if g == nil {
 				l.Bridge.Logger.Info("DISCORD_HANDLER", fmt.Sprintf("Guild object is nil, allowing unlink for guild ID %v anyway", guildID))
 				l.Bridge.BridgeDie <- true
+
 				return
 			}
 
@@ -269,6 +281,7 @@ func (l *DiscordListener) MessageCreate(s *discordgo.Session, m *discordgo.Messa
 				if vs.UserID == m.Author.ID && vs.ChannelID == l.Bridge.DiscordChannelID {
 					l.Bridge.Logger.Info("DISCORD_HANDLER", fmt.Sprintf("Trying to leave GID %v and VID %v", g.ID, vs.ChannelID))
 					l.Bridge.BridgeDie <- true
+
 					return
 				}
 			}
@@ -280,6 +293,7 @@ func (l *DiscordListener) MessageCreate(s *discordgo.Session, m *discordgo.Messa
 				if err != nil {
 					l.Bridge.Logger.Error("DISCORD_HANDLER", fmt.Sprintf("Error sending constant mode message: %v", err))
 				}
+
 				return
 			}
 			// Look for the message sender in that guild's current voice states.
@@ -288,6 +302,7 @@ func (l *DiscordListener) MessageCreate(s *discordgo.Session, m *discordgo.Messa
 				if err != nil {
 					l.Bridge.Logger.Error("DISCORD_HANDLER", fmt.Sprintf("Error sending bridge status message: %v", err))
 				}
+
 				return
 			}
 
@@ -297,6 +312,7 @@ func (l *DiscordListener) MessageCreate(s *discordgo.Session, m *discordgo.Messa
 				l.Bridge.BridgeDie <- true
 				time.Sleep(5 * time.Second)
 				go l.Bridge.StartBridge()
+
 				return
 			}
 
@@ -308,11 +324,11 @@ func (l *DiscordListener) MessageCreate(s *discordgo.Session, m *discordgo.Messa
 					time.Sleep(5 * time.Second)
 
 					go l.Bridge.StartBridge()
+
 					return
 				}
 			}
 		}
-
 	} else if !strings.HasPrefix(m.Content, "!") {
 		// Get a truncated version of the message for logs
 		content := m.Content
@@ -322,7 +338,8 @@ func (l *DiscordListener) MessageCreate(s *discordgo.Session, m *discordgo.Messa
 
 		// Check if chat bridge is enabled
 		if !l.Bridge.BridgeConfig.ChatBridge {
-			l.Bridge.Logger.Debug("DISCORD→MUMBLE", "Chat message received but ChatBridge is DISABLED")
+			l.Bridge.Logger.Debug("DISCORD→MUMBLE", fmt.Sprintf("Chat message received but ChatBridge is DISABLED: %s", content))
+
 			return
 		}
 
@@ -333,12 +350,14 @@ func (l *DiscordListener) MessageCreate(s *discordgo.Session, m *discordgo.Messa
 
 		if !bridgeConnected {
 			l.Bridge.Logger.Debug("DISCORD→MUMBLE", "Chat message received but bridge is not connected")
+
 			return
 		}
 
 		// Check if text messages to Mumble are disabled
 		if l.Bridge.BridgeConfig.MumbleDisableText {
 			l.Bridge.Logger.Debug("DISCORD→MUMBLE", "Chat message received but MumbleDisableText is true")
+
 			return
 		}
 
@@ -353,7 +372,9 @@ func (l *DiscordListener) MessageCreate(s *discordgo.Session, m *discordgo.Messa
 		if mumbleClient == nil ||
 			mumbleClient.Self == nil ||
 			mumbleClient.Self.Channel == nil {
+
 			l.Bridge.Logger.Error("DISCORD→MUMBLE", "Cannot forward message - MumbleClient is not properly initialized")
+
 			return
 		}
 
@@ -379,6 +400,7 @@ func (l *DiscordListener) MessageCreate(s *discordgo.Session, m *discordgo.Messa
 	}
 }
 
+// VoiceUpdate handles Discord voice state update events.
 func (l *DiscordListener) VoiceUpdate(s *discordgo.Session, event *discordgo.VoiceStateUpdate) {
 	l.Bridge.DiscordUsersMutex.Lock()
 	defer l.Bridge.DiscordUsersMutex.Unlock()
@@ -392,7 +414,7 @@ func (l *DiscordListener) VoiceUpdate(s *discordgo.Session, event *discordgo.Voi
 			// Don't panic, just return since we can't proceed
 			return
 		}
-		
+
 		// Make a defensive copy of VoiceStates to avoid race conditions
 		var voiceStates []*discordgo.VoiceState
 		if g.VoiceStates != nil {
@@ -416,10 +438,10 @@ func (l *DiscordListener) VoiceUpdate(s *discordgo.Session, event *discordgo.Voi
 				}
 
 				if _, ok := l.Bridge.DiscordUsers[vs.UserID]; !ok {
-
 					u, err := s.User(vs.UserID)
 					if err != nil {
 						l.Bridge.Logger.Error("DISCORD_HANDLER", "Error looking up username")
+
 						continue
 					}
 
@@ -451,7 +473,6 @@ func (l *DiscordListener) VoiceUpdate(s *discordgo.Session, event *discordgo.Voi
 					du.seen = true
 					l.Bridge.DiscordUsers[vs.UserID] = du
 				}
-
 			}
 		}
 

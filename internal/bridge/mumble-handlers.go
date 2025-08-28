@@ -17,9 +17,9 @@ func (l *MumbleListener) updateUsers() {
 	l.Bridge.MumbleUsersMutex.Lock()
 	l.Bridge.MumbleUsers = make(map[string]bool)
 	for _, user := range l.Bridge.MumbleClient.Self.Channel.Users {
-		//note, this might be too slow for really really big channels?
-		//event listeners block while processing
-		//also probably bad to rebuild the set every user change.
+		// note, this might be too slow for really really big channels?
+		// event listeners block while processing
+		// also probably bad to rebuild the set every user change.
 		if user.Name != l.Bridge.MumbleClient.Self.Name {
 			l.Bridge.MumbleUsers[user.Name] = true
 		}
@@ -31,6 +31,7 @@ func (l *MumbleListener) updateUsers() {
 	l.Bridge.notifyMetricsChange()
 }
 
+// MumbleConnect handles Mumble connection events.
 func (l *MumbleListener) MumbleConnect(e *gumble.ConnectEvent) {
 	l.Bridge.Logger.Info("MUMBLE_HANDLER", fmt.Sprintf("Connected to Mumble server: %s", e.Client.Conn.RemoteAddr()))
 	l.Bridge.Logger.Debug("MUMBLE_HANDLER", fmt.Sprintf("Mumble client info: Username=%s, SessionID=%d", e.Client.Self.Name, e.Client.Self.Session))
@@ -68,11 +69,11 @@ func (l *MumbleListener) MumbleConnect(e *gumble.ConnectEvent) {
 	})
 }
 
+// MumbleUserChange handles Mumble user change events.
 func (l *MumbleListener) MumbleUserChange(e *gumble.UserChangeEvent) {
 	l.updateUsers()
 
 	if e.Type.Has(gumble.UserChangeConnected) {
-
 		l.Bridge.Logger.Info("MUMBLE_HANDLER", fmt.Sprintf("User connected to mumble: %s", e.User.Name))
 
 		if !l.Bridge.BridgeConfig.MumbleDisableText {
@@ -90,12 +91,11 @@ func (l *MumbleListener) MumbleUserChange(e *gumble.UserChangeEvent) {
 					arr = append(arr, l.Bridge.DiscordUsers[u].username)
 				}
 
-				s = s + strings.Join(arr[:], ",")
+				s += strings.Join(arr, ",")
 
 				e.User.Send(s)
 			}
 			l.Bridge.DiscordUsersMutex.Unlock()
-
 		}
 
 		// Send discord a notice
@@ -132,11 +132,12 @@ func (l *MumbleListener) logChannelTree(channel *gumble.Channel, depth int) {
 	}
 }
 
-// this function will support bot commands as well as user commands
+// MumbleTextMessage handles text messages from Mumble, supporting both bot commands and user messages.
 func (l *MumbleListener) MumbleTextMessage(e *gumble.TextMessageEvent) {
 	// ignore non-user messages
 	if e.Sender == nil {
 		l.Bridge.Logger.Warn("MUMBLE_HANDLER", "Received message from nil sender")
+
 		return
 	}
 
@@ -157,7 +158,6 @@ func (l *MumbleListener) MumbleTextMessage(e *gumble.TextMessageEvent) {
 			// send the response to the user
 			e.Sender.Send(res)
 		})
-
 	} else {
 		l.Bridge.discordSendMessage(e.Sender.Name + ": " + e.Message)
 	}

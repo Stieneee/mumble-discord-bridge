@@ -9,50 +9,74 @@ import (
 type BridgeEventType int
 
 const (
-	// Connection events
+	// EventDiscordConnecting indicates Discord is attempting to connect.
 	EventDiscordConnecting BridgeEventType = iota
+	// EventDiscordConnected indicates Discord has successfully connected.
 	EventDiscordConnected
+	// EventDiscordDisconnected indicates Discord has disconnected.
 	EventDiscordDisconnected
+	// EventDiscordReconnecting indicates Discord is attempting to reconnect.
 	EventDiscordReconnecting
+	// EventDiscordConnectionFailed indicates Discord connection has failed.
 	EventDiscordConnectionFailed
 
+	// EventMumbleConnecting indicates Mumble is attempting to connect.
 	EventMumbleConnecting
+	// EventMumbleConnected indicates Mumble has successfully connected.
 	EventMumbleConnected
+	// EventMumbleDisconnected indicates Mumble has disconnected.
 	EventMumbleDisconnected
+	// EventMumbleReconnecting indicates Mumble is attempting to reconnect.
 	EventMumbleReconnecting
+	// EventMumbleConnectionFailed indicates Mumble connection has failed.
 	EventMumbleConnectionFailed
 
-	// Bridge lifecycle events
+	// EventBridgeStarted indicates the bridge has started successfully.
 	EventBridgeStarted
+	// EventBridgeStopped indicates the bridge has stopped.
 	EventBridgeStopped
+	// EventBridgeStarting indicates the bridge is starting up.
 	EventBridgeStarting
+	// EventBridgeStopping indicates the bridge is shutting down.
 	EventBridgeStopping
+	// EventBridgeError indicates an error occurred in the bridge.
 	EventBridgeError
 
-	// User events
+	// EventUserJoinedDiscord indicates a user has joined Discord.
 	EventUserJoinedDiscord
+	// EventUserLeftDiscord indicates a user has left Discord.
 	EventUserLeftDiscord
+	// EventUserJoinedMumble indicates a user has joined Mumble.
 	EventUserJoinedMumble
+	// EventUserLeftMumble indicates a user has left Mumble.
 	EventUserLeftMumble
 
-	// Health and monitoring events
+	// EventHealthCheckPassed indicates a health check has passed.
 	EventHealthCheckPassed
+	// EventHealthCheckFailed indicates a health check has failed.
 	EventHealthCheckFailed
+	// EventRecoveryAttempted indicates a recovery attempt has been made.
 	EventRecoveryAttempted
+	// EventRecoverySucceeded indicates recovery was successful.
 	EventRecoverySucceeded
+	// EventRecoveryFailed indicates recovery has failed.
 	EventRecoveryFailed
+	// EventRecoveryGaveUp indicates recovery attempts have been abandoned.
 	EventRecoveryGaveUp
 
-	// Configuration events
+	// EventConfigChanged indicates configuration has been updated.
 	EventConfigChanged
+	// EventConfigUpdateRequired indicates configuration needs to be updated.
 	EventConfigUpdateRequired
 
-	// Audio events
+	// EventAudioStreamStarted indicates an audio stream has started.
 	EventAudioStreamStarted
+	// EventAudioStreamStopped indicates an audio stream has stopped.
 	EventAudioStreamStopped
+	// EventAudioQualityChanged indicates audio quality settings have changed.
 	EventAudioQualityChanged
 
-	// Metrics events
+	// EventMetricsUpdated indicates metrics have been updated.
 	EventMetricsUpdated
 )
 
@@ -128,11 +152,11 @@ func (e BridgeEventType) String() string {
 
 // BridgeEvent represents an event that occurred in the bridge
 type BridgeEvent struct {
-	Type      BridgeEventType            `json:"type"`
-	Timestamp time.Time                  `json:"timestamp"`
-	BridgeID  string                     `json:"bridge_id"`
-	Data      map[string]interface{}     `json:"data"`
-	Error     error                      `json:"error,omitempty"`
+	Type      BridgeEventType        `json:"type"`
+	Timestamp time.Time              `json:"timestamp"`
+	BridgeID  string                 `json:"bridge_id"`
+	Data      map[string]interface{} `json:"data"`
+	Error     error                  `json:"error,omitempty"`
 }
 
 // BridgeEventHandler defines the signature for event handlers
@@ -204,6 +228,7 @@ func (ed *EventDispatcher) UnregisterHandler(eventType BridgeEventType, handler 
 		// Compare function pointers (note: this may not work perfectly in all cases)
 		if &h == &handler {
 			ed.eventHandlers[eventType] = append(handlers[:i], handlers[i+1:]...)
+
 			break
 		}
 	}
@@ -225,6 +250,7 @@ func (ed *EventDispatcher) UnregisterGlobalHandler(handler BridgeEventHandler) {
 	for i, h := range ed.globalHandlers {
 		if &h == &handler {
 			ed.globalHandlers = append(ed.globalHandlers[:i], ed.globalHandlers[i+1:]...)
+
 			break
 		}
 	}
@@ -286,6 +312,8 @@ func (ed *EventDispatcher) dispatchEvent(event BridgeEvent) {
 				defer func() {
 					if r := recover(); r != nil {
 						// Handler panicked, but don't let it crash the dispatcher
+						// Log could be added here if needed
+						_ = r
 					}
 				}()
 				h(event)
@@ -299,6 +327,8 @@ func (ed *EventDispatcher) dispatchEvent(event BridgeEvent) {
 			defer func() {
 				if r := recover(); r != nil {
 					// Handler panicked, but don't let it crash the dispatcher
+					// Log could be added here if needed
+					_ = r
 				}
 			}()
 			h(event)
@@ -314,6 +344,7 @@ func (ed *EventDispatcher) GetHandlerCount(eventType BridgeEventType) int {
 	if handlers, exists := ed.eventHandlers[eventType]; exists {
 		return len(handlers)
 	}
+
 	return 0
 }
 

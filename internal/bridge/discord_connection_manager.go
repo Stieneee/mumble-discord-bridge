@@ -50,8 +50,9 @@ func (d *DiscordConnectionManager) connectionLoop(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			d.logger.Info("DISCORD_CONN", "Connection loop cancelled")
+			d.logger.Info("DISCORD_CONN", "Connection loop canceled")
 			d.disconnectInternal()
+
 			return
 		default:
 		}
@@ -105,26 +106,29 @@ func (d *DiscordConnectionManager) connect() error {
 	connection, err := d.session.ChannelVoiceJoin(d.guildID, d.channelID, false, false)
 	if err != nil {
 		d.logger.Error("DISCORD_CONN", fmt.Sprintf("Voice connection failed: %v", err))
+
 		return fmt.Errorf("failed to join voice channel: %w", err)
 	}
 
 	// Store connection with additional safety check
 	d.connMutex.Lock()
-	// Check if we were cancelled during connection attempt
+	// Check if we were canceled during connection attempt
 	if d.ctx.Err() != nil {
 		d.connMutex.Unlock()
-		// Cleanup the connection if context was cancelled
+		// Cleanup the connection if context was canceled
 		go func() {
 			if disconnErr := connection.Disconnect(); disconnErr != nil {
-				d.logger.Error("DISCORD_CONN", fmt.Sprintf("Error cleaning up cancelled connection: %v", disconnErr))
+				d.logger.Error("DISCORD_CONN", fmt.Sprintf("Error cleaning up canceled connection: %v", disconnErr))
 			}
 		}()
-		return fmt.Errorf("connection cancelled: %w", d.ctx.Err())
+
+		return fmt.Errorf("connection canceled: %w", d.ctx.Err())
 	}
 	d.connection = connection
 	d.connMutex.Unlock()
 
 	d.logger.Debug("DISCORD_CONN", "Discord voice connection established successfully")
+
 	return nil
 }
 
@@ -135,11 +139,11 @@ func (d *DiscordConnectionManager) disconnectInternal() {
 
 	if d.connection != nil {
 		d.logger.Debug("DISCORD_CONN", "Disconnecting from Discord voice")
-		
+
 		// Create a local reference to avoid race conditions
 		conn := d.connection
 		d.connection = nil // Set to nil first to prevent other goroutines from using it
-		
+
 		// Disconnect in a separate goroutine to avoid blocking and reduce race window
 		go func() {
 			defer func() {
@@ -147,7 +151,7 @@ func (d *DiscordConnectionManager) disconnectInternal() {
 					d.logger.Error("DISCORD_CONN", fmt.Sprintf("Panic during disconnect: %v", r))
 				}
 			}()
-			
+
 			if err := conn.Disconnect(); err != nil {
 				d.logger.Error("DISCORD_CONN", fmt.Sprintf("Error disconnecting from Discord voice: %v", err))
 			}
@@ -195,9 +199,10 @@ func (d *DiscordConnectionManager) waitForConnectionLoss(ctx context.Context) <-
 					default:
 						// Channel is full or closed, connection already considered lost
 					}
+
 					return
 				}
-				
+
 				// Check Ready status with defensive programming
 				var isReady bool
 				func() {
@@ -209,7 +214,7 @@ func (d *DiscordConnectionManager) waitForConnectionLoss(ctx context.Context) <-
 					}()
 					isReady = conn.Ready
 				}()
-				
+
 				if !isReady {
 					select {
 					case lostChan <- true:
@@ -218,6 +223,7 @@ func (d *DiscordConnectionManager) waitForConnectionLoss(ctx context.Context) <-
 					default:
 						// Channel is full or closed, connection already considered lost
 					}
+
 					return
 				}
 			}
@@ -246,6 +252,7 @@ func (d *DiscordConnectionManager) Stop() error {
 func (d *DiscordConnectionManager) GetConnection() *discordgo.VoiceConnection {
 	d.connMutex.RLock()
 	defer d.connMutex.RUnlock()
+
 	return d.connection
 }
 

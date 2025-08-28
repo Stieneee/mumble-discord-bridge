@@ -16,7 +16,7 @@ import (
 type fromDiscord struct {
 	decoder       *gopus.Decoder
 	pcm           chan []int16
-	receiving     bool // is used to to track the assumption that we are streaming a continuos stream form discord
+	receiving     bool // is used to to track the assumption that we are streaming a continuous stream form discord
 	streaming     bool // The buffer streaming is streaming out
 	lastSequence  uint16
 	lastTimeStamp uint32
@@ -32,6 +32,7 @@ type DiscordDuplex struct {
 	discordReceiveSleepTick sleepct.SleepCT
 }
 
+// NewDiscordDuplex creates a new Discord audio duplex handler.
 func NewDiscordDuplex(b *BridgeState) *DiscordDuplex {
 	return &DiscordDuplex{
 		Bridge:                  b,
@@ -105,6 +106,7 @@ func (dd *DiscordDuplex) discordSendPCM(ctx context.Context, cancel context.Canc
 			}
 			// Track sunk packets due to Discord disconnection
 			promPacketsSunk.WithLabelValues("discord", "outbound").Inc()
+
 			return
 		}
 
@@ -117,6 +119,7 @@ func (dd *DiscordDuplex) discordSendPCM(ctx context.Context, cancel context.Canc
 			}
 			// Track sunk packets due to Discord connection being nil
 			promPacketsSunk.WithLabelValues("discord", "outbound").Inc()
+
 			return
 		}
 
@@ -129,6 +132,7 @@ func (dd *DiscordDuplex) discordSendPCM(ctx context.Context, cancel context.Canc
 			connection.RUnlock()
 			// Track sunk packets due to Discord connection not ready
 			promPacketsSunk.WithLabelValues("discord", "outbound").Inc()
+
 			return
 		} else if !lastReady {
 			dd.Bridge.Logger.Info("DISCORD_SEND", "Discord ready to send opus packets")
@@ -187,6 +191,7 @@ func (dd *DiscordDuplex) discordSendPCM(ctx context.Context, cancel context.Canc
 				case <-time.After(5 * time.Second):
 					dd.Bridge.Logger.Error("DISCORD_SEND", "Discord speaking timeout")
 					cancel()
+
 					return
 				case <-ctx.Done():
 					return
@@ -201,48 +206,45 @@ func (dd *DiscordDuplex) discordSendPCM(ctx context.Context, cancel context.Canc
 			opus, err := opusEncoder.Encode(append(r1, r2...), frameSize, maxBytes)
 			if err != nil {
 				OnError("Encoding Error", err)
+
 				continue
 			}
 
 			internalSend(opus)
+		} else if streaming {
+			// Check to see if there is a short speaking cycle.
+			// It is possible that short speaking cycle is the result of a short input to mumble (Not a problem). ie a quick tap of push to talk button.
+			// Or when timing delays are introduced via network, hardware or kernel delays (Problem).
+			// The problem delays result in choppy or stuttering sounds, especially when the silence frames are introduced into the opus frames below.
+			// Multiple short cycle delays can result in a discord rate limiter being trigger due to of multiple JSON speaking/not-speaking state changes
+			if time.Since(speakingStart).Milliseconds() < 50 {
+				dd.Bridge.Logger.Warn("DISCORD_SEND", "Short Mumble to Discord speaking cycle. Consider increasing the size of the to Discord jitter buffer.")
+			}
 
-		} else {
-			if streaming {
-				// Check to see if there is a short speaking cycle.
-				// It is possible that short speaking cycle is the result of a short input to mumble (Not a problem). ie a quick tap of push to talk button.
-				// Or when timing delays are introduced via network, hardware or kernel delays (Problem).
-				// The problem delays result in choppy or stuttering sounds, especially when the silence frames are introduced into the opus frames below.
-				// Multiple short cycle delays can result in a discord rate limiter being trigger due to of multiple JSON speaking/not-speaking state changes
-				if time.Since(speakingStart).Milliseconds() < 50 {
-					dd.Bridge.Logger.Warn("DISCORD_SEND", "Short Mumble to Discord speaking cycle. Consider increasing the size of the to Discord jitter buffer.")
-				}
+			// Send silence as suggested by Discord Documentation.
+			// We want to do this after alerting the user of possible short speaking cycles
+			for i := 0; i < 5; i++ {
+				internalSend(opusSilence)
+				// promTimerDiscordSend.Observe(float64(dd.discordSendSleepTick.SleepNextTarget(ctx, true)))
+				promTimerDiscordSend.Observe(float64(dd.discordSendSleepTick.SleepNextTarget(ctx, false)))
+			}
 
-				// Send silence as suggested by Discord Documentation.
-				// We want to do this after alerting the user of possible short speaking cycles
-				for i := 0; i < 5; i++ {
-					internalSend(opusSilence)
-					// promTimerDiscordSend.Observe(float64(dd.discordSendSleepTick.SleepNextTarget(ctx, true)))
-					promTimerDiscordSend.Observe(float64(dd.discordSendSleepTick.SleepNextTarget(ctx, false)))
-
-				}
-
-				if dd.Bridge.DiscordConnectionManager != nil && dd.Bridge.DiscordConnectionManager.IsConnected() {
-					connection := dd.Bridge.DiscordConnectionManager.GetConnection()
-					if connection != nil {
-						if err := connection.Speaking(false); err != nil {
-							dd.Bridge.Logger.Error("DISCORD_SEND", fmt.Sprintf("Error setting speaking status to false: %v", err))
-						}
+			if dd.Bridge.DiscordConnectionManager != nil && dd.Bridge.DiscordConnectionManager.IsConnected() {
+				connection := dd.Bridge.DiscordConnectionManager.GetConnection()
+				if connection != nil {
+					if err := connection.Speaking(false); err != nil {
+						dd.Bridge.Logger.Error("DISCORD_SEND", fmt.Sprintf("Error setting speaking status to false: %v", err))
 					}
 				}
-				streaming = false
 			}
+			streaming = false
 		}
 	}
 }
 
 // ReceivePCM will receive on the the Discordgo OpusRecv channel and decode
 // the opus audio into PCM then send it on the provided channel.
-func (dd *DiscordDuplex) discordReceivePCM(ctx context.Context, cancel context.CancelFunc) {
+func (dd *DiscordDuplex) discordReceivePCM(ctx context.Context, _ context.CancelFunc) {
 	var err error
 
 	lastReady := true
@@ -260,6 +262,7 @@ func (dd *DiscordDuplex) discordReceivePCM(ctx context.Context, cancel context.C
 				dd.Bridge.Logger.Debug("DISCORD_RECEIVE", "Discord connection not available, waiting")
 				lastReady = false
 			}
+
 			continue
 		}
 
@@ -270,6 +273,7 @@ func (dd *DiscordDuplex) discordReceivePCM(ctx context.Context, cancel context.C
 				dd.Bridge.Logger.Debug("DISCORD_RECEIVE", "Discord voice connection is nil, waiting")
 				lastReady = false
 			}
+
 			continue
 		}
 
@@ -280,6 +284,7 @@ func (dd *DiscordDuplex) discordReceivePCM(ctx context.Context, cancel context.C
 				lastReady = false
 			}
 			connection.RUnlock()
+
 			continue
 		} else if !lastReady {
 			dd.Bridge.Logger.Info("DISCORD_RECEIVE", "Discord ready to receive packets")
@@ -300,12 +305,14 @@ func (dd *DiscordDuplex) discordReceivePCM(ctx context.Context, cancel context.C
 		select {
 		case <-ctx.Done():
 			dd.Bridge.Logger.Info("DISCORD_RECEIVE", "Stopping Discord receive PCM")
+
 			return
 		case p, ok = <-opusRecv:
 		}
 
 		if !ok {
 			dd.Bridge.Logger.Debug("DISCORD_RECEIVE", "Opus not ok")
+
 			continue
 		}
 
@@ -321,6 +328,7 @@ func (dd *DiscordDuplex) discordReceivePCM(ctx context.Context, cancel context.C
 			if err != nil {
 				OnError("error creating opus decoder", err)
 				dd.discordMutex.Unlock()
+
 				continue
 			}
 
@@ -352,6 +360,7 @@ func (dd *DiscordDuplex) discordReceivePCM(ctx context.Context, cancel context.C
 		p.PCM, err = s.decoder.Decode(p.Opus, deltaT, false)
 		if err != nil {
 			OnError("Error decoding opus data", err)
+
 			continue
 		}
 
@@ -361,7 +370,7 @@ func (dd *DiscordDuplex) discordReceivePCM(ctx context.Context, cancel context.C
 
 		// Push data into pcm channel in 10ms chunks of mono pcm data
 		dd.discordMutex.Lock()
-		for l := 0; l < len(p.PCM); l = l + 480 {
+		for l := 0; l < len(p.PCM); l += 480 {
 			var next []int16
 			u := l + 480
 
@@ -395,6 +404,7 @@ func (dd *DiscordDuplex) fromDiscordMixer(ctx context.Context, toMumble chan<- g
 		select {
 		case <-ctx.Done():
 			dd.Bridge.Logger.Info("DISCORD_MIXER", "Stopping from Discord mixer")
+
 			return
 		default:
 		}
@@ -430,13 +440,11 @@ func (dd *DiscordDuplex) fromDiscordMixer(ctx context.Context, toMumble chan<- g
 				streamingCount++
 				x1 := (<-dd.fromDiscordMap[i].pcm)
 				internalMixerArr = append(internalMixerArr, x1)
-			} else {
-				if dd.fromDiscordMap[i].streaming {
-					x := dd.fromDiscordMap[i]
-					x.streaming = false
-					x.receiving = false // toggle this here is not optimal but there is no better location atm.
-					dd.fromDiscordMap[i] = x
-				}
+			} else if dd.fromDiscordMap[i].streaming {
+				x := dd.fromDiscordMap[i]
+				x.streaming = false
+				x.receiving = false // toggle this here is not optimal but there is no better location atm.
+				dd.fromDiscordMap[i] = x
 			}
 		}
 
