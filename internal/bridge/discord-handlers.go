@@ -373,12 +373,22 @@ func (l *DiscordListener) VoiceUpdate(s *discordgo.Session, event *discordgo.Voi
 	defer l.Bridge.DiscordUsersMutex.Unlock()
 
 	if event.GuildID == l.Bridge.BridgeConfig.GID {
-
+		// Use State.RLock to safely read guild state
+		s.State.RLock()
 		g, err := s.State.Guild(l.Bridge.BridgeConfig.GID)
 		if err != nil {
+			s.State.RUnlock()
 			// Don't panic, just return since we can't proceed
 			return
 		}
+		
+		// Make a defensive copy of VoiceStates to avoid race conditions
+		var voiceStates []*discordgo.VoiceState
+		if g.VoiceStates != nil {
+			voiceStates = make([]*discordgo.VoiceState, len(g.VoiceStates))
+			copy(voiceStates, g.VoiceStates)
+		}
+		s.State.RUnlock()
 
 		for u := range l.Bridge.DiscordUsers {
 			du := l.Bridge.DiscordUsers[u]
@@ -387,7 +397,7 @@ func (l *DiscordListener) VoiceUpdate(s *discordgo.Session, event *discordgo.Voi
 		}
 
 		// Sync the channel voice states to the local discordUsersMap
-		for _, vs := range g.VoiceStates {
+		for _, vs := range voiceStates {
 			if vs.ChannelID == l.Bridge.DiscordChannelID {
 				if s.State.User.ID == vs.UserID {
 					// Ignore bot
