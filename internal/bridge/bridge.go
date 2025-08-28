@@ -88,6 +88,13 @@ type BridgeConfig struct {
 }
 
 // BridgeState manages dynamic information about the bridge during runtime
+//
+// CONCURRENCY NOTES:
+// - BridgeMutex protects: Connected, DiscordConnected, MumbleConnected, Mode, 
+//   MumbleClient, DiscordVoice, StartTime
+// - DiscordUsersMutex protects: DiscordUsers map
+// - MumbleUsersMutex protects: MumbleUsers map, MumbleUserCount
+// - Lock order: BridgeMutex -> MumbleUsersMutex -> DiscordUsersMutex
 type BridgeState struct {
 	// The configuration data for this bridge
 	BridgeConfig *BridgeConfig
@@ -891,10 +898,11 @@ func (b *BridgeState) StartBridge() {
 				b.BridgeMutex.Lock()
 				discordConnected := b.DiscordConnected
 				mumbleConnected := b.MumbleConnected
+				mode := b.Mode
 				b.BridgeMutex.Unlock()
 
 				// In auto mode, check if we should stop the bridge due to no users
-				if b.Mode == BridgeModeAuto {
+				if mode == BridgeModeAuto {
 					if !discordConnected && !mumbleConnected {
 						b.Logger.Info("BRIDGE", "Both connections lost in auto mode, stopping bridge")
 						cancel()
@@ -1004,8 +1012,9 @@ func (b *BridgeState) DiscordStatusUpdate() {
 
 			promMumblePing.Set(float64(resp.Ping.Milliseconds()))
 
-			b.MumbleUsersMutex.Lock()
+			// Use consistent lock ordering: BridgeMutex -> MumbleUsersMutex
 			b.BridgeMutex.Lock()
+			b.MumbleUsersMutex.Lock()
 			b.MumbleUserCount = resp.ConnectedUsers
 			if b.Connected {
 				b.MumbleUserCount = b.MumbleUserCount - 1
@@ -1019,8 +1028,8 @@ func (b *BridgeState) DiscordStatusUpdate() {
 					status = fmt.Sprintf("%v users in Mumble\n", b.MumbleUserCount)
 				}
 			}
-			b.BridgeMutex.Unlock()
 			b.MumbleUsersMutex.Unlock()
+			b.BridgeMutex.Unlock()
 			if !b.BridgeConfig.DiscordDisableBotStatus {
 				if err := b.DiscordSession.UpdateListeningStatus(status); err != nil {
 					b.Logger.Error("BRIDGE", fmt.Sprintf("Error updating Discord listening status: %v", err))
@@ -1052,9 +1061,10 @@ func (b *BridgeState) AutoBridge() {
 			return
 		}
 
+		// Use consistent lock ordering to prevent deadlock: BridgeMutex -> MumbleUsersMutex -> DiscordUsersMutex
+		b.BridgeMutex.Lock()
 		b.MumbleUsersMutex.Lock()
 		b.DiscordUsersMutex.Lock()
-		b.BridgeMutex.Lock()
 
 		// Check if bridge should be started
 		if !b.Connected && b.MumbleUserCount > 0 && len(b.DiscordUsers) > 0 {
@@ -1071,9 +1081,9 @@ func (b *BridgeState) AutoBridge() {
 
 		// Auto mode check completed - no periodic status logging
 
-		b.BridgeMutex.Unlock()
-		b.MumbleUsersMutex.Unlock()
 		b.DiscordUsersMutex.Unlock()
+		b.MumbleUsersMutex.Unlock()
+		b.BridgeMutex.Unlock()
 	}
 }
 

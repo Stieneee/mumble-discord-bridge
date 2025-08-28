@@ -46,12 +46,18 @@ func (l *DiscordListener) GuildCreate(s *discordgo.Session, event *discordgo.Gui
 
 			// If connected to mumble inform users of Discord users
 			l.Bridge.BridgeMutex.Lock()
-			if l.Bridge.Connected && !l.Bridge.BridgeConfig.MumbleDisableText {
-				l.Bridge.MumbleClient.Do(func() {
-					l.Bridge.MumbleClient.Self.Channel.Send(fmt.Sprintf("%v has joined Discord\n", u.Username), false)
+			connected := l.Bridge.Connected
+			disableText := l.Bridge.BridgeConfig.MumbleDisableText
+			mumbleClient := l.Bridge.MumbleClient
+			l.Bridge.BridgeMutex.Unlock()
+
+			if connected && !disableText && mumbleClient != nil {
+				mumbleClient.Do(func() {
+					if mumbleClient.Self != nil && mumbleClient.Self.Channel != nil {
+						mumbleClient.Self.Channel.Send(fmt.Sprintf("%v has joined Discord\n", u.Username), false)
+					}
 				})
 			}
-			l.Bridge.BridgeMutex.Unlock()
 
 			// Notify external systems about the user count change
 			l.Bridge.notifyMetricsChange()
@@ -338,10 +344,15 @@ func (l *DiscordListener) MessageCreate(s *discordgo.Session, m *discordgo.Messa
 
 		l.Bridge.Logger.Debug("DISCORD→MUMBLE", fmt.Sprintf("Forwarding message from %s", m.Author.Username))
 
+		// Get MumbleClient reference under lock to prevent race conditions
+		l.Bridge.BridgeMutex.Lock()
+		mumbleClient := l.Bridge.MumbleClient
+		l.Bridge.BridgeMutex.Unlock()
+
 		// Perform null checks
-		if l.Bridge.MumbleClient == nil ||
-			l.Bridge.MumbleClient.Self == nil ||
-			l.Bridge.MumbleClient.Self.Channel == nil {
+		if mumbleClient == nil ||
+			mumbleClient.Self == nil ||
+			mumbleClient.Self.Channel == nil {
 			l.Bridge.Logger.Error("DISCORD→MUMBLE", "Cannot forward message - MumbleClient is not properly initialized")
 			return
 		}
@@ -352,8 +363,8 @@ func (l *DiscordListener) MessageCreate(s *discordgo.Session, m *discordgo.Messa
 		// Use a separate goroutine with timeout to make the call more resilient
 		messageSent := make(chan bool, 1)
 		go func() {
-			l.Bridge.MumbleClient.Do(func() {
-				l.Bridge.MumbleClient.Self.Channel.Send(message, false)
+			mumbleClient.Do(func() {
+				mumbleClient.Self.Channel.Send(message, false)
 				messageSent <- true
 			})
 		}()
@@ -423,12 +434,18 @@ func (l *DiscordListener) VoiceUpdate(s *discordgo.Session, event *discordgo.Voi
 						dm:       dm,
 					}
 					l.Bridge.BridgeMutex.Lock()
-					if l.Bridge.Connected && !l.Bridge.BridgeConfig.MumbleDisableText {
-						l.Bridge.MumbleClient.Do(func() {
-							l.Bridge.MumbleClient.Self.Channel.Send(fmt.Sprintf("%v has joined Discord\n", u.Username), false)
+					connected := l.Bridge.Connected
+					disableText := l.Bridge.BridgeConfig.MumbleDisableText
+					mumbleClient := l.Bridge.MumbleClient
+					l.Bridge.BridgeMutex.Unlock()
+
+					if connected && !disableText && mumbleClient != nil {
+						mumbleClient.Do(func() {
+							if mumbleClient.Self != nil && mumbleClient.Self.Channel != nil {
+								mumbleClient.Self.Channel.Send(fmt.Sprintf("%v has joined Discord\n", u.Username), false)
+							}
 						})
 					}
-					l.Bridge.BridgeMutex.Unlock()
 				} else {
 					du := l.Bridge.DiscordUsers[vs.UserID]
 					du.seen = true
@@ -443,13 +460,20 @@ func (l *DiscordListener) VoiceUpdate(s *discordgo.Session, event *discordgo.Voi
 			if !l.Bridge.DiscordUsers[id].seen {
 				l.Bridge.Logger.Info("DISCORD_HANDLER", fmt.Sprintf("User left Discord channel: %s", l.Bridge.DiscordUsers[id].username))
 				l.Bridge.BridgeMutex.Lock()
-				if l.Bridge.Connected && !l.Bridge.BridgeConfig.MumbleDisableText {
-					l.Bridge.MumbleClient.Do(func() {
-						l.Bridge.MumbleClient.Self.Channel.Send(fmt.Sprintf("%v has left Discord channel\n", l.Bridge.DiscordUsers[id].username), false)
-					})
-				}
+				connected := l.Bridge.Connected
+				disableText := l.Bridge.BridgeConfig.MumbleDisableText
+				mumbleClient := l.Bridge.MumbleClient
+				username := l.Bridge.DiscordUsers[id].username
 				delete(l.Bridge.DiscordUsers, id)
 				l.Bridge.BridgeMutex.Unlock()
+
+				if connected && !disableText && mumbleClient != nil {
+					mumbleClient.Do(func() {
+						if mumbleClient.Self != nil && mumbleClient.Self.Channel != nil {
+							mumbleClient.Self.Channel.Send(fmt.Sprintf("%v has left Discord channel\n", username), false)
+						}
+					})
+				}
 			}
 		}
 
