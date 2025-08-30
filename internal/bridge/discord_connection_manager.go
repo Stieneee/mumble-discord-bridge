@@ -84,6 +84,15 @@ func (d *DiscordConnectionManager) connectOnce() error {
 		return fmt.Errorf("discord session not ready")
 	}
 
+	// Wait for session to be fully ready to avoid race condition
+	d.logger.Debug("DISCORD_CONN", "Waiting for Discord session to be ready")
+	if err := d.waitForSessionReady(10 * time.Second); err != nil {
+		d.logger.Error("DISCORD_CONN", fmt.Sprintf("Session not ready within timeout: %v", err))
+		d.SetStatus(ConnectionFailed, err)
+
+		return fmt.Errorf("session not ready: %w", err)
+	}
+
 	// Attempt voice connection - library will reuse existing connection if present
 	d.logger.Debug("DISCORD_CONN", fmt.Sprintf("Attempting voice connection to Guild=%s, Channel=%s", d.guildID, d.channelID))
 	connection, err := d.session.ChannelVoiceJoin(d.guildID, d.channelID, false, false)
@@ -120,6 +129,40 @@ func (d *DiscordConnectionManager) disconnectInternal() {
 		// Disconnect synchronously since this is only called during shutdown
 		if err := conn.Disconnect(); err != nil {
 			d.logger.Error("DISCORD_CONN", fmt.Sprintf("Error disconnecting from Discord voice: %v", err))
+		}
+	}
+}
+
+// waitForSessionReady waits for the Discord session to be ready
+func (d *DiscordConnectionManager) waitForSessionReady(timeout time.Duration) error {
+	start := time.Now()
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		// Check if session is ready with proper synchronization
+		// We only check DataReady since that's what the race condition involves
+		d.session.RLock()
+		dataReady := d.session.DataReady
+		d.session.RUnlock()
+
+		if dataReady {
+			d.logger.Debug("DISCORD_CONN", "Session DataReady is true")
+
+			return nil
+		}
+
+		// Check timeout
+		if time.Since(start) > timeout {
+			return fmt.Errorf("timeout waiting for session to be ready")
+		}
+
+		// Wait before next check
+		select {
+		case <-ticker.C:
+			// Continue loop
+		case <-d.ctx.Done():
+			return fmt.Errorf("context canceled while waiting for session")
 		}
 	}
 }

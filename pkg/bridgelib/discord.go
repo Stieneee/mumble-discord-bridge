@@ -67,6 +67,7 @@ func NewSharedDiscordClient(token string, logger Logger) (*SharedDiscordClient, 
 	session.StateEnabled = true
 	session.Identify.Intents = intents
 	session.ShouldReconnectOnError = true
+	session.ShouldReconnectVoiceOnSessionError = false // Prevent race condition in voice reconnection
 	logger.Debug("DISCORD_CLIENT", "Discord session settings configured")
 
 	// Register handlers for routing messages
