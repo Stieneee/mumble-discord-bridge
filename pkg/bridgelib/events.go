@@ -51,33 +51,10 @@ const (
 	// EventUserLeftMumble indicates a user has left Mumble.
 	EventUserLeftMumble
 
-	// EventHealthCheckPassed indicates a health check has passed.
-	EventHealthCheckPassed
-	// EventHealthCheckFailed indicates a health check has failed.
-	EventHealthCheckFailed
-	// EventRecoveryAttempted indicates a recovery attempt has been made.
-	EventRecoveryAttempted
-	// EventRecoverySucceeded indicates recovery was successful.
-	EventRecoverySucceeded
-	// EventRecoveryFailed indicates recovery has failed.
-	EventRecoveryFailed
-	// EventRecoveryGaveUp indicates recovery attempts have been abandoned.
-	EventRecoveryGaveUp
-
 	// EventConfigChanged indicates configuration has been updated.
 	EventConfigChanged
 	// EventConfigUpdateRequired indicates configuration needs to be updated.
 	EventConfigUpdateRequired
-
-	// EventAudioStreamStarted indicates an audio stream has started.
-	EventAudioStreamStarted
-	// EventAudioStreamStopped indicates an audio stream has stopped.
-	EventAudioStreamStopped
-	// EventAudioQualityChanged indicates audio quality settings have changed.
-	EventAudioQualityChanged
-
-	// EventMetricsUpdated indicates metrics have been updated.
-	EventMetricsUpdated
 )
 
 // String returns a string representation of the event type
@@ -121,30 +98,10 @@ func (e BridgeEventType) String() string {
 		return "UserJoinedMumble"
 	case EventUserLeftMumble:
 		return "UserLeftMumble"
-	case EventHealthCheckPassed:
-		return "HealthCheckPassed"
-	case EventHealthCheckFailed:
-		return "HealthCheckFailed"
-	case EventRecoveryAttempted:
-		return "RecoveryAttempted"
-	case EventRecoverySucceeded:
-		return "RecoverySucceeded"
-	case EventRecoveryFailed:
-		return "RecoveryFailed"
-	case EventRecoveryGaveUp:
-		return "RecoveryGaveUp"
 	case EventConfigChanged:
 		return "ConfigChanged"
 	case EventConfigUpdateRequired:
 		return "ConfigUpdateRequired"
-	case EventAudioStreamStarted:
-		return "AudioStreamStarted"
-	case EventAudioStreamStopped:
-		return "AudioStreamStopped"
-	case EventAudioQualityChanged:
-		return "AudioQualityChanged"
-	case EventMetricsUpdated:
-		return "MetricsUpdated"
 	default:
 		return "Unknown"
 	}
@@ -218,42 +175,12 @@ func (ed *EventDispatcher) RegisterHandler(eventType BridgeEventType, handler Br
 	ed.eventHandlers[eventType] = append(ed.eventHandlers[eventType], handler)
 }
 
-// UnregisterHandler removes a handler for a specific event type
-func (ed *EventDispatcher) UnregisterHandler(eventType BridgeEventType, handler BridgeEventHandler) {
-	ed.mutex.Lock()
-	defer ed.mutex.Unlock()
-
-	handlers := ed.eventHandlers[eventType]
-	for i, h := range handlers {
-		// Compare function pointers (note: this may not work perfectly in all cases)
-		if &h == &handler {
-			ed.eventHandlers[eventType] = append(handlers[:i], handlers[i+1:]...)
-
-			break
-		}
-	}
-}
-
 // RegisterGlobalHandler registers a handler that receives all events
 func (ed *EventDispatcher) RegisterGlobalHandler(handler BridgeEventHandler) {
 	ed.mutex.Lock()
 	defer ed.mutex.Unlock()
 
 	ed.globalHandlers = append(ed.globalHandlers, handler)
-}
-
-// UnregisterGlobalHandler removes a global handler
-func (ed *EventDispatcher) UnregisterGlobalHandler(handler BridgeEventHandler) {
-	ed.mutex.Lock()
-	defer ed.mutex.Unlock()
-
-	for i, h := range ed.globalHandlers {
-		if &h == &handler {
-			ed.globalHandlers = append(ed.globalHandlers[:i], ed.globalHandlers[i+1:]...)
-
-			break
-		}
-	}
 }
 
 // EmitEvent emits an event (non-blocking)

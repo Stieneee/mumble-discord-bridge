@@ -65,12 +65,8 @@ type BridgeConfig struct {
 	Mode       string
 	Version    string
 
-	// Health monitoring configuration
-	HealthConfig HealthConfig
-
 	// Event configuration
-	EmitHealthEvents bool
-	EventBufferSize  int
+	EventBufferSize int
 
 	// Logger for the bridge instance
 	Logger Logger
@@ -95,9 +91,6 @@ type BridgeInstance struct {
 
 	// Event handling
 	eventDispatcher *EventDispatcher
-
-	// Health monitoring
-	healthMonitor *HealthMonitor
 
 	// The lock for protecting access to the bridge
 	mu sync.Mutex
@@ -154,17 +147,6 @@ func NewBridgeInstanceWithContext(ctx context.Context, id string, config *Bridge
 	inst.eventDispatcher.Start()
 	bridgeLogger.Debug("BRIDGE_INIT", "Event dispatcher created and started")
 
-	// Initialize health monitor with defaults if not configured
-	healthConfig := config.HealthConfig
-	if healthConfig.CheckInterval == 0 {
-		healthConfig = DefaultHealthConfig()
-		if config.EmitHealthEvents {
-			healthConfig.EmitHealthEvents = true
-		}
-	}
-	inst.healthMonitor = NewHealthMonitor(inst, &healthConfig, bridgeLogger)
-	bridgeLogger.Debug("BRIDGE_INIT", "Health monitor created")
-
 	// Create the internal bridge state
 	bridgeLogger.Debug("BRIDGE_INIT", "Creating internal bridge state")
 	inst.State = &bridge.BridgeState{
@@ -193,7 +175,7 @@ func NewBridgeInstanceWithContext(ctx context.Context, id string, config *Bridge
 		Logger:       bridgeLogger,
 	}
 
-	// Set back-reference to enable event forwarding to health monitor
+	// Set back-reference to enable event forwarding
 	inst.State.BridgeInstance = inst
 
 	// Setup Mumble config
@@ -285,12 +267,6 @@ func (b *BridgeInstance) Start() error {
 
 	// Log important configuration values
 	b.logger.Info("BRIDGE_CONFIG", fmt.Sprintf("ChatBridge=%v, MumbleDisableText=%v, DiscordTextMode=%s", b.config.ChatBridge, b.config.MumbleDisableText, b.config.DiscordTextMode))
-
-	// Start health monitor
-	if b.healthMonitor != nil {
-		b.healthMonitor.Start(b.ctx)
-		b.logger.Debug("BRIDGE_START", "Health monitor started")
-	}
 
 	// Emit bridge starting event
 	if b.eventDispatcher != nil {
@@ -433,12 +409,6 @@ func (b *BridgeInstance) Stop() error {
 	// Cancel the context to signal all operations to stop
 	b.cancel()
 
-	// Stop health monitor
-	if b.healthMonitor != nil {
-		b.healthMonitor.Stop()
-		b.logger.Debug("BRIDGE_STOP", "Health monitor stopped")
-	}
-
 	// Mark bridge as stopped
 	b.stopped = true
 	b.logger.Debug("BRIDGE_STOP", "Bridge marked as stopped")
@@ -489,17 +459,14 @@ func (b *BridgeInstance) Stop() error {
 
 // BridgeStatus represents comprehensive bridge status information
 type BridgeStatus struct {
-	ID                string                 `json:"id"`
-	State             string                 `json:"state"`
-	DiscordConnected  bool                   `json:"discord_connected"`
-	MumbleConnected   bool                   `json:"mumble_connected"`
-	DiscordUsers      int                    `json:"discord_users"`
-	MumbleUsers       int                    `json:"mumble_users"`
-	Uptime            time.Duration          `json:"uptime"`
-	LastHealthCheck   time.Time              `json:"last_health_check"`
-	HealthStatus      string                 `json:"health_status"`
-	ConnectionQuality map[string]float64     `json:"connection_quality"`
-	Config            map[string]interface{} `json:"config"`
+	ID               string                 `json:"id"`
+	State            string                 `json:"state"`
+	DiscordConnected bool                   `json:"discord_connected"`
+	MumbleConnected  bool                   `json:"mumble_connected"`
+	DiscordUsers     int                    `json:"discord_users"`
+	MumbleUsers      int                    `json:"mumble_users"`
+	Uptime           time.Duration          `json:"uptime"`
+	Config           map[string]interface{} `json:"config"`
 }
 
 // GetStatus returns the basic status of the bridge (legacy method)
@@ -549,9 +516,8 @@ func (b *BridgeInstance) GetDetailedStatus() BridgeStatus {
 	defer b.mu.Unlock()
 
 	status := BridgeStatus{
-		ID:                b.ID,
-		ConnectionQuality: make(map[string]float64),
-		Config:            make(map[string]interface{}),
+		ID:     b.ID,
+		Config: make(map[string]interface{}),
 	}
 
 	// Get basic state
@@ -566,27 +532,6 @@ func (b *BridgeInstance) GetDetailedStatus() BridgeStatus {
 			status.State = "running"
 		} else {
 			status.State = "starting"
-		}
-	}
-
-	// Get health information
-	if b.healthMonitor != nil {
-		discordHealth, mumbleHealth, overallHealthy := b.healthMonitor.GetHealth()
-
-		status.DiscordConnected = discordHealth.Connected
-		status.MumbleConnected = mumbleHealth.Connected
-		status.LastHealthCheck = discordHealth.LastHealthCheck
-		if mumbleHealth.LastHealthCheck.After(discordHealth.LastHealthCheck) {
-			status.LastHealthCheck = mumbleHealth.LastHealthCheck
-		}
-
-		status.ConnectionQuality[serviceDiscord] = discordHealth.ConnectionQuality
-		status.ConnectionQuality[serviceMumble] = mumbleHealth.ConnectionQuality
-
-		if overallHealthy {
-			status.HealthStatus = "healthy"
-		} else {
-			status.HealthStatus = "unhealthy"
 		}
 	}
 
@@ -620,20 +565,6 @@ func (b *BridgeInstance) GetDetailedStatus() BridgeStatus {
 	return status
 }
 
-// UpdateConfig updates the bridge configuration (requires restart)
-func (b *BridgeInstance) UpdateConfig(_ *BridgeConfig) error {
-	// For now, configuration updates require a restart
-	// In the future, we could support some hot-swappable configurations
-
-	if b.eventDispatcher != nil {
-		b.eventDispatcher.EmitEvent(EventConfigUpdateRequired, map[string]interface{}{
-			"reason": "configuration_changed",
-		}, nil)
-	}
-
-	return fmt.Errorf("restart required to apply configuration changes")
-}
-
 // setBridgeMode sets the bridge mode based on a string
 func (b *BridgeInstance) setBridgeMode(mode string) {
 	switch mode {
@@ -650,36 +581,10 @@ func (b *BridgeInstance) setBridgeMode(mode string) {
 	}
 }
 
-// SetMetricsChangeCallback sets a callback function that will be called when metrics change
-func (b *BridgeInstance) SetMetricsChangeCallback(callback func()) {
-	b.State.MetricsChangeCallback = callback
-}
-
 // RegisterHandler registers a handler for a specific event type
 func (b *BridgeInstance) RegisterHandler(eventType BridgeEventType, handler BridgeEventHandler) {
 	if b.eventDispatcher != nil {
 		b.eventDispatcher.RegisterHandler(eventType, handler)
-	}
-}
-
-// UnregisterHandler removes a handler for a specific event type
-func (b *BridgeInstance) UnregisterHandler(eventType BridgeEventType, handler BridgeEventHandler) {
-	if b.eventDispatcher != nil {
-		b.eventDispatcher.UnregisterHandler(eventType, handler)
-	}
-}
-
-// RegisterGlobalHandler registers a handler that receives all events
-func (b *BridgeInstance) RegisterGlobalHandler(handler BridgeEventHandler) {
-	if b.eventDispatcher != nil {
-		b.eventDispatcher.RegisterGlobalHandler(handler)
-	}
-}
-
-// UnregisterGlobalHandler removes a global handler
-func (b *BridgeInstance) UnregisterGlobalHandler(handler BridgeEventHandler) {
-	if b.eventDispatcher != nil {
-		b.eventDispatcher.UnregisterGlobalHandler(handler)
 	}
 }
 
@@ -724,11 +629,6 @@ func (b *BridgeInstance) EmitConnectionEvent(service string, eventTypeInt int, c
 		}
 	default:
 		return
-	}
-
-	// Update health monitor
-	if b.healthMonitor != nil {
-		b.healthMonitor.UpdateConnectionStatus(service, connected, err)
 	}
 
 	// Emit event

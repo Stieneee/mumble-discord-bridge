@@ -146,9 +146,6 @@ type SharedDiscordClient struct {
     messageHandlers     map[string][]interface{}
     messageHandlerMutex sync.RWMutex
 
-    // Mapping of guild to voice connections
-    voiceConnections     map[string]*discordgo.VoiceConnection
-    voiceConnectionMutex sync.RWMutex
 }
 ```
 
@@ -306,9 +303,6 @@ BridgeLib uses a provider pattern to abstract Discord connectivity:
 type DiscordProvider interface {
     // RegisterHandler registers a handler for Discord events
     RegisterHandler(handlerFunc interface{})
-
-    // JoinVoiceChannel joins a voice channel
-    JoinVoiceChannel(guildID, channelID string) (*discordgo.VoiceConnection, error)
 
     // SendMessage sends a message to a channel
     SendMessage(channelID, content string) (*discordgo.Message, error)
