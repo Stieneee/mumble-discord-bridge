@@ -15,23 +15,33 @@ import (
 // MumbleConnectionManager manages Mumble connections with automatic reconnection
 type MumbleConnectionManager struct {
 	*BaseConnectionManager
-	client      *gumble.Client
-	config      *gumble.Config
-	address     string
-	tlsConfig   *tls.Config
-	clientMutex sync.RWMutex
+	client        *gumble.Client
+	config        *gumble.Config
+	address       string
+	tlsConfig     *tls.Config
+	clientMutex   sync.RWMutex
+	disconnectCh  chan *gumble.DisconnectEvent // Channel to signal disconnection events
+	disconnectMux sync.Mutex                   // Protects disconnectCh
 }
 
 // NewMumbleConnectionManager creates a new Mumble connection manager
 func NewMumbleConnectionManager(address string, config *gumble.Config, tlsConfig *tls.Config, logger logger.Logger, eventEmitter BridgeEventEmitter) *MumbleConnectionManager {
 	base := NewBaseConnectionManager(logger, "mumble", eventEmitter)
 
-	return &MumbleConnectionManager{
+	manager := &MumbleConnectionManager{
 		BaseConnectionManager: base,
 		address:               address,
 		config:                config,
 		tlsConfig:             tlsConfig,
+		disconnectCh:          make(chan *gumble.DisconnectEvent, 1),
 	}
+
+	// Attach this connection manager as an event listener to the gumble config
+	if config != nil {
+		config.Attach(manager)
+	}
+
+	return manager
 }
 
 // Start begins the Mumble connection process with automatic reconnection
@@ -49,11 +59,12 @@ func (m *MumbleConnectionManager) Start(ctx context.Context) error {
 
 // connectionLoop manages the connection lifecycle with reconnection logic
 func (m *MumbleConnectionManager) connectionLoop(ctx context.Context) {
+	defer m.disconnectInternal()
+
 	for {
 		select {
 		case <-ctx.Done():
 			m.logger.Info("MUMBLE_CONN", "Connection loop canceled")
-			m.disconnectInternal()
 
 			return
 		default:
@@ -66,26 +77,28 @@ func (m *MumbleConnectionManager) connectionLoop(ctx context.Context) {
 
 			// Wait before retrying
 			select {
-			case <-time.After(5 * time.Second):
+			case <-time.After(2 * time.Second):
 				continue
 			case <-ctx.Done():
 				return
 			}
 		}
 
-		// Connection successful
-		m.SetStatus(ConnectionConnected, nil)
-		m.logger.Info("MUMBLE_CONN", "Mumble connection established")
-
-		// Wait for the connection to be lost (gumble library handles this)
-		// We'll rely on the client's state to detect disconnections
+		// Connection successful - check if context is still active
 		select {
 		case <-ctx.Done():
 			return
-		case <-m.waitForConnectionLoss(ctx):
-			// Connection lost, prepare for reconnection
-			m.SetStatus(ConnectionReconnecting, nil)
-			m.logger.Warn("MUMBLE_CONN", "Mumble connection lost, attempting reconnection")
+		default:
+			m.SetStatus(ConnectionConnected, nil)
+			m.logger.Info("MUMBLE_CONN", "Mumble connection established")
+		}
+
+		// Wait for disconnect event
+		select {
+		case <-ctx.Done():
+			return
+		case disconnectEvent := <-m.disconnectCh:
+			m.handleDisconnectEvent(disconnectEvent)
 		}
 	}
 }
@@ -136,54 +149,25 @@ func (m *MumbleConnectionManager) disconnectInternal() {
 	}
 }
 
-// waitForConnectionLoss waits for the Mumble connection to be lost by monitoring the client state
-func (m *MumbleConnectionManager) waitForConnectionLoss(ctx context.Context) <-chan bool {
-	lostChan := make(chan bool, 1)
-
-	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				m.logger.Error("MUMBLE_CONN", fmt.Sprintf("Connection loss monitoring panic recovered: %v", r))
-			}
-			close(lostChan)
-		}()
-
-		// Check connection state periodically
-		ticker := time.NewTicker(5 * time.Second)
-		defer ticker.Stop()
-
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				// Add additional context check to prevent races
-				if ctx.Err() != nil {
-					return
-				}
-
-				m.clientMutex.RLock()
-				client := m.client
-				m.clientMutex.RUnlock()
-
-				// If client is nil or not connected (states 1 or 2 are connected), consider it lost
-				// StateConnected = 1 (syncing), StateSynced = 2 (fully ready)
-				if client == nil || (client.State() != 1 && client.State() != 2) {
-					select {
-					case lostChan <- true:
-					case <-ctx.Done():
-						return
-					default:
-						// Channel is full or closed, connection already considered lost
-					}
-
-					return
-				}
-			}
-		}
-	}()
-
-	return lostChan
+// handleDisconnectEvent processes different types of disconnect events
+func (m *MumbleConnectionManager) handleDisconnectEvent(event *gumble.DisconnectEvent) {
+	switch event.Type {
+	case gumble.DisconnectError:
+		m.SetStatus(ConnectionReconnecting, fmt.Errorf("connection error: %s", event.String))
+		m.logger.Warn("MUMBLE_CONN", fmt.Sprintf("Connection lost due to error: %s, attempting reconnection", event.String))
+	case gumble.DisconnectKicked:
+		m.SetStatus(ConnectionFailed, fmt.Errorf("kicked from server: %s", event.String))
+		m.logger.Error("MUMBLE_CONN", fmt.Sprintf("Kicked from server: %s", event.String))
+	case gumble.DisconnectBanned:
+		m.SetStatus(ConnectionFailed, fmt.Errorf("banned from server: %s", event.String))
+		m.logger.Error("MUMBLE_CONN", fmt.Sprintf("Banned from server: %s", event.String))
+	case gumble.DisconnectUser:
+		m.SetStatus(ConnectionReconnecting, nil)
+		m.logger.Info("MUMBLE_CONN", "User-initiated disconnect, attempting reconnection")
+	default:
+		m.SetStatus(ConnectionReconnecting, fmt.Errorf("unknown disconnect: %s", event.String))
+		m.logger.Warn("MUMBLE_CONN", fmt.Sprintf("Unknown disconnect type: %s, attempting reconnection", event.String))
+	}
 }
 
 // Stop gracefully stops the Mumble connection manager
@@ -198,6 +182,11 @@ func (m *MumbleConnectionManager) Stop() error {
 	// Disconnect from Mumble
 	m.disconnectInternal()
 
+	// Close the disconnect channel to prevent any further events
+	m.disconnectMux.Lock()
+	close(m.disconnectCh)
+	m.disconnectMux.Unlock()
+
 	return nil
 }
 
@@ -210,11 +199,11 @@ func (m *MumbleConnectionManager) GetClient() *gumble.Client {
 }
 
 // GetConnectionInfo returns Mumble-specific connection information
-func (m *MumbleConnectionManager) GetConnectionInfo() map[string]interface{} {
+func (m *MumbleConnectionManager) GetConnectionInfo() map[string]any {
 	m.clientMutex.RLock()
 	defer m.clientMutex.RUnlock()
 
-	info := map[string]interface{}{
+	info := map[string]any{
 		"type":     "mumble",
 		"address":  m.address,
 		"username": m.config.Username,
@@ -231,6 +220,61 @@ func (m *MumbleConnectionManager) GetConnectionInfo() map[string]interface{} {
 	return info
 }
 
+// EventListener implementation for gumble events
+// We only care about Connect and Disconnect events for connection management
+
+// OnConnect handles gumble connection events
+func (m *MumbleConnectionManager) OnConnect(_ *gumble.ConnectEvent) {
+	m.logger.Info("MUMBLE_CONN", "Connection event received")
+	// Connection events are already handled by the connection loop
+}
+
+// OnDisconnect handles gumble disconnection events and signals the connection loop
+func (m *MumbleConnectionManager) OnDisconnect(e *gumble.DisconnectEvent) {
+	m.logger.Warn("MUMBLE_CONN", fmt.Sprintf("Disconnect event received: %s", e.String))
+
+	// Signal the connection loop about the disconnection
+	m.disconnectMux.Lock()
+	defer m.disconnectMux.Unlock()
+
+	select {
+	case m.disconnectCh <- e:
+		// Successfully sent disconnect signal
+	default:
+		// Channel is full or closed, no need to send another event
+		m.logger.Debug("MUMBLE_CONN", "Disconnect channel full or closed, skipping event")
+	}
+}
+
+// Required EventListener interface methods (unused for connection management)
+
+// OnTextMessage implements gumble.EventListener interface (unused)
+func (m *MumbleConnectionManager) OnTextMessage(_ *gumble.TextMessageEvent) {}
+
+// OnUserChange implements gumble.EventListener interface (unused)
+func (m *MumbleConnectionManager) OnUserChange(_ *gumble.UserChangeEvent) {}
+
+// OnChannelChange implements gumble.EventListener interface (unused)
+func (m *MumbleConnectionManager) OnChannelChange(_ *gumble.ChannelChangeEvent) {}
+
+// OnPermissionDenied implements gumble.EventListener interface (unused)
+func (m *MumbleConnectionManager) OnPermissionDenied(_ *gumble.PermissionDeniedEvent) {}
+
+// OnUserList implements gumble.EventListener interface (unused)
+func (m *MumbleConnectionManager) OnUserList(_ *gumble.UserListEvent) {}
+
+// OnACL implements gumble.EventListener interface (unused)
+func (m *MumbleConnectionManager) OnACL(_ *gumble.ACLEvent) {}
+
+// OnBanList implements gumble.EventListener interface (unused)
+func (m *MumbleConnectionManager) OnBanList(_ *gumble.BanListEvent) {}
+
+// OnContextActionChange implements gumble.EventListener interface (unused)
+func (m *MumbleConnectionManager) OnContextActionChange(_ *gumble.ContextActionChangeEvent) {}
+
+// OnServerConfig implements gumble.EventListener interface (unused)
+func (m *MumbleConnectionManager) OnServerConfig(_ *gumble.ServerConfigEvent) {}
+
 // GetAudioOutgoing returns the audio outgoing channel from the Mumble client
 func (m *MumbleConnectionManager) GetAudioOutgoing() chan<- gumble.AudioBuffer {
 	m.clientMutex.RLock()
@@ -243,22 +287,63 @@ func (m *MumbleConnectionManager) GetAudioOutgoing() chan<- gumble.AudioBuffer {
 	return m.client.AudioOutgoing()
 }
 
+// GetSelfName safely returns the client's own name
+func (m *MumbleConnectionManager) GetSelfName() string {
+	m.clientMutex.RLock()
+	client := m.client
+	m.clientMutex.RUnlock()
+
+	if client == nil {
+		return ""
+	}
+
+	var name string
+	client.Do(func() {
+		if client.Self != nil {
+			name = client.Self.Name
+		}
+	})
+
+	return name
+}
+
+// GetChannelUsers safely returns the users in the client's current channel
+func (m *MumbleConnectionManager) GetChannelUsers() []*gumble.User {
+	m.clientMutex.RLock()
+	client := m.client
+	m.clientMutex.RUnlock()
+
+	if client == nil {
+		return []*gumble.User{}
+	}
+
+	var usersCopy []*gumble.User
+	client.Do(func() {
+		if client.Self != nil && client.Self.Channel != nil {
+			// Create a proper copy of the users to avoid concurrent access issues
+			for _, user := range client.Self.Channel.Users {
+				if user != nil {
+					usersCopy = append(usersCopy, user)
+				}
+			}
+		}
+	})
+
+	return usersCopy
+}
+
 // Note: Audio listeners should be attached to the config before connection,
 // not to the connection manager, to ensure they're active when client connects
 
 // UpdateConfig updates the Mumble configuration (requires reconnection for most changes)
 func (m *MumbleConnectionManager) UpdateConfig(newConfig *gumble.Config) error {
 	m.logger.Info("MUMBLE_CONN", "Updating Mumble configuration")
-
-	// Store new config
 	m.config = newConfig
 
-	// If currently connected, trigger reconnection to apply new config
+	// If currently connected, disconnect to trigger reconnection
 	if m.IsConnected() {
-		m.logger.Info("MUMBLE_CONN", "Triggering reconnection for config change")
-		go func() {
-			m.disconnectInternal()
-		}()
+		m.logger.Info("MUMBLE_CONN", "Disconnecting to apply config change")
+		m.disconnectInternal()
 	}
 
 	return nil
@@ -267,18 +352,16 @@ func (m *MumbleConnectionManager) UpdateConfig(newConfig *gumble.Config) error {
 // UpdateAddress updates the Mumble server address (requires reconnection)
 func (m *MumbleConnectionManager) UpdateAddress(address string) error {
 	if m.address == address {
-		return nil // No change needed
+		return nil
 	}
 
-	m.logger.Info("MUMBLE_CONN", fmt.Sprintf("Changing Mumble address from %s to %s", m.address, address))
+	m.logger.Info("MUMBLE_CONN", fmt.Sprintf("Changing address from %s to %s", m.address, address))
 	m.address = address
 
-	// If currently connected, trigger reconnection to new address
+	// If currently connected, disconnect to trigger reconnection
 	if m.IsConnected() {
-		m.logger.Info("MUMBLE_CONN", "Triggering reconnection for address change")
-		go func() {
-			m.disconnectInternal()
-		}()
+		m.logger.Info("MUMBLE_CONN", "Disconnecting to apply address change")
+		m.disconnectInternal()
 	}
 
 	return nil
@@ -295,12 +378,12 @@ func (m *MumbleConnectionManager) GetConfig() *gumble.Config {
 }
 
 // getRedactedConfigInfo returns config info with sensitive fields redacted for logging
-func (m *MumbleConnectionManager) getRedactedConfigInfo() map[string]interface{} {
+func (m *MumbleConnectionManager) getRedactedConfigInfo() map[string]any {
 	if m.config == nil {
-		return map[string]interface{}{"config": "nil"}
+		return map[string]any{"config": "nil"}
 	}
 
-	return map[string]interface{}{
+	return map[string]any{
 		"Username":       m.config.Username,
 		"Password":       fmt.Sprintf("[REDACTED - %d chars]", len(m.config.Password)),
 		"Tokens":         fmt.Sprintf("[%d tokens]", len(m.config.Tokens)),
@@ -312,12 +395,12 @@ func (m *MumbleConnectionManager) getRedactedConfigInfo() map[string]interface{}
 }
 
 // getRedactedTLSInfo returns TLS config info with sensitive fields redacted for logging
-func (m *MumbleConnectionManager) getRedactedTLSInfo() map[string]interface{} {
+func (m *MumbleConnectionManager) getRedactedTLSInfo() map[string]any {
 	if m.tlsConfig == nil {
-		return map[string]interface{}{"tls": "nil"}
+		return map[string]any{"tls": "nil"}
 	}
 
-	return map[string]interface{}{
+	return map[string]any{
 		"InsecureSkipVerify": m.tlsConfig.InsecureSkipVerify,
 		"ServerName":         m.tlsConfig.ServerName,
 		"MinVersion":         m.tlsConfig.MinVersion,

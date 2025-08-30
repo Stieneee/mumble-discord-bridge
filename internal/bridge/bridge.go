@@ -137,12 +137,8 @@ type BridgeState struct { //nolint:revive // API consistency: keeping Bridge pre
 	DiscordConnectionManager *DiscordConnectionManager
 	MumbleConnectionManager  *MumbleConnectionManager
 
-	// Legacy fields kept for compatibility during transition
-	// Discord voice connection. Empty if not connected.
-	DiscordVoice *discordgo.VoiceConnection
-
-	// Mumble client. Empty if not connected.
-	MumbleClient *gumble.Client
+	// Note: Legacy DiscordVoice and MumbleClient fields removed
+	// Use DiscordConnectionManager.GetConnection() and MumbleConnectionManager.GetClient() instead
 
 	// Map of Discord users tracked by this bridge.
 	DiscordUsers      map[string]DiscordUser
@@ -376,17 +372,13 @@ func (b *BridgeState) handleDiscordConnectionEvent(event ConnectionEvent) {
 
 	b.BridgeMutex.Lock()
 	oldState := b.DiscordConnected
-	b.DiscordConnected = event.Status == ConnectionConnected
-	newState := b.DiscordConnected
+	newConnectedState := event.Status == ConnectionConnected
 
-	// Update legacy field for compatibility
-	if b.DiscordConnected {
-		b.DiscordVoice = b.DiscordConnectionManager.GetConnection()
-	} else {
-		b.DiscordVoice = nil
-	}
+	// Update connection state atomically
+	b.DiscordConnected = newConnectedState
 
 	b.updateOverallConnectionState()
+	newState := b.DiscordConnected
 	b.BridgeMutex.Unlock()
 
 	if oldState != newState {
@@ -432,17 +424,13 @@ func (b *BridgeState) handleMumbleConnectionEvent(event ConnectionEvent) {
 
 	b.BridgeMutex.Lock()
 	oldState := b.MumbleConnected
-	b.MumbleConnected = event.Status == ConnectionConnected
-	newState := b.MumbleConnected
+	newConnectedState := event.Status == ConnectionConnected
 
-	// Update legacy field for compatibility
-	if b.MumbleConnected {
-		b.MumbleClient = b.MumbleConnectionManager.GetClient()
-	} else {
-		b.MumbleClient = nil
-	}
+	// Update connection state atomically
+	b.MumbleConnected = newConnectedState
 
 	b.updateOverallConnectionState()
+	newState := b.MumbleConnected
 	b.BridgeMutex.Unlock()
 
 	if oldState != newState {
@@ -514,8 +502,7 @@ func (b *BridgeState) stopConnectionManagers() {
 	b.DiscordConnected = false
 	b.MumbleConnected = false
 	b.Connected = false
-	b.DiscordVoice = nil
-	b.MumbleClient = nil
+	// Connection manager cleanup handles all cleanup
 	b.BridgeMutex.Unlock()
 
 	b.Logger.Info("BRIDGE", "Connection managers stopped")
@@ -708,8 +695,13 @@ func (b *BridgeState) sendMumbleNotifications(usernames []string) {
 	b.BridgeMutex.Lock()
 	connected := b.Connected
 	disableText := b.BridgeConfig.MumbleDisableText
-	client := b.MumbleClient
 	b.BridgeMutex.Unlock()
+
+	// Get current Mumble client from connection manager
+	var client *gumble.Client
+	if b.MumbleConnectionManager != nil {
+		client = b.MumbleConnectionManager.GetClient()
+	}
 
 	if !connected || disableText || client == nil {
 		return
@@ -802,6 +794,8 @@ func (b *BridgeState) StartBridge() {
 
 		return
 	}
+	// Set StartTime while holding lock to prevent races
+	b.StartTime = time.Now()
 	b.BridgeMutex.Unlock()
 
 	b.Logger.Info("BRIDGE", "Starting bridge process with managed connections")
@@ -820,10 +814,6 @@ func (b *BridgeState) StartBridge() {
 
 	promBridgeStarts.Inc()
 	promBridgeStartTime.SetToCurrentTime()
-
-	b.BridgeMutex.Lock()
-	b.StartTime = time.Now()
-	b.BridgeMutex.Unlock()
 
 	// Initialize connection managers
 	if err := b.initializeConnectionManagers(); err != nil {
@@ -860,6 +850,12 @@ func (b *BridgeState) StartBridge() {
 			// Small delay to allow any in-flight audio processing to complete
 			time.Sleep(50 * time.Millisecond)
 		}
+
+		// Clean up any active audio streams
+		if b.MumbleStream != nil {
+			b.MumbleStream.CleanupStreams()
+		}
+
 		// Then stop connection managers
 		b.stopConnectionManagers()
 	}()

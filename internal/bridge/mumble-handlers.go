@@ -3,7 +3,6 @@ package bridge
 import (
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/stieneee/gumble/gumble"
 )
@@ -14,13 +13,49 @@ type MumbleListener struct {
 }
 
 func (l *MumbleListener) updateUsers() {
+	// Safely get connection manager
+	connManager := l.Bridge.MumbleConnectionManager
+	if connManager == nil {
+		// No connection manager, clear users
+		l.Bridge.MumbleUsersMutex.Lock()
+		l.Bridge.MumbleUsers = make(map[string]bool)
+		promMumbleUsers.Set(0)
+		l.Bridge.MumbleUsersMutex.Unlock()
+
+		return
+	}
+
+	// Safely get channel users and self name
+	channelUsers := connManager.GetChannelUsers()
+	selfName := connManager.GetSelfName()
+
+	if len(channelUsers) == 0 && selfName != "" {
+		// No users in channel but we have a self name, this might be temporary
+		l.Bridge.MumbleUsersMutex.Lock()
+		l.Bridge.MumbleUsers = make(map[string]bool)
+		promMumbleUsers.Set(0)
+		l.Bridge.MumbleUsersMutex.Unlock()
+
+		return
+	}
+
+	if selfName == "" {
+		// No self name, connection might not be ready
+		l.Bridge.MumbleUsersMutex.Lock()
+		l.Bridge.MumbleUsers = make(map[string]bool)
+		promMumbleUsers.Set(0)
+		l.Bridge.MumbleUsersMutex.Unlock()
+
+		return
+	}
+
 	l.Bridge.MumbleUsersMutex.Lock()
 	l.Bridge.MumbleUsers = make(map[string]bool)
-	for _, user := range l.Bridge.MumbleClient.Self.Channel.Users {
+	for _, user := range channelUsers {
 		// note, this might be too slow for really really big channels?
 		// event listeners block while processing
 		// also probably bad to rebuild the set every user change.
-		if user.Name != l.Bridge.MumbleClient.Self.Name {
+		if user != nil && user.Name != "" && user.Name != selfName {
 			l.Bridge.MumbleUsers[user.Name] = true
 		}
 	}
@@ -34,39 +69,36 @@ func (l *MumbleListener) updateUsers() {
 // MumbleConnect handles Mumble connection events.
 func (l *MumbleListener) MumbleConnect(e *gumble.ConnectEvent) {
 	l.Bridge.Logger.Info("MUMBLE_HANDLER", fmt.Sprintf("Connected to Mumble server: %s", e.Client.Conn.RemoteAddr()))
-	l.Bridge.Logger.Debug("MUMBLE_HANDLER", fmt.Sprintf("Mumble client info: Username=%s, SessionID=%d", e.Client.Self.Name, e.Client.Self.Session))
 
-	// Join specified channel
+	// Log client info using thread-safe access
+	e.Client.Do(func() {
+		if e.Client.Self != nil {
+			l.Bridge.Logger.Debug("MUMBLE_HANDLER", fmt.Sprintf("Mumble client info: Username=%s, SessionID=%d", e.Client.Self.Name, e.Client.Self.Session))
+		}
+	})
+
+	// Join specified channel using thread-safe access
 	if len(l.Bridge.BridgeConfig.MumbleChannel) > 0 {
 		channelPath := strings.Join(l.Bridge.BridgeConfig.MumbleChannel, "/")
 		l.Bridge.Logger.Info("MUMBLE_HANDLER", fmt.Sprintf("Attempting to join Mumble channel: %s", channelPath))
 
-		startingChannel := e.Client.Channels.Find(l.Bridge.BridgeConfig.MumbleChannel...)
-		if startingChannel != nil {
-			l.Bridge.Logger.Debug("MUMBLE_HANDLER", fmt.Sprintf("Found target channel (ID: %d, Name: %s), moving to it", startingChannel.ID, startingChannel.Name))
-			e.Client.Self.Move(startingChannel)
-			l.Bridge.Logger.Info("MUMBLE_HANDLER", fmt.Sprintf("Successfully moved to Mumble channel: %s", channelPath))
-		} else {
-			l.Bridge.Logger.Warn("MUMBLE_HANDLER", fmt.Sprintf("Target Mumble channel not found: %s, staying in root channel", channelPath))
-			l.logAvailableChannels(e.Client)
-		}
+		e.Client.Do(func() {
+			startingChannel := e.Client.Channels.Find(l.Bridge.BridgeConfig.MumbleChannel...)
+			if startingChannel != nil {
+				l.Bridge.Logger.Debug("MUMBLE_HANDLER", fmt.Sprintf("Found target channel (ID: %d, Name: %s), moving to it", startingChannel.ID, startingChannel.Name))
+				e.Client.Self.Move(startingChannel)
+				l.Bridge.Logger.Info("MUMBLE_HANDLER", fmt.Sprintf("Successfully moved to Mumble channel: %s", channelPath))
+			} else {
+				l.Bridge.Logger.Warn("MUMBLE_HANDLER", fmt.Sprintf("Target Mumble channel not found: %s, staying in root channel", channelPath))
+				l.logAvailableChannels(e.Client)
+			}
+		})
 	} else {
 		l.Bridge.Logger.Debug("MUMBLE_HANDLER", "No specific Mumble channel specified, staying in root channel")
 	}
 
-	// l.updateUsers() // patch below
-
-	// This is an ugly patch Mumble Client state is slow to update
-	l.Bridge.Logger.Debug("MUMBLE_HANDLER", "Scheduling user list update in 5 seconds to allow Mumble state to stabilize")
-	time.AfterFunc(5*time.Second, func() {
-		defer func() {
-			if r := recover(); r != nil {
-				l.Bridge.Logger.Error("MUMBLE_HANDLER", fmt.Sprintf("Failed to update mumble user list: %v", r))
-			}
-		}()
-		l.Bridge.Logger.Debug("MUMBLE_HANDLER", "Updating Mumble user list after connection stabilization")
-		l.updateUsers()
-	})
+	// Update users immediately
+	l.updateUsers()
 }
 
 // MumbleUserChange handles Mumble user change events.
@@ -111,7 +143,11 @@ func (l *MumbleListener) MumbleUserChange(e *gumble.UserChangeEvent) {
 // logAvailableChannels logs all available channels on the Mumble server for debugging
 func (l *MumbleListener) logAvailableChannels(client *gumble.Client) {
 	l.Bridge.Logger.Info("MUMBLE_HANDLER", "Available channels on server:")
-	l.logChannelTree(client.Channels[0], 0) // Start from root channel
+	client.Do(func() {
+		if rootChannel := client.Channels[0]; rootChannel != nil {
+			l.logChannelTree(rootChannel, 0)
+		}
+	})
 }
 
 // logChannelTree recursively logs the channel tree structure
@@ -141,9 +177,12 @@ func (l *MumbleListener) MumbleTextMessage(e *gumble.TextMessageEvent) {
 		return
 	}
 
-	// Ignore bot
-	if e.Sender.Name == l.Bridge.MumbleClient.Self.Name {
-		return
+	// Ignore bot - safely check if sender is self
+	if l.Bridge.MumbleConnectionManager != nil {
+		selfName := l.Bridge.MumbleConnectionManager.GetSelfName()
+		if selfName != "" && e.Sender.Name == selfName {
+			return
+		}
 	}
 
 	// check for bot commands

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/bwmarrin/discordgo"
+	"github.com/stieneee/gumble/gumble"
 )
 
 // DiscordListener holds references to the current BridgeConf
@@ -49,7 +50,11 @@ func (l *DiscordListener) GuildCreate(s *discordgo.Session, event *discordgo.Gui
 			l.Bridge.BridgeMutex.Lock()
 			connected := l.Bridge.Connected
 			disableText := l.Bridge.BridgeConfig.MumbleDisableText
-			mumbleClient := l.Bridge.MumbleClient
+			// Get current Mumble client from connection manager
+			var mumbleClient *gumble.Client
+			if l.Bridge.MumbleConnectionManager != nil {
+				mumbleClient = l.Bridge.MumbleConnectionManager.GetClient()
+			}
 			l.Bridge.BridgeMutex.Unlock()
 
 			if connected && !disableText && mumbleClient != nil {
@@ -365,7 +370,11 @@ func (l *DiscordListener) MessageCreate(s *discordgo.Session, m *discordgo.Messa
 
 		// Get MumbleClient reference under lock to prevent race conditions
 		l.Bridge.BridgeMutex.Lock()
-		mumbleClient := l.Bridge.MumbleClient
+		// Get current Mumble client from connection manager
+		var mumbleClient *gumble.Client
+		if l.Bridge.MumbleConnectionManager != nil {
+			mumbleClient = l.Bridge.MumbleConnectionManager.GetClient()
+		}
 		l.Bridge.BridgeMutex.Unlock()
 
 		// Perform null checks
@@ -455,10 +464,15 @@ func (l *DiscordListener) VoiceUpdate(s *discordgo.Session, event *discordgo.Voi
 						seen:     true,
 						dm:       dm,
 					}
+					// Read all needed fields in one lock acquisition to prevent races
 					l.Bridge.BridgeMutex.Lock()
 					connected := l.Bridge.Connected
 					disableText := l.Bridge.BridgeConfig.MumbleDisableText
-					mumbleClient := l.Bridge.MumbleClient
+					// Get current Mumble client from connection manager while holding bridge lock
+					var mumbleClient *gumble.Client
+					if l.Bridge.MumbleConnectionManager != nil {
+						mumbleClient = l.Bridge.MumbleConnectionManager.GetClient()
+					}
 					l.Bridge.BridgeMutex.Unlock()
 
 					if connected && !disableText && mumbleClient != nil {
@@ -480,10 +494,15 @@ func (l *DiscordListener) VoiceUpdate(s *discordgo.Session, event *discordgo.Voi
 		for id := range l.Bridge.DiscordUsers {
 			if !l.Bridge.DiscordUsers[id].seen {
 				l.Bridge.Logger.Info("DISCORD_HANDLER", fmt.Sprintf("User left Discord channel: %s", l.Bridge.DiscordUsers[id].username))
+				// Read all needed fields and perform user removal in one lock acquisition
 				l.Bridge.BridgeMutex.Lock()
 				connected := l.Bridge.Connected
 				disableText := l.Bridge.BridgeConfig.MumbleDisableText
-				mumbleClient := l.Bridge.MumbleClient
+				// Get current Mumble client from connection manager while holding bridge lock
+				var mumbleClient *gumble.Client
+				if l.Bridge.MumbleConnectionManager != nil {
+					mumbleClient = l.Bridge.MumbleConnectionManager.GetClient()
+				}
 				username := l.Bridge.DiscordUsers[id].username
 				delete(l.Bridge.DiscordUsers, id)
 				l.Bridge.BridgeMutex.Unlock()

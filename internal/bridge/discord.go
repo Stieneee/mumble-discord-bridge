@@ -13,6 +13,13 @@ import (
 	"github.com/stieneee/mumble-discord-bridge/pkg/sleepct"
 )
 
+// Constants for Discord audio handling
+const (
+	silenceFrameCount       = 5   // Number of silence frames to send after speaking
+	shortSpeakingThreshold  = 50  // Milliseconds - threshold for short speaking cycle warning
+	connectionCheckInterval = 100 // Milliseconds - sleep time when connection not ready
+)
+
 type fromDiscord struct {
 	decoder       *gopus.Decoder
 	pcm           chan []int16
@@ -42,6 +49,21 @@ func NewDiscordDuplex(b *BridgeState) *DiscordDuplex {
 	}
 }
 
+// checkConnectionManager verifies connection manager is available and logs state changes
+func (dd *DiscordDuplex) checkConnectionManager(lastReady *bool, operation string) *DiscordConnectionManager {
+	connManager := dd.Bridge.DiscordConnectionManager
+	if connManager == nil {
+		if *lastReady {
+			dd.Bridge.Logger.Debug(operation, "Discord connection manager not available, waiting")
+			*lastReady = false
+		}
+
+		return nil
+	}
+
+	return connManager
+}
+
 // OnError gets called by dgvoice when an error is encountered.
 // By default logs to STDERR
 var OnError = func(str string, err error) {
@@ -58,7 +80,7 @@ var OnError = func(str string, err error) {
 
 // SendPCM will receive on the provied channel encode
 // received PCM data with Opus then send that to Discordgo
-func (dd *DiscordDuplex) discordSendPCM(ctx context.Context, cancel context.CancelFunc, pcm <-chan []int16) {
+func (dd *DiscordDuplex) discordSendPCM(ctx context.Context, _ context.CancelFunc, pcm <-chan []int16) {
 	const channels int = 1
 	const frameRate int = 48000              // audio sampling rate
 	const frameSize int = 960                // uint16 size of each audio frame
@@ -78,79 +100,46 @@ func (dd *DiscordDuplex) discordSendPCM(ctx context.Context, cancel context.Canc
 	dd.discordSendSleepTick.Start(20 * time.Millisecond)
 
 	lastReady := true
-	var readyTimeout *time.Timer
 	var speakingStart time.Time
 
-	// Spy on the PCM channel to notify
-	// TODO determine a method to notify a paused sleepct
-	// pcm := make(chan []int16, 10)
-	// go func() {
-	// 	for {
-	// 		t, ok := <-pcmIn
-	// 		if !ok {
-	// 			close(pcm)
-	// 			return
-	// 		} else {
-	// 			dd.discordSendSleepTick.Notify()
-	// 			pcm <- t
-	// 		}
-	// 	}
-	// }()
-
 	internalSend := func(opus []byte) {
-		// Check if Discord connection manager is available and connected
-		if dd.Bridge.DiscordConnectionManager == nil || !dd.Bridge.DiscordConnectionManager.IsConnected() {
-			if lastReady {
-				dd.Bridge.Logger.Debug("DISCORD_SEND", "Discord connection not available, sinking packet")
-				lastReady = false
-			}
-			// Track sunk packets due to Discord disconnection
+		// Check connection manager availability
+		connManager := dd.checkConnectionManager(&lastReady, "DISCORD_SEND")
+		if connManager == nil {
 			promPacketsSunk.WithLabelValues("discord", "outbound").Inc()
 
 			return
 		}
 
-		// Get the current connection from the manager
-		connection := dd.Bridge.DiscordConnectionManager.GetConnection()
-		if connection == nil {
-			if lastReady {
-				dd.Bridge.Logger.Debug("DISCORD_SEND", "Discord voice connection is nil, sinking packet")
-				lastReady = false
-			}
-			// Track sunk packets due to Discord connection being nil
-			promPacketsSunk.WithLabelValues("discord", "outbound").Inc()
-
-			return
-		}
-
-		connection.RLock()
-		if !connection.Ready || connection.OpusSend == nil {
+		// Get opus channels - this atomically checks connection state, readiness, and channel availability
+		opusSend, _, connectionReady := connManager.GetOpusChannels()
+		if !connectionReady || opusSend == nil {
 			if lastReady {
 				dd.Bridge.Logger.Debug("DISCORD_SEND", "Discord connection not ready, sinking packet")
 				lastReady = false
 			}
-			connection.RUnlock()
-			// Track sunk packets due to Discord connection not ready
 			promPacketsSunk.WithLabelValues("discord", "outbound").Inc()
 
 			return
-		} else if !lastReady {
-			dd.Bridge.Logger.Info("DISCORD_SEND", "Discord ready to send opus packets")
-			lastReady = true
-			if readyTimeout != nil {
-				readyTimeout.Stop()
-				readyTimeout = nil
-			}
 		}
 
+		// Connection is ready, update lastReady state if needed
+		if !lastReady {
+			dd.Bridge.Logger.Info("DISCORD_SEND", "Discord ready to send opus packets")
+			lastReady = true
+		}
+
+		// Send opus packet with timeout protection using safely obtained channel
 		select {
-		case connection.OpusSend <- opus:
+		case opusSend <- opus:
 			promDiscordSentPackets.Inc()
 		case <-ctx.Done():
+			// Context canceled, don't log as error
 		default:
+			// Channel full - this is not a connection issue, just congestion
 			dd.Bridge.Logger.Debug("DISCORD_SEND", "Discord send channel full, dropping packet")
+			// Note: Not incrementing promPacketsSunk here as this is a different issue
 		}
-		connection.RUnlock()
 	}
 
 	defer dd.Bridge.Logger.Info("DISCORD_SEND", "Stopping Discord send PCM")
@@ -162,40 +151,33 @@ func (dd *DiscordDuplex) discordSendPCM(ctx context.Context, cancel context.Canc
 		default:
 		}
 
-		// if we are not streaming try to pause
-		// promTimerDiscordSend.Observe(float64(dd.discordSendSleepTick.SleepNextTarget(ctx, !streaming)))
 		promTimerDiscordSend.Observe(float64(dd.discordSendSleepTick.SleepNextTarget(ctx, false)))
 
 		if (len(pcm) > 1 && streaming) || (len(pcm) > dd.Bridge.BridgeConfig.DiscordStartStreamingCount && !streaming) {
 			if !streaming {
 				speakingStart = time.Now()
-				done := make(chan bool, 1)
-				go func() {
-					// Use connection manager to set speaking status
-					if dd.Bridge.DiscordConnectionManager != nil && dd.Bridge.DiscordConnectionManager.IsConnected() {
-						connection := dd.Bridge.DiscordConnectionManager.GetConnection()
-						if connection != nil {
+
+				// Set speaking status directly - connection manager handles safety
+				connManager := dd.Bridge.DiscordConnectionManager
+				if connManager != nil {
+					connection := connManager.GetReadyConnection()
+					if connection != nil {
+						// Safely call Speaking with panic protection
+						func() {
+							defer func() {
+								if r := recover(); r != nil {
+									dd.Bridge.Logger.Error("DISCORD_SEND", fmt.Sprintf("Panic setting speaking status: %v", r))
+								}
+							}()
 							if err := connection.Speaking(true); err != nil {
 								dd.Bridge.Logger.Error("DISCORD_SEND", fmt.Sprintf("Error setting speaking status to true: %v", err))
 							}
-						} else {
-							dd.Bridge.Logger.Debug("DISCORD_SEND", "Discord connection not available for speaking status")
-						}
+						}()
 					} else {
-						dd.Bridge.Logger.Debug("DISCORD_SEND", "Discord connection manager not ready for speaking status")
+						dd.Bridge.Logger.Debug("DISCORD_SEND", "Discord connection not available for speaking status")
 					}
-					done <- true
-				}()
-				select {
-				case <-done:
-				case <-time.After(5 * time.Second):
-					dd.Bridge.Logger.Error("DISCORD_SEND", "Discord speaking timeout")
-					cancel()
-
-					return
-				case <-ctx.Done():
-					return
 				}
+
 				streaming = true
 			}
 
@@ -217,24 +199,33 @@ func (dd *DiscordDuplex) discordSendPCM(ctx context.Context, cancel context.Canc
 			// Or when timing delays are introduced via network, hardware or kernel delays (Problem).
 			// The problem delays result in choppy or stuttering sounds, especially when the silence frames are introduced into the opus frames below.
 			// Multiple short cycle delays can result in a discord rate limiter being trigger due to of multiple JSON speaking/not-speaking state changes
-			if time.Since(speakingStart).Milliseconds() < 50 {
+			if time.Since(speakingStart).Milliseconds() < shortSpeakingThreshold {
 				dd.Bridge.Logger.Warn("DISCORD_SEND", "Short Mumble to Discord speaking cycle. Consider increasing the size of the to Discord jitter buffer.")
 			}
 
 			// Send silence as suggested by Discord Documentation.
 			// We want to do this after alerting the user of possible short speaking cycles
-			for i := 0; i < 5; i++ {
+			for range silenceFrameCount {
 				internalSend(opusSilence)
-				// promTimerDiscordSend.Observe(float64(dd.discordSendSleepTick.SleepNextTarget(ctx, true)))
 				promTimerDiscordSend.Observe(float64(dd.discordSendSleepTick.SleepNextTarget(ctx, false)))
 			}
 
-			if dd.Bridge.DiscordConnectionManager != nil && dd.Bridge.DiscordConnectionManager.IsConnected() {
-				connection := dd.Bridge.DiscordConnectionManager.GetConnection()
+			// Set speaking to false safely
+			connManager := dd.Bridge.DiscordConnectionManager
+			if connManager != nil {
+				connection := connManager.GetReadyConnection()
 				if connection != nil {
-					if err := connection.Speaking(false); err != nil {
-						dd.Bridge.Logger.Error("DISCORD_SEND", fmt.Sprintf("Error setting speaking status to false: %v", err))
-					}
+					// Safely call Speaking with panic protection
+					func() {
+						defer func() {
+							if r := recover(); r != nil {
+								dd.Bridge.Logger.Error("DISCORD_SEND", fmt.Sprintf("Panic setting speaking status: %v", r))
+							}
+						}()
+						if err := connection.Speaking(false); err != nil {
+							dd.Bridge.Logger.Error("DISCORD_SEND", fmt.Sprintf("Error setting speaking status to false: %v", err))
+						}
+					}()
 				}
 			}
 			streaming = false
@@ -248,56 +239,33 @@ func (dd *DiscordDuplex) discordReceivePCM(ctx context.Context, _ context.Cancel
 	var err error
 
 	lastReady := true
-	var readyTimeout *time.Timer
-
-	var zeros [480]int16
-	for i := 0; i < 480; i++ {
-		zeros[i] = 0
-	}
 
 	for {
-		// Check if Discord connection manager is available and connected
-		if dd.Bridge.DiscordConnectionManager == nil || !dd.Bridge.DiscordConnectionManager.IsConnected() {
-			if lastReady {
-				dd.Bridge.Logger.Debug("DISCORD_RECEIVE", "Discord connection not available, waiting")
-				lastReady = false
-			}
+		// Check connection manager availability
+		connManager := dd.checkConnectionManager(&lastReady, "DISCORD_RECEIVE")
+		if connManager == nil {
+			time.Sleep(connectionCheckInterval * time.Millisecond) // Brief sleep to avoid tight loop
 
 			continue
 		}
 
-		// Get the current connection from the manager
-		connection := dd.Bridge.DiscordConnectionManager.GetConnection()
-		if connection == nil {
-			if lastReady {
-				dd.Bridge.Logger.Debug("DISCORD_RECEIVE", "Discord voice connection is nil, waiting")
-				lastReady = false
-			}
-
-			continue
-		}
-
-		connection.RLock()
-		if !connection.Ready || connection.OpusRecv == nil {
+		// Get opus channels - this atomically checks connection state, readiness, and channel availability
+		_, opusRecv, connectionReady := connManager.GetOpusChannels()
+		if !connectionReady || opusRecv == nil {
 			if lastReady {
 				dd.Bridge.Logger.Debug("DISCORD_RECEIVE", "Discord connection not ready for receiving")
 				lastReady = false
 			}
-			connection.RUnlock()
+			time.Sleep(connectionCheckInterval * time.Millisecond)
 
 			continue
-		} else if !lastReady {
-			dd.Bridge.Logger.Info("DISCORD_RECEIVE", "Discord ready to receive packets")
-			lastReady = true
-			if readyTimeout != nil {
-				readyTimeout.Stop()
-				readyTimeout = nil
-			}
 		}
 
-		// Get reference to OpusRecv channel before unlocking
-		opusRecv := connection.OpusRecv
-		connection.RUnlock()
+		// Connection is ready for receiving
+		if !lastReady {
+			dd.Bridge.Logger.Info("DISCORD_RECEIVE", "Discord ready to receive packets")
+			lastReady = true
+		}
 
 		var ok bool
 		var p *discordgo.Packet
@@ -342,11 +310,8 @@ func (dd *DiscordDuplex) discordReceivePCM(ctx context.Context, _ context.Cancel
 			s.decoder.ResetState()
 		}
 
-		// oldReceiving := s.receiving
-
 		if !s.receiving || deltaT < 1 || deltaT > 960*10 {
 			// First packet assume deltaT
-			// fmt.Println("replacing", deltaT, 960)
 			deltaT = 960
 			s.receiving = true
 		}
@@ -363,8 +328,6 @@ func (dd *DiscordDuplex) discordReceivePCM(ctx context.Context, _ context.Cancel
 
 			continue
 		}
-
-		// fmt.Println(p.SSRC, p.Type, deltaT, p.Sequence, p.Sequence-s.lastSequence, oldReceiving, s.streaming, len(p.Opus), len(p.PCM))
 
 		promDiscordReceivedPackets.Inc()
 
@@ -409,9 +372,6 @@ func (dd *DiscordDuplex) fromDiscordMixer(ctx context.Context, toMumble chan<- g
 		default:
 		}
 
-		// if didn't send audio try to pause
-		// promTimerDiscordMixer.Observe(float64(dd.discordReceiveSleepTick.SleepNextTarget(ctx, !sendAudio)))
-		// TODO Additional pause testing
 		promTimerDiscordMixer.Observe(float64(dd.discordReceiveSleepTick.SleepNextTarget(ctx, false)))
 
 		dd.discordMutex.Lock()
@@ -483,11 +443,11 @@ func (dd *DiscordDuplex) fromDiscordMixer(ctx context.Context, toMumble chan<- g
 		} else if !sendAudio && toMumbleStreaming {
 			// Send opus silence to mumble
 			// See note above about jitter buffer warning
-			if time.Since(speakingStart).Milliseconds() < 50 {
+			if time.Since(speakingStart).Milliseconds() < shortSpeakingThreshold {
 				dd.Bridge.Logger.Warn("DISCORD_MIXER", fmt.Sprintf("Short Discord to Mumble speaking cycle. Consider increasing the size of the to Mumble jitter buffer. Duration: %d ms", time.Since(speakingStart).Milliseconds()))
 			}
 
-			for i := 0; i < 5; i++ {
+			for range silenceFrameCount {
 				mumbleTimeoutSend(mumbleSilence)
 				promTimerDiscordMixer.Observe(float64(dd.discordReceiveSleepTick.SleepNextTarget(ctx, false)))
 			}

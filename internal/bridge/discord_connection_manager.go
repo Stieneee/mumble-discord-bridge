@@ -32,64 +32,50 @@ func NewDiscordConnectionManager(session *discordgo.Session, guildID, channelID 
 	}
 }
 
-// Start begins the Discord connection process with automatic reconnection
+// Start establishes the Discord connection once and lets the library handle reconnection
 func (d *DiscordConnectionManager) Start(ctx context.Context) error {
 	d.logger.Info("DISCORD_CONN", "Starting Discord connection manager")
 
 	// Initialize context for proper cancellation chain
 	d.InitContext(ctx)
 
-	// Start connection management goroutine
-	go d.connectionLoop(d.ctx)
+	// Establish connection once - let discordgo library handle reconnection
+	if err := d.connectOnce(); err != nil {
+		d.logger.Error("DISCORD_CONN", fmt.Sprintf("Initial connection failed: %v", err))
+
+		return err
+	}
+
+	// Start simple connection monitoring (not management)
+	go d.monitorConnection(d.ctx)
 
 	return nil
 }
 
-// connectionLoop manages the connection lifecycle with reconnection logic
-func (d *DiscordConnectionManager) connectionLoop(ctx context.Context) {
+// monitorConnection monitors the Discord connection state without managing reconnection
+// The discordgo library handles reconnection automatically
+func (d *DiscordConnectionManager) monitorConnection(ctx context.Context) {
+	d.logger.Info("DISCORD_CONN", "Starting connection monitoring (library handles reconnection)")
+
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
-			d.logger.Info("DISCORD_CONN", "Connection loop canceled")
+			d.logger.Info("DISCORD_CONN", "Connection monitoring canceled")
 			d.disconnectInternal()
 
 			return
-		default:
-		}
-
-		// Attempt connection
-		if err := d.connect(); err != nil {
-			d.logger.Error("DISCORD_CONN", fmt.Sprintf("Connection failed: %v", err))
-			d.SetStatus(ConnectionReconnecting, err)
-
-			// Wait before retrying
-			select {
-			case <-time.After(5 * time.Second):
-				continue
-			case <-ctx.Done():
-				return
-			}
-		}
-
-		// Connection successful
-		d.SetStatus(ConnectionConnected, nil)
-		d.logger.Info("DISCORD_CONN", "Discord voice connection established")
-
-		// Wait for the connection to be lost (Discord library handles this)
-		// We'll rely on the voice connection's error channel or Ready state
-		select {
-		case <-ctx.Done():
-			return
-		case <-d.waitForConnectionLoss(ctx):
-			// Connection lost, prepare for reconnection
-			d.SetStatus(ConnectionReconnecting, nil)
-			d.logger.Warn("DISCORD_CONN", "Discord connection lost, attempting reconnection")
+		case <-ticker.C:
+			// Just update our status based on actual connection state
+			d.updateConnectionStatus()
 		}
 	}
 }
 
-// connect establishes a Discord voice connection
-func (d *DiscordConnectionManager) connect() error {
+// connectOnce establishes a Discord voice connection once at startup
+func (d *DiscordConnectionManager) connectOnce() error {
 	d.SetStatus(ConnectionConnecting, nil)
 	d.logger.Debug("DISCORD_CONN", fmt.Sprintf("Connecting to Discord voice: Guild=%s, Channel=%s", d.guildID, d.channelID))
 
@@ -98,36 +84,23 @@ func (d *DiscordConnectionManager) connect() error {
 		return fmt.Errorf("discord session not ready")
 	}
 
-	// Disconnect any existing connection
-	d.disconnectInternal()
-
-	// Attempt voice connection
+	// Attempt voice connection - library will reuse existing connection if present
 	d.logger.Debug("DISCORD_CONN", fmt.Sprintf("Attempting voice connection to Guild=%s, Channel=%s", d.guildID, d.channelID))
 	connection, err := d.session.ChannelVoiceJoin(d.guildID, d.channelID, false, false)
 	if err != nil {
 		d.logger.Error("DISCORD_CONN", fmt.Sprintf("Voice connection failed: %v", err))
+		d.SetStatus(ConnectionFailed, err)
 
 		return fmt.Errorf("failed to join voice channel: %w", err)
 	}
 
-	// Store connection with additional safety check
+	// Store connection
 	d.connMutex.Lock()
-	// Check if we were canceled during connection attempt
-	if d.ctx.Err() != nil {
-		d.connMutex.Unlock()
-		// Cleanup the connection if context was canceled
-		go func() {
-			if disconnErr := connection.Disconnect(); disconnErr != nil {
-				d.logger.Error("DISCORD_CONN", fmt.Sprintf("Error cleaning up canceled connection: %v", disconnErr))
-			}
-		}()
-
-		return fmt.Errorf("connection canceled: %w", d.ctx.Err())
-	}
 	d.connection = connection
 	d.connMutex.Unlock()
 
-	d.logger.Debug("DISCORD_CONN", "Discord voice connection established successfully")
+	d.SetStatus(ConnectionConnected, nil)
+	d.logger.Info("DISCORD_CONN", "Discord voice connection established successfully")
 
 	return nil
 }
@@ -140,97 +113,58 @@ func (d *DiscordConnectionManager) disconnectInternal() {
 	if d.connection != nil {
 		d.logger.Debug("DISCORD_CONN", "Disconnecting from Discord voice")
 
-		// Create a local reference to avoid race conditions
+		// Store local reference and clear field
 		conn := d.connection
-		d.connection = nil // Set to nil first to prevent other goroutines from using it
+		d.connection = nil
 
-		// Disconnect in a separate goroutine to avoid blocking and reduce race window
-		go func() {
-			defer func() {
-				if r := recover(); r != nil {
-					d.logger.Error("DISCORD_CONN", fmt.Sprintf("Panic during disconnect: %v", r))
-				}
-			}()
-
-			if err := conn.Disconnect(); err != nil {
-				d.logger.Error("DISCORD_CONN", fmt.Sprintf("Error disconnecting from Discord voice: %v", err))
-			}
-		}()
+		// Disconnect synchronously since this is only called during shutdown
+		if err := conn.Disconnect(); err != nil {
+			d.logger.Error("DISCORD_CONN", fmt.Sprintf("Error disconnecting from Discord voice: %v", err))
+		}
 	}
 }
 
-// waitForConnectionLoss waits for the Discord connection to be lost by monitoring the Ready state
-func (d *DiscordConnectionManager) waitForConnectionLoss(ctx context.Context) <-chan bool {
-	lostChan := make(chan bool, 1)
+// checkConnectionReady safely checks if the connection is ready with proper locking
+func (d *DiscordConnectionManager) checkConnectionReady() (connection *discordgo.VoiceConnection, isReady bool) {
+	d.connMutex.RLock()
+	connection = d.connection
+	d.connMutex.RUnlock()
 
-	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				d.logger.Error("DISCORD_CONN", fmt.Sprintf("Connection loss monitoring panic recovered: %v", r))
-			}
-			close(lostChan)
-		}()
+	if connection == nil {
+		return nil, false
+	}
 
-		// Check connection state periodically
-		ticker := time.NewTicker(5 * time.Second)
-		defer ticker.Stop()
-
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				// Add additional context check to prevent races
-				if ctx.Err() != nil {
-					return
-				}
-
-				d.connMutex.RLock()
-				conn := d.connection
-				d.connMutex.RUnlock()
-
-				// If connection is nil or not ready, consider it lost
-				// Add additional nil check and defensive access to Ready field
-				if conn == nil {
-					select {
-					case lostChan <- true:
-					case <-ctx.Done():
-						return
-					default:
-						// Channel is full or closed, connection already considered lost
-					}
-
-					return
-				}
-
-				// Check Ready status with defensive programming
-				var isReady bool
-				func() {
-					defer func() {
-						if r := recover(); r != nil {
-							d.logger.Error("DISCORD_CONN", fmt.Sprintf("Panic checking connection Ready state: %v", r))
-							isReady = false
-						}
-					}()
-					isReady = conn.Ready
-				}()
-
-				if !isReady {
-					select {
-					case lostChan <- true:
-					case <-ctx.Done():
-						return
-					default:
-						// Channel is full or closed, connection already considered lost
-					}
-
-					return
-				}
-			}
+	// Check Ready status safely
+	defer func() {
+		if r := recover(); r != nil {
+			d.logger.Error("DISCORD_CONN", fmt.Sprintf("Panic checking Ready state: %v", r))
+			isReady = false
 		}
 	}()
 
-	return lostChan
+	connection.RLock()
+	isReady = connection.Ready
+	connection.RUnlock()
+
+	return connection, isReady
+}
+
+// updateConnectionStatus updates the connection manager status based on actual Discord connection state
+func (d *DiscordConnectionManager) updateConnectionStatus() {
+	conn, isReady := d.checkConnectionReady()
+
+	if conn == nil {
+		d.SetStatus(ConnectionDisconnected, fmt.Errorf("no connection"))
+
+		return
+	}
+
+	if isReady {
+		d.SetStatus(ConnectionConnected, nil)
+	} else {
+		// Connection exists but not ready - library is probably reconnecting
+		d.SetStatus(ConnectionReconnecting, nil)
+	}
 }
 
 // Stop gracefully stops the Discord connection manager
@@ -249,11 +183,55 @@ func (d *DiscordConnectionManager) Stop() error {
 }
 
 // GetConnection returns the current Discord voice connection (thread-safe)
+// Deprecated: Use GetReadyConnection() instead for safer access
 func (d *DiscordConnectionManager) GetConnection() *discordgo.VoiceConnection {
 	d.connMutex.RLock()
 	defer d.connMutex.RUnlock()
 
 	return d.connection
+}
+
+// GetReadyConnection returns the connection only if it's ready, nil otherwise
+func (d *DiscordConnectionManager) GetReadyConnection() *discordgo.VoiceConnection {
+	connection, isReady := d.checkConnectionReady()
+	if isReady {
+		return connection
+	}
+
+	return nil
+}
+
+// IsConnectionReady safely checks if the current connection is ready for use
+func (d *DiscordConnectionManager) IsConnectionReady() bool {
+	_, isReady := d.checkConnectionReady()
+
+	return isReady
+}
+
+// GetOpusChannels safely returns the opus send/receive channels
+func (d *DiscordConnectionManager) GetOpusChannels() (send chan<- []byte, recv <-chan *discordgo.Packet, ready bool) {
+	connection, isReady := d.checkConnectionReady()
+
+	if connection == nil || !isReady {
+		return nil, nil, false
+	}
+
+	// Get channels safely
+	defer func() {
+		if r := recover(); r != nil {
+			d.logger.Error("DISCORD_CONN", fmt.Sprintf("Panic getting opus channels: %v", r))
+			send = nil
+			recv = nil
+			ready = false
+		}
+	}()
+
+	connection.RLock()
+	send = connection.OpusSend
+	recv = connection.OpusRecv
+	connection.RUnlock()
+
+	return send, recv, true
 }
 
 // GetConnectionInfo returns Discord-specific connection information
