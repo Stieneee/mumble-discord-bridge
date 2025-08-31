@@ -108,9 +108,6 @@ type ConnectionManager interface {
 
 	// GetEventChannel returns a channel for connection events
 	GetEventChannel() <-chan ConnectionEvent
-
-	// GetConnectionInfo returns connection-specific information
-	GetConnectionInfo() map[string]interface{}
 }
 
 // BaseConnectionManager provides common functionality for connection managers

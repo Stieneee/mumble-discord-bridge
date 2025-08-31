@@ -198,28 +198,6 @@ func (m *MumbleConnectionManager) GetClient() *gumble.Client {
 	return m.client
 }
 
-// GetConnectionInfo returns Mumble-specific connection information
-func (m *MumbleConnectionManager) GetConnectionInfo() map[string]any {
-	m.clientMutex.RLock()
-	defer m.clientMutex.RUnlock()
-
-	info := map[string]any{
-		"type":     "mumble",
-		"address":  m.address,
-		"username": m.config.Username,
-		"state":    -1,
-	}
-
-	if m.client != nil {
-		state := m.client.State()
-		info["state"] = int(state)
-		// Consider states 1 (StateConnected) and 2 (StateSynced) as connected
-		info["connected"] = state == 1 || state == 2
-	}
-
-	return info
-}
-
 // EventListener implementation for gumble events
 // We only care about Connect and Disconnect events for connection management
 

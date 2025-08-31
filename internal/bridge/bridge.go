@@ -137,9 +137,6 @@ type BridgeState struct { //nolint:revive // API consistency: keeping Bridge pre
 	DiscordConnectionManager *DiscordConnectionManager
 	MumbleConnectionManager  *MumbleConnectionManager
 
-	// Note: Legacy DiscordVoice and MumbleClient fields removed
-	// Use DiscordConnectionManager.GetConnection() and MumbleConnectionManager.GetClient() instead
-
 	// Map of Discord users tracked by this bridge.
 	DiscordUsers      map[string]DiscordUser
 	DiscordUsersMutex sync.Mutex

@@ -49,6 +49,13 @@ func (d *DiscordConnectionManager) Start(ctx context.Context) error {
 	// Start simple connection monitoring (not management)
 	go d.monitorConnection(d.ctx)
 
+	// if the ctx is canceled, disconnect
+	go func() {
+		<-d.ctx.Done()
+		d.logger.Info("DISCORD_CONN", "Context canceled, disconnecting from Discord voice")
+		d.disconnectInternal()
+	}()
+
 	return nil
 }
 
@@ -64,7 +71,6 @@ func (d *DiscordConnectionManager) monitorConnection(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			d.logger.Info("DISCORD_CONN", "Connection monitoring canceled")
-			d.disconnectInternal()
 
 			return
 		case <-ticker.C:
@@ -225,15 +231,6 @@ func (d *DiscordConnectionManager) Stop() error {
 	return nil
 }
 
-// GetConnection returns the current Discord voice connection (thread-safe)
-// Deprecated: Use GetReadyConnection() instead for safer access
-func (d *DiscordConnectionManager) GetConnection() *discordgo.VoiceConnection {
-	d.connMutex.RLock()
-	defer d.connMutex.RUnlock()
-
-	return d.connection
-}
-
 // GetReadyConnection returns the connection only if it's ready, nil otherwise
 func (d *DiscordConnectionManager) GetReadyConnection() *discordgo.VoiceConnection {
 	connection, isReady := d.checkConnectionReady()
@@ -242,13 +239,6 @@ func (d *DiscordConnectionManager) GetReadyConnection() *discordgo.VoiceConnecti
 	}
 
 	return nil
-}
-
-// IsConnectionReady safely checks if the current connection is ready for use
-func (d *DiscordConnectionManager) IsConnectionReady() bool {
-	_, isReady := d.checkConnectionReady()
-
-	return isReady
 }
 
 // GetOpusChannels safely returns the opus send/receive channels
@@ -275,34 +265,4 @@ func (d *DiscordConnectionManager) GetOpusChannels() (send chan<- []byte, recv <
 	connection.RUnlock()
 
 	return send, recv, true
-}
-
-// GetConnectionInfo returns Discord-specific connection information
-func (d *DiscordConnectionManager) GetConnectionInfo() map[string]any {
-	d.connMutex.RLock()
-	defer d.connMutex.RUnlock()
-
-	info := map[string]any{
-		"type":      "discord",
-		"guildID":   d.guildID,
-		"channelID": d.channelID,
-		"ready":     false,
-	}
-
-	if d.connection != nil {
-		info["ready"] = d.connection.Ready
-		info["guildID"] = d.connection.GuildID
-	}
-
-	return info
-}
-
-// GetGuildID returns the Discord guild ID
-func (d *DiscordConnectionManager) GetGuildID() string {
-	return d.guildID
-}
-
-// GetChannelID returns the Discord channel ID
-func (d *DiscordConnectionManager) GetChannelID() string {
-	return d.channelID
 }
