@@ -62,6 +62,7 @@ func (d *DiscordConnectionManager) mainConnectionLoop(ctx context.Context) {
 		case <-ctx.Done():
 			d.logger.Info("DISCORD_CONN", "Context canceled, exiting connection loop")
 			d.disconnectInternal()
+
 			return
 		default:
 			// Main connection establishment loop
@@ -87,7 +88,6 @@ func (d *DiscordConnectionManager) mainConnectionLoop(ctx context.Context) {
 
 			d.logger.Warn("DISCORD_CONN", "Connection monitoring detected failure, restarting connection process")
 			d.disconnectInternal()
-
 		}
 	}
 }
@@ -103,6 +103,7 @@ func (d *DiscordConnectionManager) monitorConnectionUntilFailure(ctx context.Con
 		select {
 		case <-ctx.Done():
 			d.logger.Debug("DISCORD_CONN", "Connection monitoring canceled by context")
+
 			return
 		case <-ticker.C:
 			// Check primary session health first
@@ -110,6 +111,7 @@ func (d *DiscordConnectionManager) monitorConnectionUntilFailure(ctx context.Con
 			if !primaryConnected {
 				d.logger.Warn("DISCORD_CONN", fmt.Sprintf("Primary Discord session lost: %s - triggering reconnection", sessionReason))
 				d.SetStatus(ConnectionDisconnected, fmt.Errorf("primary session disconnected: %s", sessionReason))
+
 				return
 			}
 
@@ -123,6 +125,7 @@ func (d *DiscordConnectionManager) monitorConnectionUntilFailure(ctx context.Con
 				// Connection is not ready - trigger immediate reconnection
 				d.logger.Warn("DISCORD_CONN", "Voice connection not ready - triggering immediate reconnection")
 				d.SetStatus(ConnectionReconnecting, nil)
+
 				return
 			}
 		}
@@ -299,6 +302,7 @@ func (d *DiscordConnectionManager) Stop() error {
 	d.disconnectInternal()
 
 	d.logger.Info("DISCORD_CONN", "Discord connection manager stopped")
+
 	return nil
 }
 

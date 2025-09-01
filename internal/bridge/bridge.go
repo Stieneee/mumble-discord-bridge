@@ -178,6 +178,7 @@ type BridgeState struct { //nolint:revive // API consistency: keeping Bridge pre
 	// Reference to BridgeInstance for event forwarding (if available)
 	BridgeInstance interface {
 		EmitConnectionEvent(service string, eventType int, connected bool, err error)
+		EmitUserEvent(service string, eventType int, username string, err error)
 	}
 }
 
@@ -228,6 +229,14 @@ func (b *BridgeState) EmitConnectionEvent(service string, eventType int, connect
 
 	// Notify metrics change for event-driven updates
 	b.notifyMetricsChange()
+}
+
+// EmitUserEvent emits user join/leave events to BridgeInstance
+func (b *BridgeState) EmitUserEvent(service string, eventType int, username string, err error) {
+	// Forward the event to BridgeInstance if available (for bridgelib integration)
+	if b.BridgeInstance != nil {
+		b.BridgeInstance.EmitUserEvent(service, eventType, username, err)
+	}
 }
 
 // initializeConnectionManagers creates and initializes the connection managers

@@ -108,6 +108,9 @@ func (l *MumbleListener) MumbleUserChange(e *gumble.UserChangeEvent) {
 	if e.Type.Has(gumble.UserChangeConnected) {
 		l.Bridge.Logger.Info("MUMBLE_HANDLER", fmt.Sprintf("User connected to mumble: %s", e.User.Name))
 
+		// Emit user joined event
+		l.Bridge.EmitUserEvent("mumble", 0, e.User.Name, nil)
+
 		if !l.Bridge.BridgeConfig.MumbleDisableText {
 			e.User.Send("Mumble-Discord-Bridge " + l.Bridge.BridgeConfig.Version)
 
@@ -137,6 +140,9 @@ func (l *MumbleListener) MumbleUserChange(e *gumble.UserChangeEvent) {
 	if e.Type.Has(gumble.UserChangeDisconnected) {
 		l.Bridge.discordSendMessage(e.User.Name + " has left mumble")
 		l.Bridge.Logger.Info("MUMBLE_HANDLER", fmt.Sprintf("User disconnected from mumble: %s", e.User.Name))
+
+		// Emit user left event
+		l.Bridge.EmitUserEvent("mumble", 1, e.User.Name, nil)
 	}
 }
 

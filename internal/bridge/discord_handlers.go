@@ -455,6 +455,9 @@ func (l *DiscordListener) VoiceUpdate(s *discordgo.Session, event *discordgo.Voi
 					}
 
 					l.Bridge.Logger.Info("DISCORD_HANDLER", fmt.Sprintf("User joined Discord: %s", u.Username))
+
+					// Emit user joined event
+					l.Bridge.EmitUserEvent("discord", 0, u.Username, nil)
 					dm, err := s.UserChannelCreate(u.ID)
 					if err != nil {
 						l.Bridge.Logger.Error("DISCORD_HANDLER", fmt.Sprintf("Error creating private channel for %s", u.Username))
@@ -493,7 +496,11 @@ func (l *DiscordListener) VoiceUpdate(s *discordgo.Session, event *discordgo.Voi
 		// Remove users that are no longer connected
 		for id := range l.Bridge.DiscordUsers {
 			if !l.Bridge.DiscordUsers[id].seen {
-				l.Bridge.Logger.Info("DISCORD_HANDLER", fmt.Sprintf("User left Discord channel: %s", l.Bridge.DiscordUsers[id].username))
+				username := l.Bridge.DiscordUsers[id].username
+				l.Bridge.Logger.Info("DISCORD_HANDLER", fmt.Sprintf("User left Discord channel: %s", username))
+
+				// Emit user left event
+				l.Bridge.EmitUserEvent("discord", 1, username, nil)
 				// Read all needed fields and perform user removal in one lock acquisition
 				l.Bridge.BridgeMutex.Lock()
 				connected := l.Bridge.Connected
@@ -503,7 +510,7 @@ func (l *DiscordListener) VoiceUpdate(s *discordgo.Session, event *discordgo.Voi
 				if l.Bridge.MumbleConnectionManager != nil {
 					mumbleClient = l.Bridge.MumbleConnectionManager.GetClient()
 				}
-				username := l.Bridge.DiscordUsers[id].username
+				username = l.Bridge.DiscordUsers[id].username
 				delete(l.Bridge.DiscordUsers, id)
 				l.Bridge.BridgeMutex.Unlock()
 

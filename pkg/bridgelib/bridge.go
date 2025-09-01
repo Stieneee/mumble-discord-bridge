@@ -639,6 +639,44 @@ func (b *BridgeInstance) EmitConnectionEvent(service string, eventTypeInt int, c
 	}, err)
 }
 
+// EmitUserEvent emits a user join/leave event (implements BridgeInstance interface)
+func (b *BridgeInstance) EmitUserEvent(service string, eventTypeInt int, username string, err error) {
+	if b.eventDispatcher == nil {
+		return
+	}
+
+	// Map service and event type to BridgeEventType
+	var eventType BridgeEventType
+	switch service {
+	case serviceDiscord:
+		switch eventTypeInt {
+		case 0:
+			eventType = EventUserJoinedDiscord
+		case 1:
+			eventType = EventUserLeftDiscord
+		default:
+			return
+		}
+	case serviceMumble:
+		switch eventTypeInt {
+		case 0:
+			eventType = EventUserJoinedMumble
+		case 1:
+			eventType = EventUserLeftMumble
+		default:
+			return
+		}
+	default:
+		return
+	}
+
+	// Emit event
+	b.eventDispatcher.EmitEvent(eventType, map[string]interface{}{
+		"service":  service,
+		"username": username,
+	}, err)
+}
+
 // Helper function to split the channel string into a slice of strings
 func splitChannel(channel string) []string {
 	if channel == "" {
