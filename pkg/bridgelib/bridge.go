@@ -14,6 +14,7 @@ import (
 	"github.com/stieneee/gumble/gumble"
 	"github.com/stieneee/gumble/gumbleutil"
 	"github.com/stieneee/mumble-discord-bridge/internal/bridge"
+	"github.com/stieneee/mumble-discord-bridge/pkg/logger"
 )
 
 const (
@@ -69,7 +70,7 @@ type BridgeConfig struct {
 	EventBufferSize int
 
 	// Logger for the bridge instance
-	Logger Logger
+	Logger logger.Logger
 }
 
 // BridgeInstance represents a single bridge instance
@@ -87,7 +88,7 @@ type BridgeInstance struct {
 	ID string
 
 	// Logger for this bridge instance
-	logger Logger
+	logger logger.Logger
 
 	// Event handling
 	eventDispatcher *EventDispatcher
@@ -111,13 +112,13 @@ func NewBridgeInstance(id string, config *BridgeConfig, discordProvider DiscordP
 // NewBridgeInstanceWithContext creates a new bridge instance with context
 func NewBridgeInstanceWithContext(ctx context.Context, id string, config *BridgeConfig, discordProvider DiscordProvider) (*BridgeInstance, error) {
 	// Use provided logger or create a default console logger
-	logger := config.Logger
-	if logger == nil {
-		logger = NewConsoleLogger()
+	lgr := config.Logger
+	if lgr == nil {
+		lgr = logger.NewConsoleLogger()
 	}
 
 	// Create bridge-specific logger with the bridge ID
-	bridgeLogger := logger.WithBridgeID(id)
+	bridgeLogger := lgr.WithBridgeID(id)
 
 	bridgeLogger.Debug("BRIDGE_INIT", "Starting bridge instance creation")
 	bridgeLogger.Debug("BRIDGE_INIT", fmt.Sprintf("Configuration: Mumble=%s:%d, Discord=%s:%s, Mode=%s",

@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/bwmarrin/discordgo"
+	"github.com/stieneee/mumble-discord-bridge/pkg/logger"
 )
 
 // SharedDiscordClient is a shared Discord client that can be used by multiple bridge instances
@@ -14,7 +15,7 @@ type SharedDiscordClient struct {
 	session *discordgo.Session
 
 	// Logger for the Discord client
-	logger Logger
+	logger logger.Logger
 
 	// Mapping of guild:channel to message handlers
 	messageHandlers     map[string][]interface{}
@@ -22,61 +23,61 @@ type SharedDiscordClient struct {
 }
 
 // NewSharedDiscordClient creates a new shared Discord client
-func NewSharedDiscordClient(token string, logger Logger) (*SharedDiscordClient, error) {
+func NewSharedDiscordClient(token string, lgr logger.Logger) (*SharedDiscordClient, error) {
 	// Use provided logger or create a default console logger
-	if logger == nil {
-		logger = NewConsoleLogger()
+	if lgr == nil {
+		lgr = logger.NewConsoleLogger()
 	}
 
-	logger.Debug("DISCORD_CLIENT", "Starting Discord client creation")
+	lgr.Debug("DISCORD_CLIENT", "Starting Discord client creation")
 
 	// Create the Discord session
-	logger.Debug("DISCORD_CLIENT", "Creating Discord session")
+	lgr.Debug("DISCORD_CLIENT", "Creating Discord session")
 	session, err := discordgo.New("Bot " + token)
 	if err != nil {
-		logger.Error("DISCORD_CLIENT", fmt.Sprintf("Failed to create Discord session: %v", err))
+		lgr.Error("DISCORD_CLIENT", fmt.Sprintf("Failed to create Discord session: %v", err))
 
 		return nil, err
 	}
-	logger.Debug("DISCORD_CLIENT", "Discord session created successfully")
+	lgr.Debug("DISCORD_CLIENT", "Discord session created successfully")
 
 	// Set Discord library log level to only show errors
-	logger.Debug("DISCORD_CLIENT", "Setting Discord library log level to ERROR")
+	lgr.Debug("DISCORD_CLIENT", "Setting Discord library log level to ERROR")
 	session.LogLevel = discordgo.LogError
 
 	// Set up the client
-	logger.Debug("DISCORD_CLIENT", "Creating SharedDiscordClient struct")
+	lgr.Debug("DISCORD_CLIENT", "Creating SharedDiscordClient struct")
 	client := &SharedDiscordClient{
 		session:         session,
-		logger:          logger,
+		logger:          lgr,
 		messageHandlers: make(map[string][]interface{}),
 	}
-	logger.Debug("DISCORD_CLIENT", "SharedDiscordClient struct created")
+	lgr.Debug("DISCORD_CLIENT", "SharedDiscordClient struct created")
 
 	// Set up intents
-	logger.Debug("DISCORD_CLIENT", "Setting up Discord intents")
+	lgr.Debug("DISCORD_CLIENT", "Setting up Discord intents")
 	intents := discordgo.MakeIntent(discordgo.IntentsGuildMessages |
 		discordgo.IntentsGuildMessageReactions |
 		discordgo.IntentsDirectMessages |
 		discordgo.IntentsDirectMessageReactions |
 		discordgo.IntentsMessageContent |
 		discordgo.IntentsGuildVoiceStates)
-	logger.Debug("DISCORD_CLIENT", fmt.Sprintf("Discord intents configured: %d", intents))
+	lgr.Debug("DISCORD_CLIENT", fmt.Sprintf("Discord intents configured: %d", intents))
 
-	logger.Debug("DISCORD_CLIENT", "Configuring Discord session settings")
+	lgr.Debug("DISCORD_CLIENT", "Configuring Discord session settings")
 	session.StateEnabled = true
 	session.Identify.Intents = intents
 	session.ShouldReconnectOnError = true
 	session.ShouldReconnectVoiceOnSessionError = false // discord_connection_manager handles voice reconnection
-	logger.Debug("DISCORD_CLIENT", "Discord session settings configured")
+	lgr.Debug("DISCORD_CLIENT", "Discord session settings configured")
 
 	// Register handlers for routing messages
-	logger.Debug("DISCORD_CLIENT", "Registering Discord event handlers")
+	lgr.Debug("DISCORD_CLIENT", "Registering Discord event handlers")
 	session.AddHandler(client.onMessageCreate)
 	session.AddHandler(client.onGuildCreate)
-	logger.Debug("DISCORD_CLIENT", "Discord event handlers registered")
+	lgr.Debug("DISCORD_CLIENT", "Discord event handlers registered")
 
-	logger.Info("DISCORD_CLIENT", "SharedDiscordClient created successfully")
+	lgr.Info("DISCORD_CLIENT", "SharedDiscordClient created successfully")
 
 	return client, nil
 }
