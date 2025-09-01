@@ -859,7 +859,7 @@ func (b *BridgeState) StartBridge() {
 
 	// Set up audio channels with proper lifecycle management
 	toMumbleInternal := make(chan gumble.AudioBuffer, 100)
-	toDiscord := make(chan []int16, 200) // Increased buffer size
+	toDiscord := make(chan []int16, 200)
 	defer close(toMumbleInternal)
 	defer close(toDiscord)
 
@@ -868,14 +868,14 @@ func (b *BridgeState) StartBridge() {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		b.MumbleStream.fromMumbleMixer(ctx, cancel, toDiscord)
+		b.MumbleStream.fromMumbleMixer(ctx, toDiscord)
 	}()
 
 	// Discord receive PCM
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		b.DiscordStream.discordReceivePCM(ctx, cancel)
+		b.DiscordStream.discordReceivePCM(ctx)
 	}()
 
 	// From Discord to Mumble (via internal channel)
@@ -896,7 +896,7 @@ func (b *BridgeState) StartBridge() {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		b.DiscordStream.discordSendPCM(ctx, cancel, toDiscord)
+		b.DiscordStream.discordSendPCM(ctx, toDiscord)
 	}()
 
 	// Bridge health monitor - checks overall bridge state but doesn't kill on individual connection failures

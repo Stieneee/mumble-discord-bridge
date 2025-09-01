@@ -49,21 +49,6 @@ func NewDiscordDuplex(b *BridgeState) *DiscordDuplex {
 	}
 }
 
-// checkConnectionManager verifies connection manager is available and logs state changes
-func (dd *DiscordDuplex) checkConnectionManager(lastReady *bool, operation string) *DiscordConnectionManager {
-	connManager := dd.Bridge.DiscordConnectionManager
-	if connManager == nil {
-		if *lastReady {
-			dd.Bridge.Logger.Debug(operation, "Discord connection manager not available, waiting")
-			*lastReady = false
-		}
-
-		return nil
-	}
-
-	return connManager
-}
-
 // OnError gets called by dgvoice when an error is encountered.
 // By default logs to STDERR
 var OnError = func(str string, err error) {
@@ -80,7 +65,7 @@ var OnError = func(str string, err error) {
 
 // SendPCM will receive on the provied channel encode
 // received PCM data with Opus then send that to Discordgo
-func (dd *DiscordDuplex) discordSendPCM(ctx context.Context, _ context.CancelFunc, pcm <-chan []int16) {
+func (dd *DiscordDuplex) discordSendPCM(ctx context.Context, pcm <-chan []int16) {
 	const channels int = 1
 	const frameRate int = 48000              // audio sampling rate
 	const frameSize int = 960                // uint16 size of each audio frame
@@ -103,16 +88,8 @@ func (dd *DiscordDuplex) discordSendPCM(ctx context.Context, _ context.CancelFun
 	var speakingStart time.Time
 
 	internalSend := func(opus []byte) {
-		// Check connection manager availability
-		connManager := dd.checkConnectionManager(&lastReady, "DISCORD_SEND")
-		if connManager == nil {
-			promPacketsSunk.WithLabelValues("discord", "outbound").Inc()
-
-			return
-		}
-
 		// Get opus channels - this atomically checks connection state, readiness, and channel availability
-		opusSend, _, connectionReady := connManager.GetOpusChannels()
+		opusSend, _, connectionReady := dd.Bridge.DiscordConnectionManager.GetOpusChannels()
 		if !connectionReady || opusSend == nil {
 			if lastReady {
 				dd.Bridge.Logger.Debug("DISCORD_SEND", "Discord connection not ready, sinking packet")
@@ -235,22 +212,14 @@ func (dd *DiscordDuplex) discordSendPCM(ctx context.Context, _ context.CancelFun
 
 // ReceivePCM will receive on the the Discordgo OpusRecv channel and decode
 // the opus audio into PCM then send it on the provided channel.
-func (dd *DiscordDuplex) discordReceivePCM(ctx context.Context, _ context.CancelFunc) {
+func (dd *DiscordDuplex) discordReceivePCM(ctx context.Context) {
 	var err error
 
 	lastReady := true
 
 	for {
-		// Check connection manager availability
-		connManager := dd.checkConnectionManager(&lastReady, "DISCORD_RECEIVE")
-		if connManager == nil {
-			time.Sleep(connectionCheckInterval * time.Millisecond) // Brief sleep to avoid tight loop
-
-			continue
-		}
-
 		// Get opus channels - this atomically checks connection state, readiness, and channel availability
-		_, opusRecv, connectionReady := connManager.GetOpusChannels()
+		_, opusRecv, connectionReady := dd.Bridge.DiscordConnectionManager.GetOpusChannels()
 		if !connectionReady || opusRecv == nil {
 			if lastReady {
 				dd.Bridge.Logger.Debug("DISCORD_RECEIVE", "Discord connection not ready for receiving")
@@ -276,6 +245,10 @@ func (dd *DiscordDuplex) discordReceivePCM(ctx context.Context, _ context.Cancel
 
 			return
 		case p, ok = <-opusRecv:
+			// Process packet normally
+		case <-time.After(100 * time.Millisecond):
+			// Timeout - loop back to re-check connection status and get fresh channels
+			continue
 		}
 
 		if !ok {

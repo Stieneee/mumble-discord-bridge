@@ -157,7 +157,7 @@ func (m *MumbleDuplex) OnAudioStream(e *gumble.AudioStreamEvent) {
 	}()
 }
 
-func (m *MumbleDuplex) fromMumbleMixer(ctx context.Context, _ context.CancelFunc, toDiscord chan []int16) {
+func (m *MumbleDuplex) fromMumbleMixer(ctx context.Context, toDiscord chan []int16) {
 	m.mumbleSleepTick.Start(mumbleMixerInterval)
 
 	sendAudio := false
