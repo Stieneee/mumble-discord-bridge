@@ -319,6 +319,11 @@ func (b *BridgeInstance) Start() error {
 					return
 				default:
 					b.logger.Info("BRIDGE_MODE", "Starting bridge in constant mode")
+					
+					// Set DiscordChannelID from config for constant mode
+					b.State.DiscordChannelID = b.config.DiscordCID
+					b.logger.Debug("BRIDGE_MODE", fmt.Sprintf("Set DiscordChannelID to %s", b.config.DiscordCID))
+					
 					b.logger.Debug("BRIDGE_START", "Calling State.StartBridge()")
 
 					// Start the bridge and verify it connected successfully
@@ -355,6 +360,11 @@ func (b *BridgeInstance) Start() error {
 		b.logger.Debug("BRIDGE_MODE", "Starting manual mode goroutine")
 		go func() {
 			b.logger.Info("BRIDGE_MODE", "Starting bridge in manual mode")
+			
+			// Set DiscordChannelID from config for manual mode
+			b.State.DiscordChannelID = b.config.DiscordCID
+			b.logger.Debug("BRIDGE_MODE", fmt.Sprintf("Set DiscordChannelID to %s", b.config.DiscordCID))
+			
 			b.logger.Debug("BRIDGE_START", "Calling State.StartBridge() in manual mode")
 			b.State.StartBridge()
 			b.logger.Debug("BRIDGE_START", "State.StartBridge() returned in manual mode")
