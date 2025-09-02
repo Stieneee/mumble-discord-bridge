@@ -278,7 +278,7 @@ func (b *BaseConnectionManager) statusToEventType(status ConnectionStatus) Conne
 	}
 }
 
-// Note: DiscordConnectionManager and MumbleConnectionManager are defined in their respective files
+// Note: DiscordVoiceConnectionManager and MumbleConnectionManager are defined in their respective files
 
 // ConnectionManagerConfig holds configuration for connection managers
 type ConnectionManagerConfig struct {

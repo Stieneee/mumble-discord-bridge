@@ -1,9 +1,11 @@
 package bridgelib
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/stieneee/mumble-discord-bridge/pkg/logger"
@@ -20,6 +22,14 @@ type SharedDiscordClient struct {
 	// Mapping of guild:channel to message handlers
 	messageHandlers     map[string][]interface{}
 	messageHandlerMutex sync.RWMutex
+
+	// Session monitoring and reconnection
+	ctx                 context.Context
+	cancel              context.CancelFunc
+	monitoringEnabled   bool
+	monitoringMutex     sync.RWMutex
+	reconnectInProgress bool
+	reconnectMutex      sync.Mutex
 }
 
 // NewSharedDiscordClient creates a new shared Discord client
@@ -47,10 +57,13 @@ func NewSharedDiscordClient(token string, lgr logger.Logger) (*SharedDiscordClie
 
 	// Set up the client
 	lgr.Debug("DISCORD_CLIENT", "Creating SharedDiscordClient struct")
+	ctx, cancel := context.WithCancel(context.Background())
 	client := &SharedDiscordClient{
 		session:         session,
 		logger:          lgr,
 		messageHandlers: make(map[string][]interface{}),
+		ctx:             ctx,
+		cancel:          cancel,
 	}
 	lgr.Debug("DISCORD_CLIENT", "SharedDiscordClient struct created")
 
@@ -82,7 +95,7 @@ func NewSharedDiscordClient(token string, lgr logger.Logger) (*SharedDiscordClie
 	return client, nil
 }
 
-// Connect connects to Discord
+// Connect connects to Discord and starts session monitoring
 func (c *SharedDiscordClient) Connect() error {
 	c.logger.Info("DISCORD_CLIENT", "Connecting to Discord")
 	c.logger.Debug("DISCORD_CLIENT", "Calling session.Open()")
@@ -94,12 +107,19 @@ func (c *SharedDiscordClient) Connect() error {
 	}
 	c.logger.Info("DISCORD_CLIENT", "Successfully connected to Discord")
 
+	// Start session monitoring
+	c.startSessionMonitoring()
+
 	return nil
 }
 
-// Disconnect disconnects from Discord
+// Disconnect disconnects from Discord and stops session monitoring
 func (c *SharedDiscordClient) Disconnect() error {
 	c.logger.Info("DISCORD_CLIENT", "Disconnecting from Discord")
+
+	// Stop session monitoring
+	c.stopSessionMonitoring()
+
 	c.logger.Debug("DISCORD_CLIENT", "Closing Discord session")
 	err := c.session.Close()
 	if err != nil {
@@ -327,4 +347,179 @@ func (c *SharedDiscordClient) onGuildCreate(s *discordgo.Session, g *discordgo.G
 	} else {
 		c.logger.Info("DISCORD_HANDLER", fmt.Sprintf("Called %d out of %d handlers for guild: %s", handlersCalled, totalHandlers, g.ID))
 	}
+}
+
+// startSessionMonitoring starts the session health monitoring goroutine
+func (c *SharedDiscordClient) startSessionMonitoring() {
+	c.monitoringMutex.Lock()
+	defer c.monitoringMutex.Unlock()
+
+	if c.monitoringEnabled {
+		c.logger.Debug("DISCORD_CLIENT", "Session monitoring already enabled")
+		return
+	}
+
+	c.monitoringEnabled = true
+	c.logger.Info("DISCORD_CLIENT", "Starting Discord session health monitoring")
+
+	go c.sessionMonitorLoop()
+}
+
+// stopSessionMonitoring stops the session health monitoring
+func (c *SharedDiscordClient) stopSessionMonitoring() {
+	c.monitoringMutex.Lock()
+	defer c.monitoringMutex.Unlock()
+
+	if !c.monitoringEnabled {
+		c.logger.Debug("DISCORD_CLIENT", "Session monitoring not enabled")
+		return
+	}
+
+	c.logger.Info("DISCORD_CLIENT", "Stopping Discord session health monitoring")
+	c.monitoringEnabled = false
+	c.cancel()
+}
+
+// sessionMonitorLoop monitors the session health and handles reconnection
+func (c *SharedDiscordClient) sessionMonitorLoop() {
+	c.logger.Info("DISCORD_CLIENT", "Session monitoring loop started")
+	ticker := time.NewTicker(5 * time.Second) // Check every 5 seconds
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-c.ctx.Done():
+			c.logger.Info("DISCORD_CLIENT", "Session monitoring loop exiting")
+			return
+		case <-ticker.C:
+			if !c.isSessionHealthy() {
+				c.logger.Warn("DISCORD_CLIENT", "Discord session unhealthy, attempting indefinite reconnection")
+				c.attemptIndefiniteReconnection()
+			}
+		}
+	}
+}
+
+// isSessionHealthy checks if the Discord session is healthy and ready
+func (c *SharedDiscordClient) isSessionHealthy() bool {
+	if c.session == nil {
+		c.logger.Debug("DISCORD_CLIENT", "Session health check: session is nil")
+		return false
+	}
+
+	// Check if session is properly connected
+	c.session.RLock()
+	defer c.session.RUnlock()
+
+	// Check DataReady flag - this indicates the session is fully initialized
+	if !c.session.DataReady {
+		c.logger.Debug("DISCORD_CLIENT", "Session health check: DataReady is false")
+		return false
+	}
+
+	// Check if we have user state - indicates successful authentication
+	if c.session.State == nil || c.session.State.User == nil {
+		c.logger.Debug("DISCORD_CLIENT", "Session health check: no user state available")
+		return false
+	}
+
+	return true
+}
+
+// attemptIndefiniteReconnection attempts to reconnect the Discord session indefinitely with fixed delay
+func (c *SharedDiscordClient) attemptIndefiniteReconnection() {
+	c.reconnectMutex.Lock()
+	defer c.reconnectMutex.Unlock()
+
+	// Prevent multiple concurrent reconnection attempts
+	if c.reconnectInProgress {
+		c.logger.Debug("DISCORD_CLIENT", "Reconnection already in progress, skipping")
+		return
+	}
+
+	c.reconnectInProgress = true
+	defer func() {
+		c.reconnectInProgress = false
+	}()
+
+	c.logger.Info("DISCORD_CLIENT", "Starting indefinite Discord session reconnection")
+
+	fixedDelay := 10 * time.Second // Fixed 10-second delay between attempts
+	attempt := 1
+
+	for {
+		select {
+		case <-c.ctx.Done():
+			c.logger.Info("DISCORD_CLIENT", "Reconnection canceled due to context cancellation")
+			return
+		default:
+			c.logger.Info("DISCORD_CLIENT", fmt.Sprintf("Reconnection attempt #%d", attempt))
+
+			// First, try to close the existing session
+			c.logger.Debug("DISCORD_CLIENT", "Closing existing session before reconnection")
+			if err := c.session.Close(); err != nil {
+				c.logger.Warn("DISCORD_CLIENT", fmt.Sprintf("Error closing existing session: %v", err))
+			}
+
+			// Wait before reopening
+			c.logger.Debug("DISCORD_CLIENT", fmt.Sprintf("Waiting %v before reconnection attempt", fixedDelay))
+			select {
+			case <-c.ctx.Done():
+				c.logger.Info("DISCORD_CLIENT", "Reconnection canceled during delay")
+				return
+			case <-time.After(fixedDelay):
+				// Continue with reconnection attempt
+			}
+
+			// Attempt to reopen the session
+			c.logger.Debug("DISCORD_CLIENT", "Attempting to reopen Discord session")
+			if err := c.session.Open(); err != nil {
+				c.logger.Error("DISCORD_CLIENT", fmt.Sprintf("Reconnection attempt #%d failed: %v", attempt, err))
+				attempt++
+				continue
+			}
+
+			// Wait for the session to become ready
+			c.logger.Debug("DISCORD_CLIENT", "Waiting for session to become ready after reconnection")
+			if c.waitForSessionReady(30 * time.Second) {
+				c.logger.Info("DISCORD_CLIENT", fmt.Sprintf("Discord session reconnection successful after %d attempts", attempt))
+				return
+			}
+
+			c.logger.Warn("DISCORD_CLIENT", fmt.Sprintf("Session not ready after reconnection attempt #%d", attempt))
+			attempt++
+		}
+	}
+}
+
+// waitForSessionReady waits for the session to become ready
+func (c *SharedDiscordClient) waitForSessionReady(timeout time.Duration) bool {
+	start := time.Now()
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		if c.isSessionHealthy() {
+			c.logger.Debug("DISCORD_CLIENT", "Session became ready")
+			return true
+		}
+
+		if time.Since(start) > timeout {
+			c.logger.Warn("DISCORD_CLIENT", "Timeout waiting for session to become ready")
+			return false
+		}
+
+		select {
+		case <-ticker.C:
+			// Continue checking
+		case <-c.ctx.Done():
+			c.logger.Debug("DISCORD_CLIENT", "Context canceled while waiting for session ready")
+			return false
+		}
+	}
+}
+
+// IsSessionHealthy exposes session health check for external callers
+func (c *SharedDiscordClient) IsSessionHealthy() bool {
+	return c.isSessionHealthy()
 }

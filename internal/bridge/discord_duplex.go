@@ -89,7 +89,7 @@ func (dd *DiscordDuplex) discordSendPCM(ctx context.Context, pcm <-chan []int16)
 
 	internalSend := func(opus []byte) {
 		// Get opus channels - this atomically checks connection state, readiness, and channel availability
-		opusSend, _, connectionReady := dd.Bridge.DiscordConnectionManager.GetOpusChannels()
+		opusSend, _, connectionReady := dd.Bridge.DiscordVoiceConnectionManager.GetOpusChannels()
 		if !connectionReady || opusSend == nil {
 			if lastReady {
 				dd.Bridge.Logger.Debug("DISCORD_SEND", "Discord connection not ready, sinking packet")
@@ -135,7 +135,7 @@ func (dd *DiscordDuplex) discordSendPCM(ctx context.Context, pcm <-chan []int16)
 				speakingStart = time.Now()
 
 				// Set speaking status directly - connection manager handles safety
-				connManager := dd.Bridge.DiscordConnectionManager
+				connManager := dd.Bridge.DiscordVoiceConnectionManager
 				if connManager != nil {
 					connection := connManager.GetReadyConnection()
 					if connection != nil {
@@ -188,7 +188,7 @@ func (dd *DiscordDuplex) discordSendPCM(ctx context.Context, pcm <-chan []int16)
 			}
 
 			// Set speaking to false safely
-			connManager := dd.Bridge.DiscordConnectionManager
+			connManager := dd.Bridge.DiscordVoiceConnectionManager
 			if connManager != nil {
 				connection := connManager.GetReadyConnection()
 				if connection != nil {
@@ -219,7 +219,7 @@ func (dd *DiscordDuplex) discordReceivePCM(ctx context.Context) {
 
 	for {
 		// Get opus channels - this atomically checks connection state, readiness, and channel availability
-		_, opusRecv, connectionReady := dd.Bridge.DiscordConnectionManager.GetOpusChannels()
+		_, opusRecv, connectionReady := dd.Bridge.DiscordVoiceConnectionManager.GetOpusChannels()
 		if !connectionReady || opusRecv == nil {
 			if lastReady {
 				dd.Bridge.Logger.Debug("DISCORD_RECEIVE", "Discord connection not ready for receiving")

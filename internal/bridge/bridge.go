@@ -134,8 +134,8 @@ type BridgeState struct { //nolint:revive // API consistency: keeping Bridge pre
 	DiscordSession *discordgo.Session
 
 	// Connection managers for smart connection handling
-	DiscordConnectionManager *DiscordConnectionManager
-	MumbleConnectionManager  *MumbleConnectionManager
+	DiscordVoiceConnectionManager *DiscordVoiceConnectionManager
+	MumbleConnectionManager       *MumbleConnectionManager
 
 	// Map of Discord users tracked by this bridge.
 	DiscordUsers      map[string]DiscordUser
@@ -248,7 +248,7 @@ func (b *BridgeState) initializeConnectionManagers() error {
 
 	// Initialize Discord connection manager
 	if b.DiscordSession != nil && b.DiscordChannelID != "" {
-		b.DiscordConnectionManager = NewDiscordConnectionManager(
+		b.DiscordVoiceConnectionManager = NewDiscordVoiceConnectionManager(
 			b.DiscordSession,
 			b.BridgeConfig.GID,
 			b.DiscordChannelID,
@@ -297,7 +297,7 @@ func (b *BridgeState) startConnectionManagers() error {
 	b.Logger.Info("BRIDGE", "Starting connection managers")
 
 	// Start Discord connection manager
-	if err := b.DiscordConnectionManager.Start(b.connectionCtx); err != nil {
+	if err := b.DiscordVoiceConnectionManager.Start(b.connectionCtx); err != nil {
 		return fmt.Errorf("failed to start Discord connection manager: %w", err)
 	}
 
@@ -341,7 +341,7 @@ func (b *BridgeState) monitorConnectionEvents() {
 
 			return
 
-		case event, ok := <-b.DiscordConnectionManager.GetEventChannel():
+		case event, ok := <-b.DiscordVoiceConnectionManager.GetEventChannel():
 			if !ok {
 				b.Logger.Warn("BRIDGE", "Discord connection event channel closed")
 
@@ -492,8 +492,8 @@ func (b *BridgeState) stopConnectionManagers() {
 		b.connectionCancel()
 	}
 
-	if b.DiscordConnectionManager != nil {
-		if err := b.DiscordConnectionManager.Stop(); err != nil {
+	if b.DiscordVoiceConnectionManager != nil {
+		if err := b.DiscordVoiceConnectionManager.Stop(); err != nil {
 			b.Logger.Error("BRIDGE", fmt.Sprintf("Error stopping Discord connection manager: %v", err))
 		}
 	}
