@@ -80,8 +80,9 @@ func NewSharedDiscordClient(token string, lgr logger.Logger) (*SharedDiscordClie
 	lgr.Debug("DISCORD_CLIENT", "Configuring Discord session settings")
 	session.StateEnabled = true
 	session.Identify.Intents = intents
-	session.ShouldReconnectOnError = true
+	session.ShouldReconnectOnError = false
 	session.ShouldReconnectVoiceOnSessionError = false // discord_connection_manager handles voice reconnection
+	session.ShouldRetryOnRateLimit = true
 	lgr.Debug("DISCORD_CLIENT", "Discord session settings configured")
 
 	// Register handlers for routing messages
