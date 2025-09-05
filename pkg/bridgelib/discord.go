@@ -30,6 +30,9 @@ type SharedDiscordClient struct {
 	monitoringMutex     sync.RWMutex
 	reconnectInProgress bool
 	reconnectMutex      sync.Mutex
+
+	// Session operation mutex to completely serialize session operations
+	sessionOpMutex sync.Mutex
 }
 
 // NewSharedDiscordClient creates a new shared Discord client
@@ -98,6 +101,9 @@ func NewSharedDiscordClient(token string, lgr logger.Logger) (*SharedDiscordClie
 
 // Connect connects to Discord and starts session monitoring
 func (c *SharedDiscordClient) Connect() error {
+	c.sessionOpMutex.Lock()
+	defer c.sessionOpMutex.Unlock()
+
 	c.logger.Info("DISCORD_CLIENT", "Connecting to Discord")
 	c.logger.Debug("DISCORD_CLIENT", "Calling session.Open()")
 	err := c.session.Open()
@@ -116,6 +122,9 @@ func (c *SharedDiscordClient) Connect() error {
 
 // Disconnect disconnects from Discord and stops session monitoring
 func (c *SharedDiscordClient) Disconnect() error {
+	c.sessionOpMutex.Lock()
+	defer c.sessionOpMutex.Unlock()
+
 	c.logger.Info("DISCORD_CLIENT", "Disconnecting from Discord")
 
 	// Stop session monitoring
@@ -211,7 +220,7 @@ func (c *SharedDiscordClient) onMessageCreate(s *discordgo.Session, m *discordgo
 	if len(content) > 50 {
 		content = content[:47] + "..."
 	}
-	c.logger.Debug("DISCORD_HANDLER", fmt.Sprintf("Message received from %s: %s", m.Author.Username, content))
+	c.logger.Debug("DISCORD_HANDLER", "Message received")
 
 	// Skip messages from the bot itself
 	if m.Author.ID == s.State.User.ID {
@@ -456,7 +465,10 @@ func (c *SharedDiscordClient) attemptIndefiniteReconnection() {
 		default:
 			c.logger.Info("DISCORD_CLIENT", fmt.Sprintf("Reconnection attempt #%d", attempt))
 
-			// First, try to close the existing session
+			// Perform session close/open operations atomically
+			c.logger.Debug("DISCORD_CLIENT", "Acquiring session operation lock for reconnection")
+			c.sessionOpMutex.Lock()
+
 			c.logger.Debug("DISCORD_CLIENT", "Closing existing session before reconnection")
 			if err := c.session.Close(); err != nil {
 				c.logger.Warn("DISCORD_CLIENT", fmt.Sprintf("Error closing existing session: %v", err))
@@ -467,6 +479,7 @@ func (c *SharedDiscordClient) attemptIndefiniteReconnection() {
 			select {
 			case <-c.ctx.Done():
 				c.logger.Info("DISCORD_CLIENT", "Reconnection canceled during delay")
+				c.sessionOpMutex.Unlock()
 				return
 			case <-time.After(fixedDelay):
 				// Continue with reconnection attempt
@@ -474,8 +487,12 @@ func (c *SharedDiscordClient) attemptIndefiniteReconnection() {
 
 			// Attempt to reopen the session
 			c.logger.Debug("DISCORD_CLIENT", "Attempting to reopen Discord session")
-			if err := c.session.Open(); err != nil {
-				c.logger.Error("DISCORD_CLIENT", fmt.Sprintf("Reconnection attempt #%d failed: %v", attempt, err))
+			sessionOpenErr := c.session.Open()
+			c.sessionOpMutex.Unlock()
+			c.logger.Debug("DISCORD_CLIENT", "Released session operation lock after reconnection attempt")
+
+			if sessionOpenErr != nil {
+				c.logger.Error("DISCORD_CLIENT", fmt.Sprintf("Reconnection attempt #%d failed: %v", attempt, sessionOpenErr))
 				attempt++
 				continue
 			}
