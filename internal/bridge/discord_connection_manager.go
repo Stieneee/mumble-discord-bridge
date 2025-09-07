@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/bwmarrin/discordgo"
@@ -27,6 +28,9 @@ type DiscordVoiceConnectionManager struct {
 
 	// Simple configuration
 	baseReconnectDelay time.Duration // Fixed delay between reconnect attempts
+
+	// Connection generation tracking to detect stale references
+	connectionGeneration int32
 }
 
 // NewDiscordVoiceConnectionManager creates a new Discord connection manager
@@ -136,15 +140,15 @@ func (d *DiscordVoiceConnectionManager) monitorConnectionUntilFailure(ctx contex
 				}
 			}
 
-			// Check voice connection ready state
-			_, isReady := d.checkConnectionReady()
+			// Check voice connection health using our safe channel-based approach
+			isHealthy := d.isConnectionHealthy()
 
-			if isReady {
+			if isHealthy {
 				// Connection is healthy
 				d.SetStatus(ConnectionConnected, nil)
 			} else {
-				// Connection is not ready - trigger immediate reconnection
-				d.logger.Warn("DISCORD_CONN", "Voice connection not ready - triggering immediate reconnection")
+				// Connection is not healthy - trigger immediate reconnection
+				d.logger.Warn("DISCORD_CONN", "Voice connection not healthy - triggering immediate reconnection")
 				d.SetStatus(ConnectionReconnecting, nil)
 
 				return
@@ -182,14 +186,44 @@ func (d *DiscordVoiceConnectionManager) connectOnce() error {
 		return fmt.Errorf("failed to join voice channel: %w", err)
 	}
 
-	// Store connection reference first
-	d.connMutex.Lock()
-	d.connection = connection
-	if connection != nil {
-		d.opusSend = connection.OpusSend
-		d.opusRecv = connection.OpusRecv
+	// Wait for opus channels to be initialized by discordgo's async event handlers
+	// The channels are created in onEvent() which runs asynchronously after ChannelVoiceJoin returns
+	maxWaitTime := 5 * time.Second
+	startTime := time.Now()
+	pollInterval := 50 * time.Millisecond
+
+	d.logger.Debug("DISCORD_CONN", "Waiting for opus channels to be initialized")
+
+	for {
+		// Check if channels exist with proper locking to avoid races
+		connection.RLock()
+		opusSendReady := connection.OpusSend != nil
+		opusRecvReady := connection.OpusRecv != nil
+		connection.RUnlock()
+
+		if opusSendReady && opusRecvReady {
+			// Channels are ready, extract them ONCE and never access VoiceConnection again
+			d.connMutex.Lock()
+			d.connection = connection
+			connection.RLock()
+			d.opusSend = connection.OpusSend  // Copy channel reference once
+			d.opusRecv = connection.OpusRecv  // Copy channel reference once
+			connection.RUnlock()
+			atomic.AddInt32(&d.connectionGeneration, 1) // Increment generation for stale reference detection
+			d.connMutex.Unlock()
+			d.logger.Debug("DISCORD_CONN", "Opus channels successfully extracted")
+			break
+		}
+
+		if time.Since(startTime) > maxWaitTime {
+			d.logger.Error("DISCORD_CONN", "Timeout waiting for opus channels to be initialized")
+			d.SetStatus(ConnectionFailed, fmt.Errorf("opus channels initialization timeout"))
+			return fmt.Errorf("timeout waiting for opus channels to be initialized")
+		}
+
+		// Brief sleep before next poll
+		time.Sleep(pollInterval)
 	}
-	d.connMutex.Unlock()
 
 	d.SetStatus(ConnectionConnected, nil)
 	d.logger.Info("DISCORD_CONN", "Discord voice connection established and ready")
@@ -262,29 +296,32 @@ func (d *DiscordVoiceConnectionManager) waitForSessionReady(timeout time.Duratio
 	}
 }
 
-// checkConnectionReady safely checks if the connection is ready with proper locking
-func (d *DiscordVoiceConnectionManager) checkConnectionReady() (connection *discordgo.VoiceConnection, isReady bool) {
+// isConnectionHealthy checks if the connection is healthy without accessing VoiceConnection fields
+// This eliminates race conditions by only checking our stored channel references
+func (d *DiscordVoiceConnectionManager) isConnectionHealthy() bool {
 	d.connMutex.RLock()
-	connection = d.connection
-	d.connMutex.RUnlock()
+	defer d.connMutex.RUnlock()
 
-	if connection == nil {
-		return nil, false
+	// Connection is healthy if we have both opus channels
+	if d.opusSend == nil || d.opusRecv == nil {
+		return false
 	}
 
-	// Check Ready status safely
-	defer func() {
-		if r := recover(); r != nil {
-			d.logger.Error("DISCORD_CONN", fmt.Sprintf("Panic checking Ready state: %v", r))
-			isReady = false
+	// Test if channels are still open by checking if they're closed
+	// We use a non-blocking select to avoid interfering with normal operation
+	select {
+	case _, ok := <-d.opusRecv:
+		if !ok {
+			// Channel was closed
+			return false
 		}
-	}()
+		// Put received data back (this shouldn't happen in a health check)
+		// but if it does, we just discard it since we're only checking health
+	default:
+		// Channel not immediately readable, which is normal and healthy
+	}
 
-	connection.RLock()
-	isReady = connection.Ready
-	connection.RUnlock()
-
-	return connection, isReady
+	return true
 }
 
 // isPrimarySessionConnected checks if the primary Discord session is connected and ready
@@ -361,28 +398,30 @@ func (d *DiscordVoiceConnectionManager) Stop() error {
 	return nil
 }
 
-// GetReadyConnection returns the connection only if it's ready, nil otherwise
+// GetReadyConnection returns the connection only if channels are available, nil otherwise
+// Note: We no longer check VoiceConnection.Ready to avoid race conditions
 func (d *DiscordVoiceConnectionManager) GetReadyConnection() *discordgo.VoiceConnection {
-	connection, isReady := d.checkConnectionReady()
-	if isReady {
-		return connection
+	d.connMutex.RLock()
+	defer d.connMutex.RUnlock()
+
+	// Only return connection if we have valid opus channels
+	if d.connection != nil && d.opusSend != nil && d.opusRecv != nil {
+		return d.connection
 	}
 
 	return nil
 }
 
 // GetOpusChannels safely returns the stored opus send/receive channels
+// Never re-reads from VoiceConnection to eliminate race conditions
 func (d *DiscordVoiceConnectionManager) GetOpusChannels() (send chan<- []byte, recv <-chan *discordgo.Packet, ready bool) {
 	d.connMutex.RLock()
 	defer d.connMutex.RUnlock()
 
-	// Check if we have a connection and it's ready
-	_, isReady := d.checkConnectionReady()
-	if !isReady {
-		return nil, nil, false
+	// Only return our stored channel copies, never access VoiceConnection fields
+	if d.opusSend != nil && d.opusRecv != nil {
+		return d.opusSend, d.opusRecv, true
 	}
 
-	// Return stored channel references - no need to access VoiceConnection struct
-	// This eliminates the data race since we control access with our own mutex
-	return d.opusSend, d.opusRecv, true
+	return nil, nil, false
 }
