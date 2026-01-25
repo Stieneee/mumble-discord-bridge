@@ -90,12 +90,15 @@ The guide below provides information on how to create a Discord bot.
 Individual Discord servers need to invite the bot before it can connect.  
 The bot requires the following permissions:
 
+### General Permissions
 - View Channels
-- See Messages
+### Text Permissions
+- Send Messages
 - Read Message History
-- Voice Channel Connect
-- Voice Channel Speak
-- Voice Channel Use Voice Activity
+### Voice Permissions
+- Connect
+- Speak
+- Use Voice Activity
 
 Permission integer 36768768.
 
