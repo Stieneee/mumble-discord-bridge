@@ -5,11 +5,9 @@ permissions:
   packages: write
 on:
   push:
-    branches:
-      - main
+    branches: [main]
   pull_request:
-    branches:
-      - main
+    branches: [main]
 
 jobs:
   goreleaser:
@@ -37,7 +35,7 @@ jobs:
       - name: Run GoReleaser Build
         uses: goreleaser/goreleaser-action@v6
         with:
-          version: latest
+          version: "~> v2"
           args: build --clean --skip=validate
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

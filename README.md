@@ -6,21 +6,21 @@ It was built with the idea that people can continue to use the voice application
 
 ## New BridgeLib Architecture
 
-The project now includes a modular library (`pkg/bridgelib`) that enables multiple bridge instances to share a single Discord client. This solves the issue where text messages would only be delivered to one bridge instance when running multiple bridges.
+The project now includes a modular library (`pkg/bridgelib`) that enables multiple bridge instances to share a single Discord client.
 
 Key features of the new architecture:
 
-- Shared Discord client for multiple bridge instances
+- Shared Discord client (bot) for multiple bridge instances
 - Proper message routing between Discord and bridge instances
 - Consistent behavior between single and multi-bridge deployments
-- Used by the patchcord.io multi-bridge service
+- Used by the patchcord.io multi-bridge service 😄
 
 ## PatchCord.io
 
 Mumble Discord Bridge can be hosted on any server or computer and ships in a Docker container for convenience.
 
-For those looking for SaaS solution take a look at [PatchCord.io](https://patchcord.io).
-PatchCord offers a free tier for those who want to try out Mumble Discord Bridge, and paid tiers for those who want to handle larger communities.
+For those looking for SaaS solution take a look at [patchcord.io](https://patchcord.io).
+patchcord.io offers a free tier for those who want to try out Mumble Discord Bridge, and paid tiers for those who want to handle larger communities.
 
 ## Usage
 
@@ -45,21 +45,20 @@ The bridge can be run with the follow modes:
        The bridge starts up and immediately connects to both Discord and Mumble voice channels. It can not be controlled in this mode and quits when the program is stopped
 ```
 
-In "auto" or "manual" modes, the bridge can be controlled in Discord with the following commands:
+In "auto" or "manual" modes, the bridge can be controlled in Discord with the following commands.
+
+**Important:** Discord commands only work when sent from the configured channel (DISCORD_CID). Commands from other channels are ignored. This ensures proper isolation in multi-bridge deployments.
 
 ```text
-!COMMAND auto
- Toggle between manual and auto mode
-
 !COMMAND link
- (Discord Only) Commands the bridge to join the Discord channel the user is in and the Mumble server
+ (Discord Only) Commands the bridge to join Discord voice and Mumble.
+ The user must be in the configured voice channel (DISCORD_CID) for this to work.
 
 !COMMAND unlink
- (Discord Only) Commands the bridge to leave the Discord channel the user is in and the Mumble server
+ (Discord Only) Commands the bridge to leave Discord voice and Mumble.
 
 !COMMAND refresh
  (Discord Only) Commands the bridge to unlink, then link again.
-
 ```
 
 There are additional commands that can be called from either Mumble or Discord.
@@ -68,11 +67,14 @@ There are additional commands that can be called from either Mumble or Discord.
 !COMMAND help
  Print help text
 
-!COMMAND Version
+!COMMAND version
  Print the version
 
-!Command restart
+!COMMAND restart
  Restart the bridge
+
+!COMMAND status
+ Show bridge status, uptime, and mode
 
 !COMMAND list
  List all connected users in both Mumble and Discord.
@@ -166,7 +168,6 @@ Note boolean vales are flags when set via command line. example `-mumble-insecur
 | COMMAND_MODE               | -command-mode               | string | "both"           | [both, mumble, discord, none] determine which side of the bridge will respond to commands                                      |
 | DEBUG_LEVEL                | -debug-level                | int    | 1                | discord debug level                                                                                                            |
 | DISCORD_CID                | -discord-cid                | string | ""               | discord cid, required                                                                                                          |
-| DISCORD_DISABLE_BOT_STATUS | -discord-disable-bot-status | flag   | false            | disable updating bot status                                                                                                    |
 | DISCORD_TEXT_MODE          | -discord-text-mode          | string | "channel"        | disable sending direct messages to discord                                                                                     |
 | DISCORD_GID                | -discord-gid                | string | ""               | discord gid, required                                                                                                          |
 | DISCORD_TOKEN              | -discord-token              | string | ""               | discord bot token, required                                                                                                    |
@@ -249,6 +250,24 @@ There is an issue seen with Mumble-Server (murmur) 1.3.0 in which the bridge wil
 This issue has been appears to be resolved by murmur 1.3.4.
 
 ## Breaking Config Changes
+
+### Version 0.7
+
+**Command Behavior Changes:**
+
+- Discord commands (link, unlink, refresh) now only work when sent from the configured channel (DISCORD_CID). Commands from other text channels are ignored.
+- The `link` command now requires the user to be in the configured voice channel (DISCORD_CID). Previously, the bridge would join whichever voice channel the user was in. This change ensures proper isolation in multi-bridge deployments where multiple bridges may exist in the same guild.
+
+**Removed Features:**
+
+- Bot status updates removed. The bridge no longer updates Discord's "Listening to..." status with Mumble user counts. The `DISCORD_DISABLE_BOT_STATUS` / `-discord-disable-bot-status` config option has been removed along with this functionality.
+
+**BridgeLib API Changes (for library users):**
+
+- `DiscordDisableBotStatus` removed from `BridgeConfig` (feature removed)
+- `Logger` interface moved to `pkg/logger` package - use `logger.Logger` instead of `bridgelib.Logger`
+- `JoinVoiceChannel` removed from `DiscordProvider` interface - voice connections are now managed internally by connection managers
+- New `EventDispatcher` system for subscribing to bridge events (connection status, user join/leave, etc.)
 
 ### Version 0.6
 

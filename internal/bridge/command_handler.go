@@ -16,8 +16,8 @@ import (
 // - status
 // - list
 
+// HandleCommand processes bridge commands from users.
 func (b *BridgeState) HandleCommand(msg string, userResponse func(string)) {
-
 	b.Logger.Debug("COMMAND_HANDLER", "Handling command: "+msg)
 
 	prefix := "!" + b.BridgeConfig.Command
@@ -34,11 +34,13 @@ func (b *BridgeState) HandleCommand(msg string, userResponse func(string)) {
 	link (discord only) - link the bot to the current voice channel
 	unlink (discord only) - unlink the bot from the current voice channel
 	refresh (discord only) - refresh the bot's connection to the current voice channel`)
+
 		return
 	}
 
 	if strings.HasPrefix(msg, prefix+" version") {
 		userResponse("Mumble-Discord-Bridge " + b.BridgeConfig.Version)
+
 		return
 	}
 
@@ -66,16 +68,24 @@ func (b *BridgeState) HandleCommand(msg string, userResponse func(string)) {
 	if strings.HasPrefix(msg, prefix+" restart") {
 		userResponse("Restarting bridge")
 		b.BridgeDie <- true
+
 		return
 	}
 
 	if strings.HasPrefix(msg, prefix+" status") {
-		if b.Connected {
-			uptime := time.Since(b.StartTime).String()
-			userResponse("Bridge is running, uptime: " + uptime + " mode: " + b.Mode.String())
+		b.BridgeMutex.Lock()
+		connected := b.Connected
+		startTime := b.StartTime
+		mode := b.Mode
+		b.BridgeMutex.Unlock()
+
+		if connected {
+			uptime := time.Since(startTime).String()
+			userResponse("Bridge is running, uptime: " + uptime + " mode: " + mode.String())
 		} else {
 			userResponse("Bridge is not running")
 		}
+
 		return
 	}
 
@@ -98,6 +108,7 @@ func (b *BridgeState) HandleCommand(msg string, userResponse func(string)) {
 
 		userResponse("Discord users: " + strings.Join(discordUsers, ", ") + `
 Mumble users: ` + strings.Join(mumbleUsers, ", "))
+
 		return
 	}
 }
