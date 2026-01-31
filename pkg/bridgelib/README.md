@@ -52,11 +52,10 @@ func main() {
         MumbleChannel:           "General",
         MumbleInsecure:          false,
         MumbleCertificate:       "",
-        DiscordGID:              "YOUR_GUILD_ID",
-        DiscordCID:              "YOUR_CHANNEL_ID",
-        DiscordTextMode:         "channel",
-        DiscordDisableBotStatus: false,
-        ChatBridge:              true,
+        DiscordGID:      "YOUR_GUILD_ID",
+        DiscordCID:      "YOUR_CHANNEL_ID",
+        DiscordTextMode: "channel",
+        ChatBridge:      true,
         Mode:                    "constant",
     }
     
@@ -146,9 +145,6 @@ type SharedDiscordClient struct {
     messageHandlers     map[string][]interface{}
     messageHandlerMutex sync.RWMutex
 
-    // Mapping of guild to voice connections
-    voiceConnections     map[string]*discordgo.VoiceConnection
-    voiceConnectionMutex sync.RWMutex
 }
 ```
 
@@ -273,7 +269,6 @@ The `BridgeConfig` structure provides comprehensive configuration:
 | DiscordCID               | Discord Channel ID                                 |
 | DiscordSendBuffer        | Jitter buffer size for Mumble→Discord audio        |
 | DiscordTextMode          | Text mode (channel, user, disabled)                |
-| DiscordDisableBotStatus  | Disable bot status updates                         |
 | DiscordCommand           | Enable command processing in Discord               |
 | ChatBridge               | Enable text chat bridging                          |
 | Mode                     | Bridge mode (constant, manual, auto)               |
@@ -306,9 +301,6 @@ BridgeLib uses a provider pattern to abstract Discord connectivity:
 type DiscordProvider interface {
     // RegisterHandler registers a handler for Discord events
     RegisterHandler(handlerFunc interface{})
-
-    // JoinVoiceChannel joins a voice channel
-    JoinVoiceChannel(guildID, channelID string) (*discordgo.VoiceConnection, error)
 
     // SendMessage sends a message to a channel
     SendMessage(channelID, content string) (*discordgo.Message, error)

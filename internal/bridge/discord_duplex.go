@@ -13,13 +13,21 @@ import (
 	"github.com/stieneee/mumble-discord-bridge/pkg/sleepct"
 )
 
+// Constants for Discord audio handling
+const (
+	silenceFrameCount       = 5   // Number of silence frames to send after speaking
+	shortSpeakingThreshold  = 50  // Milliseconds - threshold for short speaking cycle warning
+	connectionCheckInterval = 100 // Milliseconds - sleep time when connection not ready
+)
+
 type fromDiscord struct {
 	decoder       *gopus.Decoder
 	pcm           chan []int16
-	receiving     bool // is used to to track the assumption that we are streaming a continuos stream form discord
+	receiving     bool // is used to to track the assumption that we are streaming a continuous stream form discord
 	streaming     bool // The buffer streaming is streaming out
 	lastSequence  uint16
 	lastTimeStamp uint32
+	lastActivity  time.Time // Track last activity for cleanup
 }
 
 // DiscordDuplex Handle discord voice stream
@@ -30,8 +38,10 @@ type DiscordDuplex struct {
 	fromDiscordMap          map[uint32]fromDiscord
 	discordSendSleepTick    sleepct.SleepCT
 	discordReceiveSleepTick sleepct.SleepCT
+	cleanupCancel           context.CancelFunc // Cancel function for cleanup goroutine
 }
 
+// NewDiscordDuplex creates a new Discord audio duplex handler.
 func NewDiscordDuplex(b *BridgeState) *DiscordDuplex {
 	return &DiscordDuplex{
 		Bridge:                  b,
@@ -57,7 +67,7 @@ var OnError = func(str string, err error) {
 
 // SendPCM will receive on the provied channel encode
 // received PCM data with Opus then send that to Discordgo
-func (dd *DiscordDuplex) discordSendPCM(ctx context.Context, cancel context.CancelFunc, pcm <-chan []int16) {
+func (dd *DiscordDuplex) discordSendPCM(ctx context.Context, pcm <-chan []int16) {
 	const channels int = 1
 	const frameRate int = 48000              // audio sampling rate
 	const frameSize int = 960                // uint16 size of each audio frame
@@ -77,61 +87,38 @@ func (dd *DiscordDuplex) discordSendPCM(ctx context.Context, cancel context.Canc
 	dd.discordSendSleepTick.Start(20 * time.Millisecond)
 
 	lastReady := true
-	var readyTimeout *time.Timer
 	var speakingStart time.Time
 
-	// Spy on the PCM channel to notify
-	// TODO determine a method to notify a paused sleepct
-	// pcm := make(chan []int16, 10)
-	// go func() {
-	// 	for {
-	// 		t, ok := <-pcmIn
-	// 		if !ok {
-	// 			close(pcm)
-	// 			return
-	// 		} else {
-	// 			dd.discordSendSleepTick.Notify()
-	// 			pcm <- t
-	// 		}
-	// 	}
-	// }()
-
 	internalSend := func(opus []byte) {
-		if dd.Bridge.DiscordVoice == nil {
+		// Get opus channels - this atomically checks connection state, readiness, and channel availability
+		opusSend, _, connectionReady := dd.Bridge.DiscordVoiceConnectionManager.GetOpusChannels()
+		if !connectionReady || opusSend == nil {
 			if lastReady {
-				OnError("Discord voice connection is nil", nil)
-				readyTimeout = time.AfterFunc(30*time.Second, func() {
-					dd.Bridge.Logger.Debug("DISCORD_SEND", "Set ready timeout")
-					cancel()
-				})
+				dd.Bridge.Logger.Debug("DISCORD_SEND", "Discord connection not ready, sinking packet")
 				lastReady = false
 			}
+			promPacketsSunk.WithLabelValues("discord", "outbound").Inc()
+
 			return
 		}
-		
-		dd.Bridge.DiscordVoice.RLock()
-		if !dd.Bridge.DiscordVoice.Ready || dd.Bridge.DiscordVoice.OpusSend == nil {
-			if lastReady {
-				OnError(fmt.Sprintf("Discordgo not ready for opus packets. %+v : %+v", dd.Bridge.DiscordVoice.Ready, dd.Bridge.DiscordVoice.OpusSend), nil)
-				readyTimeout = time.AfterFunc(30*time.Second, func() {
-					dd.Bridge.Logger.Debug("DISCORD_SEND", "Set ready timeout")
-					cancel()
-				})
-				lastReady = false
-			}
-		} else if !lastReady {
-			dd.Bridge.Logger.Info("DISCORD_SEND", "Discordgo ready to send opus packets")
-			lastReady = true
-			readyTimeout.Stop()
-		} else {
-			select {
-			case dd.Bridge.DiscordVoice.OpusSend <- opus:
-			case <-ctx.Done():
-			}
 
-			promDiscordSentPackets.Inc()
+		// Connection is ready, update lastReady state if needed
+		if !lastReady {
+			dd.Bridge.Logger.Info("DISCORD_SEND", "Discord ready to send opus packets")
+			lastReady = true
 		}
-		dd.Bridge.DiscordVoice.RUnlock()
+
+		// Send opus packet with timeout protection using safely obtained channel
+		select {
+		case opusSend <- opus:
+			promDiscordSentPackets.Inc()
+		case <-ctx.Done():
+			// Context canceled, don't log as error
+		default:
+			// Channel full - this is not a connection issue, just congestion
+			dd.Bridge.Logger.Debug("DISCORD_SEND", "Discord send channel full, dropping packet")
+			// Note: Not incrementing promPacketsSunk here as this is a different issue
+		}
 	}
 
 	defer dd.Bridge.Logger.Info("DISCORD_SEND", "Stopping Discord send PCM")
@@ -143,34 +130,33 @@ func (dd *DiscordDuplex) discordSendPCM(ctx context.Context, cancel context.Canc
 		default:
 		}
 
-		// if we are not streaming try to pause
-		// promTimerDiscordSend.Observe(float64(dd.discordSendSleepTick.SleepNextTarget(ctx, !streaming)))
 		promTimerDiscordSend.Observe(float64(dd.discordSendSleepTick.SleepNextTarget(ctx, false)))
 
 		if (len(pcm) > 1 && streaming) || (len(pcm) > dd.Bridge.BridgeConfig.DiscordStartStreamingCount && !streaming) {
 			if !streaming {
 				speakingStart = time.Now()
-				done := make(chan bool, 1)
-				go func() {
-					// This call will prevent discordSendPCM from exiting if the discord connection is lost
-					if dd.Bridge.DiscordVoice != nil {
-						if err := dd.Bridge.DiscordVoice.Speaking(true); err != nil {
-							dd.Bridge.Logger.Error("DISCORD_SEND", fmt.Sprintf("Error setting speaking status to true: %v", err))
-						}
+
+				// Set speaking status directly - connection manager handles safety
+				connManager := dd.Bridge.DiscordVoiceConnectionManager
+				if connManager != nil {
+					connection := connManager.GetReadyConnection()
+					if connection != nil {
+						// Safely call Speaking with panic protection
+						func() {
+							defer func() {
+								if r := recover(); r != nil {
+									dd.Bridge.Logger.Error("DISCORD_SEND", fmt.Sprintf("Panic setting speaking status: %v", r))
+								}
+							}()
+							if err := connection.Speaking(true); err != nil {
+								dd.Bridge.Logger.Error("DISCORD_SEND", fmt.Sprintf("Error setting speaking status to true: %v", err))
+							}
+						}()
 					} else {
-						dd.Bridge.Logger.Error("DISCORD_SEND", "Discord voice connection is nil when trying to set speaking status")
+						dd.Bridge.Logger.Debug("DISCORD_SEND", "Discord connection not available for speaking status")
 					}
-					done <- true
-				}()
-				select {
-				case <-done:
-				case <-time.After(5 * time.Second):
-					dd.Bridge.Logger.Error("DISCORD_SEND", "Discord speaking timeout")
-					cancel()
-					return
-				case <-ctx.Done():
-					return
 				}
+
 				streaming = true
 			}
 
@@ -181,93 +167,76 @@ func (dd *DiscordDuplex) discordSendPCM(ctx context.Context, cancel context.Canc
 			opus, err := opusEncoder.Encode(append(r1, r2...), frameSize, maxBytes)
 			if err != nil {
 				OnError("Encoding Error", err)
+
 				continue
 			}
 
 			internalSend(opus)
-
-		} else {
-			if streaming {
-				// Check to see if there is a short speaking cycle.
-				// It is possible that short speaking cycle is the result of a short input to mumble (Not a problem). ie a quick tap of push to talk button.
-				// Or when timing delays are introduced via network, hardware or kernel delays (Problem).
-				// The problem delays result in choppy or stuttering sounds, especially when the silence frames are introduced into the opus frames below.
-				// Multiple short cycle delays can result in a discord rate limiter being trigger due to of multiple JSON speaking/not-speaking state changes
-				if time.Since(speakingStart).Milliseconds() < 50 {
-					dd.Bridge.Logger.Warn("DISCORD_SEND", "Short Mumble to Discord speaking cycle. Consider increasing the size of the to Discord jitter buffer.")
-				}
-
-				// Send silence as suggested by Discord Documentation.
-				// We want to do this after alerting the user of possible short speaking cycles
-				for i := 0; i < 5; i++ {
-					internalSend(opusSilence)
-					// promTimerDiscordSend.Observe(float64(dd.discordSendSleepTick.SleepNextTarget(ctx, true)))
-					promTimerDiscordSend.Observe(float64(dd.discordSendSleepTick.SleepNextTarget(ctx, false)))
-
-				}
-
-				if dd.Bridge.DiscordVoice != nil {
-					if err := dd.Bridge.DiscordVoice.Speaking(false); err != nil {
-						dd.Bridge.Logger.Error("DISCORD_SEND", fmt.Sprintf("Error setting speaking status to false: %v", err))
-					}
-				} else {
-					dd.Bridge.Logger.Error("DISCORD_SEND", "Discord voice connection is nil when trying to set speaking status to false")
-				}
-				streaming = false
+		} else if streaming {
+			// Check to see if there is a short speaking cycle.
+			// It is possible that short speaking cycle is the result of a short input to mumble (Not a problem). ie a quick tap of push to talk button.
+			// Or when timing delays are introduced via network, hardware or kernel delays (Problem).
+			// The problem delays result in choppy or stuttering sounds, especially when the silence frames are introduced into the opus frames below.
+			// Multiple short cycle delays can result in a discord rate limiter being trigger due to of multiple JSON speaking/not-speaking state changes
+			if time.Since(speakingStart).Milliseconds() < shortSpeakingThreshold {
+				dd.Bridge.Logger.Warn("DISCORD_SEND", "Short Mumble to Discord speaking cycle. Consider increasing the size of the to Discord jitter buffer.")
 			}
+
+			// Send silence as suggested by Discord Documentation.
+			// We want to do this after alerting the user of possible short speaking cycles
+			for range silenceFrameCount {
+				internalSend(opusSilence)
+				promTimerDiscordSend.Observe(float64(dd.discordSendSleepTick.SleepNextTarget(ctx, false)))
+			}
+
+			// Set speaking to false safely
+			connManager := dd.Bridge.DiscordVoiceConnectionManager
+			if connManager != nil {
+				connection := connManager.GetReadyConnection()
+				if connection != nil {
+					// Safely call Speaking with panic protection
+					func() {
+						defer func() {
+							if r := recover(); r != nil {
+								dd.Bridge.Logger.Error("DISCORD_SEND", fmt.Sprintf("Panic setting speaking status: %v", r))
+							}
+						}()
+						if err := connection.Speaking(false); err != nil {
+							dd.Bridge.Logger.Error("DISCORD_SEND", fmt.Sprintf("Error setting speaking status to false: %v", err))
+						}
+					}()
+				}
+			}
+			streaming = false
 		}
 	}
 }
 
 // ReceivePCM will receive on the the Discordgo OpusRecv channel and decode
 // the opus audio into PCM then send it on the provided channel.
-func (dd *DiscordDuplex) discordReceivePCM(ctx context.Context, cancel context.CancelFunc) {
+func (dd *DiscordDuplex) discordReceivePCM(ctx context.Context) {
 	var err error
 
 	lastReady := true
-	var readyTimeout *time.Timer
-
-	var zeros [480]int16
-	for i := 0; i < 480; i++ {
-		zeros[i] = 0
-	}
 
 	for {
-		if dd.Bridge.DiscordVoice == nil {
+		// Get opus channels - this atomically checks connection state, readiness, and channel availability
+		_, opusRecv, connectionReady := dd.Bridge.DiscordVoiceConnectionManager.GetOpusChannels()
+		if !connectionReady || opusRecv == nil {
 			if lastReady {
-				OnError("Discord voice connection is nil", nil)
-				readyTimeout = time.AfterFunc(30*time.Second, func() {
-					dd.Bridge.Logger.Debug("DISCORD_RECEIVE", "Set ready timeout")
-					cancel()
-				})
+				dd.Bridge.Logger.Debug("DISCORD_RECEIVE", "Discord connection not ready for receiving")
 				lastReady = false
 			}
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(100 * time.Millisecond):
-				continue
-			}
-		}
-		
-		dd.Bridge.DiscordVoice.RLock()
-		if !dd.Bridge.DiscordVoice.Ready || dd.Bridge.DiscordVoice.OpusRecv == nil {
-			if lastReady {
-				OnError(fmt.Sprintf("Discordgo not to receive opus packets. %+v : %+v", dd.Bridge.DiscordVoice.Ready, dd.Bridge.DiscordVoice.OpusSend), nil)
-				readyTimeout = time.AfterFunc(30*time.Second, func() {
-					dd.Bridge.Logger.Debug("DISCORD_RECEIVE", "Set ready timeout")
-					cancel()
-				})
-				lastReady = false
-			}
-			dd.Bridge.DiscordVoice.RUnlock()
+			time.Sleep(connectionCheckInterval * time.Millisecond)
+
 			continue
-		} else if !lastReady {
-			dd.Bridge.Logger.Info("DISCORD_RECEIVE", "Discordgo ready to receive packets")
-			lastReady = true
-			readyTimeout.Stop()
 		}
-		dd.Bridge.DiscordVoice.RUnlock()
+
+		// Connection is ready for receiving
+		if !lastReady {
+			dd.Bridge.Logger.Info("DISCORD_RECEIVE", "Discord ready to receive packets")
+			lastReady = true
+		}
 
 		var ok bool
 		var p *discordgo.Packet
@@ -275,12 +244,18 @@ func (dd *DiscordDuplex) discordReceivePCM(ctx context.Context, cancel context.C
 		select {
 		case <-ctx.Done():
 			dd.Bridge.Logger.Info("DISCORD_RECEIVE", "Stopping Discord receive PCM")
+
 			return
-		case p, ok = <-dd.Bridge.DiscordVoice.OpusRecv:
+		case p, ok = <-opusRecv:
+			// Process packet normally
+		case <-time.After(100 * time.Millisecond):
+			// Timeout - loop back to re-check connection status and get fresh channels
+			continue
 		}
 
 		if !ok {
 			dd.Bridge.Logger.Debug("DISCORD_RECEIVE", "Opus not ok")
+
 			continue
 		}
 
@@ -292,10 +267,12 @@ func (dd *DiscordDuplex) discordReceivePCM(ctx context.Context, cancel context.C
 			newStream.pcm = make(chan []int16, 100)
 			newStream.receiving = false
 			newStream.streaming = false
+			newStream.lastActivity = time.Now()
 			newStream.decoder, err = gopus.NewDecoder(48000, 1) // Decode into mono
 			if err != nil {
 				OnError("error creating opus decoder", err)
 				dd.discordMutex.Unlock()
+
 				continue
 			}
 
@@ -303,17 +280,15 @@ func (dd *DiscordDuplex) discordReceivePCM(ctx context.Context, cancel context.C
 		}
 
 		s := dd.fromDiscordMap[p.SSRC]
+		s.lastActivity = time.Now() // Update activity timestamp
 
 		deltaT := int(p.Timestamp - s.lastTimeStamp)
 		if p.Sequence-s.lastSequence != 1 {
 			s.decoder.ResetState()
 		}
 
-		// oldReceiving := s.receiving
-
 		if !s.receiving || deltaT < 1 || deltaT > 960*10 {
 			// First packet assume deltaT
-			// fmt.Println("replacing", deltaT, 960)
 			deltaT = 960
 			s.receiving = true
 		}
@@ -327,16 +302,15 @@ func (dd *DiscordDuplex) discordReceivePCM(ctx context.Context, cancel context.C
 		p.PCM, err = s.decoder.Decode(p.Opus, deltaT, false)
 		if err != nil {
 			OnError("Error decoding opus data", err)
+
 			continue
 		}
-
-		// fmt.Println(p.SSRC, p.Type, deltaT, p.Sequence, p.Sequence-s.lastSequence, oldReceiving, s.streaming, len(p.Opus), len(p.PCM))
 
 		promDiscordReceivedPackets.Inc()
 
 		// Push data into pcm channel in 10ms chunks of mono pcm data
 		dd.discordMutex.Lock()
-		for l := 0; l < len(p.PCM); l = l + 480 {
+		for l := 0; l < len(p.PCM); l += 480 {
 			var next []int16
 			u := l + 480
 
@@ -370,13 +344,11 @@ func (dd *DiscordDuplex) fromDiscordMixer(ctx context.Context, toMumble chan<- g
 		select {
 		case <-ctx.Done():
 			dd.Bridge.Logger.Info("DISCORD_MIXER", "Stopping from Discord mixer")
+
 			return
 		default:
 		}
 
-		// if didn't send audio try to pause
-		// promTimerDiscordMixer.Observe(float64(dd.discordReceiveSleepTick.SleepNextTarget(ctx, !sendAudio)))
-		// TODO Additional pause testing
 		promTimerDiscordMixer.Observe(float64(dd.discordReceiveSleepTick.SleepNextTarget(ctx, false)))
 
 		dd.discordMutex.Lock()
@@ -405,13 +377,11 @@ func (dd *DiscordDuplex) fromDiscordMixer(ctx context.Context, toMumble chan<- g
 				streamingCount++
 				x1 := (<-dd.fromDiscordMap[i].pcm)
 				internalMixerArr = append(internalMixerArr, x1)
-			} else {
-				if dd.fromDiscordMap[i].streaming {
-					x := dd.fromDiscordMap[i]
-					x.streaming = false
-					x.receiving = false // toggle this here is not optimal but there is no better location atm.
-					dd.fromDiscordMap[i] = x
-				}
+			} else if dd.fromDiscordMap[i].streaming {
+				x := dd.fromDiscordMap[i]
+				x.streaming = false
+				x.receiving = false // toggle this here is not optimal but there is no better location atm.
+				dd.fromDiscordMap[i] = x
 			}
 		}
 
@@ -421,16 +391,10 @@ func (dd *DiscordDuplex) fromDiscordMixer(ctx context.Context, toMumble chan<- g
 		dd.discordMutex.Unlock()
 
 		mumbleTimeoutSend := func(outBuf []int16) {
-			timeout := make(chan bool, 1)
-			go func() {
-				time.Sleep(10 * time.Millisecond)
-				timeout <- true
-			}()
-
 			select {
 			case toMumble <- outBuf:
 				promSentMumblePackets.Inc()
-			case <-timeout:
+			case <-time.After(10 * time.Millisecond):
 				dd.Bridge.Logger.Debug("DISCORD_MIXER", "To Mumble timeout. Dropping packet")
 				promToMumbleDropped.Inc()
 			}
@@ -450,16 +414,66 @@ func (dd *DiscordDuplex) fromDiscordMixer(ctx context.Context, toMumble chan<- g
 		} else if !sendAudio && toMumbleStreaming {
 			// Send opus silence to mumble
 			// See note above about jitter buffer warning
-			if time.Since(speakingStart).Milliseconds() < 50 {
+			if time.Since(speakingStart).Milliseconds() < shortSpeakingThreshold {
 				dd.Bridge.Logger.Warn("DISCORD_MIXER", fmt.Sprintf("Short Discord to Mumble speaking cycle. Consider increasing the size of the to Mumble jitter buffer. Duration: %d ms", time.Since(speakingStart).Milliseconds()))
 			}
 
-			for i := 0; i < 5; i++ {
+			for range silenceFrameCount {
 				mumbleTimeoutSend(mumbleSilence)
 				promTimerDiscordMixer.Observe(float64(dd.discordReceiveSleepTick.SleepNextTarget(ctx, false)))
 			}
 
 			toMumbleStreaming = false
+		}
+	}
+}
+
+// StartCleanup starts the background goroutine that removes stale streams from fromDiscordMap
+func (dd *DiscordDuplex) StartCleanup(ctx context.Context) {
+	cleanupCtx, cancel := context.WithCancel(ctx)
+	dd.cleanupCancel = cancel
+	go dd.cleanupStaleStreams(cleanupCtx)
+}
+
+// StopCleanup stops the cleanup goroutine
+func (dd *DiscordDuplex) StopCleanup() {
+	if dd.cleanupCancel != nil {
+		dd.cleanupCancel()
+		dd.cleanupCancel = nil
+	}
+}
+
+// cleanupStaleStreams periodically removes entries from fromDiscordMap that have been inactive
+func (dd *DiscordDuplex) cleanupStaleStreams(ctx context.Context) {
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+
+	const staleThreshold = 30 * time.Second
+
+	for {
+		select {
+		case <-ctx.Done():
+			dd.Bridge.Logger.Debug("DISCORD_CLEANUP", "Stopping stale stream cleanup")
+
+			return
+		case <-ticker.C:
+			dd.discordMutex.Lock()
+			now := time.Now()
+			removed := 0
+			for ssrc, stream := range dd.fromDiscordMap {
+				if now.Sub(stream.lastActivity) > staleThreshold && !stream.streaming {
+					// Close the PCM channel before removing
+					close(stream.pcm)
+					delete(dd.fromDiscordMap, ssrc)
+					removed++
+				}
+			}
+			mapSize := len(dd.fromDiscordMap)
+			dd.discordMutex.Unlock()
+
+			if removed > 0 {
+				dd.Bridge.Logger.Debug("DISCORD_CLEANUP", fmt.Sprintf("Removed %d stale streams, %d remaining", removed, mapSize))
+			}
 		}
 	}
 }

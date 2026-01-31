@@ -22,6 +22,14 @@ var (
 	date    string
 )
 
+const (
+	// Command modes
+	commandModeBoth    = "both"
+	commandModeMumble  = "mumble"
+	commandModeDiscord = "discord"
+	commandModeNone    = "none"
+)
+
 func main() {
 	var err error
 
@@ -47,7 +55,6 @@ func main() {
 	discordCID := flag.String("discord-cid", lookupEnvOrString("DISCORD_CID", ""), "DISCORD_CID, discord cid, required")
 	discordSendBuffer := flag.Int("to-discord-buffer", lookupEnvOrInt("TO_DISCORD_BUFFER", 50), "TO_DISCORD_BUFFER, Jitter buffer from Mumble to Discord to absorb timing issues related to network, OS and hardware quality, increments of 10ms")
 	discordTextMode := flag.String("discord-text-mode", lookupEnvOrString("DISCORD_TEXT_MODE", "channel"), "DISCORD_TEXT_MODE, [channel, user, disabled] determine where discord text messages are sent")
-	discordDisableBotStatus := flag.Bool("discord-disable-bot-status", lookupEnvOrBool("DISCORD_DISABLE_BOT_STATUS", false), "DISCORD_DISABLE_BOT_STATUS, disable updating bot status")
 	chatBridge := flag.Bool("chat-bridge", lookupEnvOrBool("CHAT_BRIDGE", false), "CHAT_BRIDGE, enable chat bridge")
 	command := flag.String("command", lookupEnvOrString("COMMAND", "mumble-discord"), "COMMAND, command phrase '!mumble-discord help' to control the bridge via text channels")
 	commandMode := flag.String("command-mode", lookupEnvOrString("COMMAND_MODE", "both"), "COMMAND_MODE, [both, mumble, discord, none] determine which side of the bridge will respond to commands")
@@ -80,10 +87,10 @@ func main() {
 	if *discordTextMode != "channel" && *discordTextMode != "user" && *discordTextMode != "disabled" {
 		log.Fatalln("invalid discord text mode set")
 	}
-	if *commandMode != "both" && *commandMode != "mumble" && *commandMode != "discord" && *commandMode != "none" {
+	if *commandMode != commandModeBoth && *commandMode != commandModeMumble && *commandMode != commandModeDiscord && *commandMode != commandModeNone {
 		log.Fatalln("invalid command mode set")
 	}
-	if *commandMode != "none" {
+	if *commandMode != commandModeNone {
 		if *command == "" {
 			log.Fatalln("missing command")
 		}
@@ -105,14 +112,17 @@ func main() {
 		if err != nil {
 			log.Fatal("could not create CPU profile: ", err)
 		}
+		if err := pprof.StartCPUProfile(f); err != nil {
+			if closeErr := f.Close(); closeErr != nil {
+				log.Printf("Error closing CPU profile file: %v", closeErr)
+			}
+			log.Fatal("could not start CPU profile: ", err)
+		}
 		defer func() {
 			if err := f.Close(); err != nil {
 				log.Println("could not close CPU profile: ", err)
 			}
 		}()
-		if err := pprof.StartCPUProfile(f); err != nil {
-			log.Fatal("could not start CPU profile: ", err)
-		}
 		defer pprof.StopCPUProfile()
 	}
 
@@ -128,26 +138,29 @@ func main() {
 	// check if chat bridge is enabled
 	log.Printf("Chat bridge settings - mumbleDisableText: %v, discordTextMode: %s, chatBridge flag: %v",
 		*mumbleDisableText, *discordTextMode, *chatBridge)
-	
+
 	// Override chatBridge if conditions aren't met
-	if *mumbleDisableText {
+	switch {
+	case *mumbleDisableText:
 		log.Println("Warning: Chat bridge disabled because mumbleDisableText is set to true")
 		*chatBridge = false
-	} else if *discordTextMode != "channel" {
+	case *discordTextMode != "channel":
 		log.Printf("Warning: Chat bridge disabled because discordTextMode is '%s' instead of 'channel'", *discordTextMode)
 		*chatBridge = false
-	} else if !*chatBridge {
+	}
+
+	if !*chatBridge {
 		log.Println("Warning: Chat bridge disabled because chatBridge flag is set to false")
 	} else {
 		log.Println("Chat bridge is ENABLED")
 	}
-	
+
 	log.Printf("Final chat bridge status: %v", *chatBridge)
 
-	var discordStartStreamingCount = int(math.Round(float64(*discordSendBuffer) / 10.0))
+	discordStartStreamingCount := int(math.Round(float64(*discordSendBuffer) / 10.0))
 	log.Println("To Discord Jitter Buffer: ", discordStartStreamingCount*10, " ms")
 
-	var mumbleStartStreamCount = int(math.Round(float64(*mumbleSendBuffer) / 10.0))
+	mumbleStartStreamCount := int(math.Round(float64(*mumbleSendBuffer) / 10.0))
 	log.Println("To Mumble Jitter Buffer: ", mumbleStartStreamCount*10, " ms")
 
 	// create a command flag for each command mode
@@ -155,16 +168,16 @@ func main() {
 	var mumbleCommand bool
 
 	switch *commandMode {
-	case "both":
+	case commandModeBoth:
 		discordCommand = true
 		mumbleCommand = true
-	case "mumble":
+	case commandModeMumble:
 		discordCommand = false
 		mumbleCommand = true
-	case "discord":
+	case commandModeDiscord:
 		discordCommand = true
 		mumbleCommand = false
-	case "none":
+	case commandModeNone:
 		discordCommand = false
 		mumbleCommand = false
 	}
@@ -174,12 +187,18 @@ func main() {
 	// Create shared Discord client
 	discordClient, err := bridgelib.NewSharedDiscordClient(*discordToken, nil)
 	if err != nil {
-		log.Fatalln("Failed to create Discord client:", err)
+		if *cpuprofile != "" {
+			pprof.StopCPUProfile()
+		}
+		log.Fatalln("Failed to create Discord client:", err) //nolint:gocritic // exitAfterDefer: StopCPUProfile is called manually before exit
 	}
-	
+
 	// Connect to Discord
 	err = discordClient.Connect()
 	if err != nil {
+		if *cpuprofile != "" {
+			pprof.StopCPUProfile()
+		}
 		log.Fatalln("Failed to connect to Discord:", err)
 	}
 	defer func() {
@@ -187,58 +206,63 @@ func main() {
 			log.Printf("Error disconnecting from Discord: %v", err)
 		}
 	}()
-	
+
 	// Create bridge configuration
 	config := &bridgelib.BridgeConfig{
-		Command:                 *command,
-		MumbleAddress:           *mumbleAddr,
-		MumblePort:              *mumblePort,
-		MumbleUsername:          *mumbleUsername,
-		MumblePassword:          *mumblePassword,
-		MumbleChannel:           *mumbleChannel,
-		MumbleSendBuffer:        *mumbleSendBuffer,
-		MumbleDisableText:       *mumbleDisableText,
-		MumbleCommand:           mumbleCommand,
-		MumbleBotFlag:           *mumbleBotFlag,
-		MumbleInsecure:          *mumbleInsecure,
-		MumbleCertificate:       *mumbleCertificate,
-		DiscordGID:              *discordGID,
-		DiscordCID:              *discordCID,
-		DiscordSendBuffer:       *discordSendBuffer,
-		DiscordTextMode:         *discordTextMode,
-		DiscordDisableBotStatus: *discordDisableBotStatus,
-		DiscordCommand:          discordCommand,
-		ChatBridge:              *chatBridge,
-		Mode:                    *mode,
-		Version:                 version,
+		Command:           *command,
+		MumbleAddress:     *mumbleAddr,
+		MumblePort:        *mumblePort,
+		MumbleUsername:    *mumbleUsername,
+		MumblePassword:    *mumblePassword,
+		MumbleChannel:     *mumbleChannel,
+		MumbleSendBuffer:  *mumbleSendBuffer,
+		MumbleDisableText: *mumbleDisableText,
+		MumbleCommand:     mumbleCommand,
+		MumbleBotFlag:     *mumbleBotFlag,
+		MumbleInsecure:    *mumbleInsecure,
+		MumbleCertificate: *mumbleCertificate,
+		DiscordGID:        *discordGID,
+		DiscordCID:        *discordCID,
+		DiscordSendBuffer: *discordSendBuffer,
+		DiscordTextMode:   *discordTextMode,
+		DiscordCommand:    discordCommand,
+		ChatBridge:        *chatBridge,
+		Mode:              *mode,
+		Version:           version,
 	}
-	
+
 	// Create and start bridge instance
 	bridgeInstance, err := bridgelib.NewBridgeInstance("default", config, discordClient)
 	if err != nil {
+		if *cpuprofile != "" {
+			pprof.StopCPUProfile()
+		}
 		log.Fatalln("Failed to create bridge instance:", err)
 	}
-	
+
 	// Start metrics server if enabled
 	if *promEnable {
-		go bridge.StartPromServer(*promPort, nil) // Pass nil since we're using bridgelib
+		go bridge.StartPromServer(*promPort, bridgeInstance.State)
 	}
-	
+
 	// Set prometheus start time metric
 	bridge.PromApplicationStartTime.SetToCurrentTime()
-	
+
 	// Start the bridge
 	if err := bridgeInstance.Start(); err != nil {
+		if *cpuprofile != "" {
+			pprof.StopCPUProfile()
+		}
 		log.Fatalln("Failed to start bridge:", err)
 	}
-	
+
 	// Wait for termination signal
 	sc := make(chan os.Signal, 1)
 	signal.Notify(sc, syscall.SIGINT, syscall.SIGTERM, os.Interrupt)
 	<-sc
-	
+
 	log.Println("OS Signal. Bot shutting down")
-	
+
 	if err := bridgeInstance.Stop(); err != nil {
 		log.Println("Error stopping bridge:", err)
 	}

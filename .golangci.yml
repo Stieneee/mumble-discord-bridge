@@ -1,0 +1,207 @@
+# golangci-lint configuration for mumble-discord-bridge
+# Run with: golangci-lint run
+version: "2"
+
+run:
+  timeout: 5m
+  tests: true
+
+linters:
+  default: none
+  enable:
+    # Default linters
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    # Security & Safety
+    - gosec
+    - errorlint
+    # Code Quality
+    - gocritic
+    - revive
+    - misspell
+    - prealloc
+    # Data Race Prevention
+    - copyloopvar
+    - fatcontext
+    - reassign
+    # Style
+    - nlreturn
+    - whitespace
+    - godox
+    - goconst
+
+  settings:
+    errcheck:
+      check-type-assertions: true
+      check-blank: true
+
+    gosec:
+      includes:
+        - G101
+        - G102
+        - G103
+        - G104
+        - G106
+        - G107
+        - G108
+        - G401
+        - G402
+        - G403
+        - G404
+        - G501
+        - G502
+        - G503
+        - G504
+        - G505
+        - G601
+
+    errorlint:
+      errorf: true
+      asserts: true
+      comparison: true
+
+    gocritic:
+      enabled-checks:
+        # Only list checks that are NOT enabled by default
+        - nilValReturn
+        - rangeValCopy
+        - unlabelStmt
+        - unnamedResult
+        - emptyFallthrough
+        - emptyStringTest
+        - equalFold
+        - hexLiteral
+        - httpNoBody
+        - initClause
+        - methodExprCall
+        - octalLiteral
+        - rangeExprCopy
+        - stringXbytes
+        - typeAssertChain
+        - typeUnparen
+        - yodaStyleExpr
+        - appendCombine
+        - hugeParam
+        - indexAlloc
+        - preferDecodeRune
+        - preferFprint
+        - preferStringWriter
+        - preferWriteByte
+        - sliceClear
+
+    revive:
+      enable-all-rules: false
+      rules:
+        - name: blank-imports
+        - name: context-as-argument
+        - name: context-keys-type
+        - name: dot-imports
+        - name: empty-block
+        - name: error-naming
+        - name: error-return
+        - name: error-strings
+        - name: errorf
+        - name: exported
+        - name: increment-decrement
+        - name: indent-error-flow
+        - name: package-comments
+        - name: range
+        - name: receiver-naming
+        - name: redefines-builtin-id
+        - name: superfluous-else
+        - name: time-naming
+        - name: unexported-return
+        - name: unreachable-code
+        - name: unused-parameter
+        - name: var-declaration
+        - name: var-naming
+
+    misspell:
+      locale: US
+
+    prealloc:
+      simple: true
+      range-loops: true
+      for-loops: true
+
+    nlreturn:
+      block-size: 1
+
+    whitespace:
+      multi-if: true
+      multi-func: true
+
+    godox:
+      keywords:
+        - TODO
+        - FIXME
+        - BUG
+        - HACK
+        - OPTIMIZE
+        - XXX
+
+    goconst:
+      min-len: 3
+      min-occurrences: 3
+      match-constant: true
+      numbers: false
+
+  exclusions:
+    paths:
+      - vendor/
+      - .git/
+      - .github/
+
+    rules:
+      - path: _test\.go
+        linters:
+          - goconst
+          - nlreturn
+
+      - path: example/
+        linters:
+          - gosec
+          - errorlint
+
+      - path: \.pb\.go
+        linters:
+          - gosec
+          - gocritic
+          - revive
+
+      - text: 'TODO|FIXME'
+        linters:
+          - godox
+
+      - path: _test\.go
+        linters:
+          - revive
+        text: 'exported|package-comments'
+
+formatters:
+  enable:
+    - gofumpt
+
+  settings:
+    gofumpt:
+      extra-rules: true
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+  fix: false
+
+severity:
+  default: error
+  rules:
+    - linters:
+        - godox
+      severity: warning
+    - linters:
+        - goconst
+        - nlreturn
+        - whitespace
+      severity: info
