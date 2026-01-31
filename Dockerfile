@@ -1,6 +1,6 @@
 # Use a two-stage build to reduce the complexity of building for alpine
 
-FROM golang:1.24 AS builder
+FROM golang:1.25 AS builder
 WORKDIR /go/src/app 
 COPY . .
 RUN apt update && apt install -y libopus-dev
