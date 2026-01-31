@@ -35,7 +35,7 @@ jobs:
         run: go-licenses save ./cmd/mumble-discord-bridge --force --save_path="./LICENSES" && zip -r -9 LICENSES.zip ./LICENSES
 
       - name: Run GoReleaser Build
-        uses: goreleaser/goreleaser-action@v4
+        uses: goreleaser/goreleaser-action@v6
         with:
           version: latest
           args: build --clean --skip=validate
