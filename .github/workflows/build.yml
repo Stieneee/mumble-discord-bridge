@@ -1,8 +1,9 @@
 name: "Build"
+
 permissions:
   contents: read
   pull-requests: write
-  packages: write
+
 on:
   push:
     branches: [main]
@@ -10,32 +11,22 @@ on:
     branches: [main]
 
 jobs:
-  goreleaser:
+  build:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
 
-      - name: Install libopus-dev zip
-        run: sudo apt update && sudo apt-get -y install libopus-dev zip
+      - name: Install libopus-dev
+        run: sudo apt update && sudo apt-get -y install libopus-dev
 
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
           go-version-file: "go.mod"
 
-      - name: go-license install
-        run: go install github.com/google/go-licenses@latest
+      - name: Build
+        run: make mumble-discord-bridge
 
-      - name: go-license save
-        run: go-licenses save ./cmd/mumble-discord-bridge --force --save_path="./LICENSES" && zip -r -9 LICENSES.zip ./LICENSES
-
-      - name: Run GoReleaser Build
-        uses: goreleaser/goreleaser-action@v6
-        with:
-          version: "~> v2"
-          args: build --clean --skip=validate
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Verify binary
+        run: ./mumble-discord-bridge --help

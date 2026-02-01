@@ -1,27 +1,32 @@
-# Use a two-stage build to reduce the complexity of building for alpine
+# Build stage - Alpine for musl consistency
+FROM golang:1.25-alpine AS builder
 
-FROM golang:1.25 AS builder
 WORKDIR /go/src/app
 COPY . .
-RUN apt update && apt install -y libopus-dev
-RUN go install github.com/goreleaser/goreleaser/v2@latest
-RUN go install github.com/google/go-licenses@latest
-RUN goreleaser build --skip=validate --single-target
-RUN go-licenses save ./cmd/mumble-discord-bridge --force --save_path="./dist/LICENSES"
 
-FROM alpine:latest AS final
+# Install build dependencies
+RUN apk add --no-cache git make opus-dev gcc musl-dev
+
+# Build with version info
+ARG VERSION=dev
+ARG COMMIT=unknown
+ARG DATE=unknown
+RUN CGO_ENABLED=1 go build -tags=netgo \
+    -ldflags="-s -w -X main.version=${VERSION} -X main.commit=${COMMIT} -X main.date=${DATE}" \
+    -o /mumble-discord-bridge \
+    ./cmd/mumble-discord-bridge
+
+# Generate licenses
+RUN go install github.com/google/go-licenses@latest && \
+    go-licenses save ./cmd/mumble-discord-bridge --force --save_path="/LICENSES"
+
+# Runtime stage - Alpine
+FROM alpine:latest
+
 WORKDIR /opt/
-RUN apk add opus
+RUN apk add --no-cache opus
 
-ARG TARGETARCH
-RUN if [ "$TARGETARCH" = "amd64" ]; then \
-      mkdir /lib64 && ln -s /lib/libc.musl-x86_64.so.1 /lib64/ld-linux-x86-64.so.2; \
-    elif [ "$TARGETARCH" = "arm64" ]; then \
-      mkdir -p /lib && ln -s /lib/ld-musl-aarch64.so.1 /lib/ld-linux-aarch64.so.1 2>/dev/null || true; \
-    fi
+COPY --from=builder /LICENSES ./LICENSES
+COPY --from=builder /mumble-discord-bridge .
 
-COPY --from=builder /go/src/app/dist/LICENSES .
-COPY --from=builder /go/src/app/dist/mumble-discord-bridge_linux_*/mumble-discord-bridge .
-
-# Entry Point
 CMD ["/opt/mumble-discord-bridge"]

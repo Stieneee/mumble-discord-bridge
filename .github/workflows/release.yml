@@ -37,31 +37,92 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Install cross-compilation dependencies
+      - name: Get version info
+        id: version
         run: |
-          sudo apt update
-          sudo apt-get -y install \
-            libopus-dev \
-            gcc-aarch64-linux-gnu \
-            libc6-dev-arm64-cross \
-            zip
+          echo "version=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+          echo "commit=${GITHUB_SHA}" >> $GITHUB_OUTPUT
+          echo "date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> $GITHUB_OUTPUT
 
-          # Add arm64 architecture and install arm64 libopus
-          sudo dpkg --add-architecture arm64
-          sudo sed -i 's/^deb /deb [arch=amd64] /' /etc/apt/sources.list
-          echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports $(lsb_release -cs) main universe" | sudo tee /etc/apt/sources.list.d/arm64.list
-          sudo apt update
-          sudo apt-get -y install libopus-dev:arm64
-
-      - name: Set up Go
-        uses: actions/setup-go@v6
+      - name: Build amd64 binary in Docker
+        uses: docker/build-push-action@v6
         with:
-          go-version-file: "go.mod"
+          context: .
+          file: Dockerfile.build
+          platforms: linux/amd64
+          build-args: |
+            VERSION=${{ steps.version.outputs.version }}
+            COMMIT=${{ steps.version.outputs.commit }}
+            DATE=${{ steps.version.outputs.date }}
+          outputs: type=local,dest=./dist/linux-amd64
+          cache-from: type=gha,scope=build-amd64
+          cache-to: type=gha,mode=max,scope=build-amd64
 
-      - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@v6
+      - name: Build arm64 binary in Docker
+        uses: docker/build-push-action@v6
         with:
-          version: "~> v2"
-          args: release --clean
+          context: .
+          file: Dockerfile.build
+          platforms: linux/arm64
+          build-args: |
+            VERSION=${{ steps.version.outputs.version }}
+            COMMIT=${{ steps.version.outputs.commit }}
+            DATE=${{ steps.version.outputs.date }}
+          outputs: type=local,dest=./dist/linux-arm64
+          cache-from: type=gha,scope=build-arm64
+          cache-to: type=gha,mode=max,scope=build-arm64
+
+      - name: Prepare release artifacts
+        run: |
+          # Create release tarballs
+          mkdir -p ./dist/release
+
+          # amd64
+          cd ./dist/linux-amd64
+          tar -czvf ../release/mumble-discord-bridge_${{ steps.version.outputs.version }}_linux_amd64.tar.gz mumble-discord-bridge LICENSES
+          cd ../..
+
+          # arm64
+          cd ./dist/linux-arm64
+          tar -czvf ../release/mumble-discord-bridge_${{ steps.version.outputs.version }}_linux_arm64.tar.gz mumble-discord-bridge LICENSES
+          cd ../..
+
+          # Create checksums
+          cd ./dist/release
+          sha256sum *.tar.gz > checksums.txt
+          cat checksums.txt
+
+      - name: Build and push Docker images
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: |
+            VERSION=${{ steps.version.outputs.version }}
+            COMMIT=${{ steps.version.outputs.commit }}
+            DATE=${{ steps.version.outputs.date }}
+          tags: |
+            stieneee/mumble-discord-bridge:latest
+            stieneee/mumble-discord-bridge:${{ steps.version.outputs.version }}
+            ghcr.io/stieneee/mumble-discord-bridge:latest
+            ghcr.io/stieneee/mumble-discord-bridge:${{ steps.version.outputs.version }}
+          labels: |
+            org.opencontainers.image.created=${{ steps.version.outputs.date }}
+            org.opencontainers.image.title=mumble-discord-bridge
+            org.opencontainers.image.revision=${{ steps.version.outputs.commit }}
+            org.opencontainers.image.version=${{ steps.version.outputs.version }}
+            org.opencontainers.image.source=https://github.com/stieneee/mumble-discord-bridge
+          cache-from: type=gha,scope=docker
+          cache-to: type=gha,mode=max,scope=docker
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ./dist/release/*.tar.gz
+            ./dist/release/checksums.txt
+          generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,28 @@
+# Dockerfile for building binaries - used by release workflow
+# Builds the binary natively for the target platform
+
+FROM golang:1.25 AS builder
+
+ARG VERSION=dev
+ARG COMMIT=unknown
+ARG DATE=unknown
+
+WORKDIR /go/src/app
+COPY . .
+
+RUN apt update && apt install -y libopus-dev
+
+# Build the binary with version info
+RUN CGO_ENABLED=1 go build -tags=netgo \
+    -ldflags="-s -w -X main.version=${VERSION} -X main.commit=${COMMIT} -X main.date=${DATE} -X main.builtBy=docker" \
+    -o /mumble-discord-bridge \
+    ./cmd/mumble-discord-bridge
+
+# Generate licenses
+RUN go install github.com/google/go-licenses@latest && \
+    go-licenses save ./cmd/mumble-discord-bridge --force --save_path="/LICENSES"
+
+# Output stage - just the binary and licenses
+FROM scratch AS export
+COPY --from=builder /mumble-discord-bridge /mumble-discord-bridge
+COPY --from=builder /LICENSES /LICENSES

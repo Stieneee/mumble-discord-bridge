@@ -1,35 +1,42 @@
 GOFILES=$(shell find ./ -type f -name '*.go')
-LATEST_TAG=$(shell git describe --tags `git rev-list --tags --max-count=1`)
+VERSION=$(shell git describe --tags --always --dirty)
+COMMIT=$(shell git rev-parse --short HEAD)
+DATE=$(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+LDFLAGS=-s -w -X main.version=$(VERSION) -X main.commit=$(COMMIT) -X main.date=$(DATE)
 
+# Build binary
 mumble-discord-bridge: $(GOFILES)
-	goreleaser build --clean --snapshot
+	CGO_ENABLED=1 go build -tags=netgo -ldflags="$(LDFLAGS)" -o mumble-discord-bridge ./cmd/mumble-discord-bridge
 
-release: $(GOFILES)
-	goreleaser release --clean
-
+# Build and run for development
 dev: $(GOFILES)
-	goreleaser build --clean --single-target --snapshot && ./dist/mumble-discord-bridge_linux_amd64_v1/mumble-discord-bridge
+	CGO_ENABLED=1 go build -tags=netgo -ldflags="$(LDFLAGS)" -o mumble-discord-bridge ./cmd/mumble-discord-bridge && ./mumble-discord-bridge
 
+# Run with race detector (development)
 dev-race: $(GOFILES)
 	go run -race ./cmd/mumble-discord-bridge
 
+# Build with profiling support
 dev-profile: $(GOFILES)
-	goreleaser build --skip=validate --clean --single-target --snapshot && ./dist/mumble-discord-bridge_linux_amd64_v1/mumble-discord-bridge -cpuprofile cpu.prof
+	CGO_ENABLED=1 go build -tags=netgo -ldflags="$(LDFLAGS)" -o mumble-discord-bridge ./cmd/mumble-discord-bridge && ./mumble-discord-bridge -cpuprofile cpu.prof
 
-test-chart: SHELL:=/bin/bash 
-test-chart:
-	go test ./test &
-	until pidof test.test; do continue; done;
-	psrecord --plot docs/test-cpu-memory.png $$(pidof mumble-discord-bridge.test)
+# Generate licenses
+licenses:
+	go install github.com/google/go-licenses@latest
+	go-licenses save ./cmd/mumble-discord-bridge --force --save_path="./LICENSES"
 
+# Run linter
 lint:
 	golangci-lint run
 
+# Format code
 format:
 	go fmt ./...
 
+# Clean build artifacts
 clean:
+	rm -f mumble-discord-bridge
 	rm -rf dist
 	rm -rf LICENSES.zip LICENSES
 
-.PHONY: mumble-discord-bridge release dev dev-profile dev-race test-chart clean lint format
+.PHONY: mumble-discord-bridge dev dev-profile dev-race licenses clean lint format
