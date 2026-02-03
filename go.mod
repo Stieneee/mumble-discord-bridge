@@ -9,7 +9,7 @@ require (
 	github.com/rs/zerolog v1.30.0
 	github.com/stieneee/gopus v0.0.0-20210424193312-6d10f6090335
 	github.com/stieneee/gumble v0.0.0-20240610021017-a3449ae7108c
-	github.com/stretchr/testify v1.10.0
+	github.com/stretchr/testify v1.11.1
 )
 
 require (
