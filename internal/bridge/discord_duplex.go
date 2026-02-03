@@ -18,7 +18,21 @@ const (
 	silenceFrameCount       = 5   // Number of silence frames to send after speaking
 	shortSpeakingThreshold  = 50  // Milliseconds - threshold for short speaking cycle warning
 	connectionCheckInterval = 100 // Milliseconds - sleep time when connection not ready
+	maxPLCPackets           = 10  // Maximum PLC frames to generate (prevents runaway on major discontinuity)
+	opusFrameSize           = 960 // Standard opus frame size (20ms at 48kHz)
+	pcmChunkSize            = 480 // PCM chunk size for 10ms at 48kHz sample rate
 )
+
+// sequenceGap calculates the number of lost packets between two sequence numbers,
+// handling uint16 wrap-around correctly.
+func sequenceGap(current, last uint16) int {
+	gap := int(current) - int(last)
+	if gap < 0 {
+		gap += 65536 // Handle wrap-around
+	}
+
+	return gap - 1 // gap of 1 means 0 lost packets
+}
 
 type fromDiscord struct {
 	decoder       *gopus.Decoder
@@ -282,26 +296,91 @@ func (dd *DiscordDuplex) discordReceivePCM(ctx context.Context) {
 		s := dd.fromDiscordMap[p.SSRC]
 		s.lastActivity = time.Now() // Update activity timestamp
 
-		deltaT := int(p.Timestamp - s.lastTimeStamp)
-		if p.Sequence-s.lastSequence != 1 {
-			s.decoder.ResetState()
+		// Skip non-audio packets: if timestamp is frozen but sequence advances,
+		// these are not standard opus audio frames (possibly redundancy/metadata).
+		// Real audio packets always advance the timestamp by the frame duration (960).
+		if s.receiving && p.Timestamp == s.lastTimeStamp && p.Sequence != s.lastSequence {
+			dd.Bridge.Logger.Debug("DISCORD_RECEIVE", fmt.Sprintf(
+				"Skipping frozen timestamp packet: seq=%d lastSeq=%d ts=%d SSRC=%d",
+				p.Sequence, s.lastSequence, p.Timestamp, p.SSRC))
+			s.lastSequence = p.Sequence
+			dd.fromDiscordMap[p.SSRC] = s
+			dd.discordMutex.Unlock()
+
+			continue
 		}
 
-		if !s.receiving || deltaT < 1 || deltaT > 960*10 {
-			// First packet assume deltaT
-			deltaT = 960
+		// Handle packet loss with PLC (Packet Loss Concealment)
+		if s.receiving {
+			lostCount := sequenceGap(p.Sequence, s.lastSequence)
+
+			if lostCount > 0 {
+				dd.Bridge.Logger.Debug("DISCORD_RECEIVE", fmt.Sprintf(
+					"Sequence gap detected: current=%d last=%d lostCount=%d SSRC=%d",
+					p.Sequence, s.lastSequence, lostCount, p.SSRC))
+			}
+
+			if lostCount > 0 && lostCount <= maxPLCPackets {
+				// Generate PLC frames for each lost packet
+				dd.Bridge.Logger.Debug("DISCORD_RECEIVE", fmt.Sprintf(
+					"Generating %d PLC frames for SSRC=%d", lostCount, p.SSRC))
+				for i := 0; i < lostCount; i++ {
+					plcPCM, plcErr := s.decoder.Decode(nil, opusFrameSize, false)
+					if plcErr != nil {
+						dd.Bridge.Logger.Debug("DISCORD_RECEIVE", "PLC decode error, resetting decoder")
+						s.decoder.ResetState()
+						s.receiving = false
+
+						break
+					}
+					// Push PLC audio in 10ms chunks (same as normal packets)
+					for l := 0; l < len(plcPCM); l += pcmChunkSize {
+						select {
+						case dd.fromDiscordMap[p.SSRC].pcm <- plcPCM[l : l+pcmChunkSize]:
+						default:
+							// Buffer full, skip remaining PLC frames
+						}
+					}
+					promDiscordPLCPackets.Inc()
+				}
+			} else if lostCount > maxPLCPackets {
+				// Major discontinuity (>200ms) - likely a new utterance, reset decoder
+				dd.Bridge.Logger.Debug("DISCORD_RECEIVE", fmt.Sprintf(
+					"Major discontinuity detected: lostCount=%d (>%d), resetting decoder for SSRC=%d",
+					lostCount, maxPLCPackets, p.SSRC))
+				s.decoder.ResetState()
+				s.receiving = false
+			}
+		}
+
+		// Handle first packet for this stream
+		if !s.receiving {
 			s.receiving = true
 		}
 
+		prevSeq := s.lastSequence
+		prevTS := s.lastTimeStamp
 		s.lastTimeStamp = p.Timestamp
 		s.lastSequence = p.Sequence
 
 		dd.fromDiscordMap[p.SSRC] = s
 		dd.discordMutex.Unlock()
 
-		p.PCM, err = s.decoder.Decode(p.Opus, deltaT, false)
+		// Always decode with standard frame size - opus packet header contains actual duration
+		p.PCM, err = s.decoder.Decode(p.Opus, opusFrameSize, false)
 		if err != nil {
-			OnError("Error decoding opus data", err)
+			dd.Bridge.Logger.Warn("DISCORD_RECEIVE", fmt.Sprintf(
+				"Opus decode error: %v | SSRC=%d seq=%d ts=%d opusLen=%d receiving=%v prevSeq=%d prevTS=%d",
+				err, p.SSRC, p.Sequence, p.Timestamp, len(p.Opus), s.receiving, prevSeq, prevTS))
+
+			// Reset decoder to recover from corrupted state
+			dd.discordMutex.Lock()
+			if entry, exists := dd.fromDiscordMap[p.SSRC]; exists {
+				entry.decoder.ResetState()
+				entry.receiving = false
+				dd.fromDiscordMap[p.SSRC] = entry
+			}
+			dd.discordMutex.Unlock()
 
 			continue
 		}
@@ -310,9 +389,9 @@ func (dd *DiscordDuplex) discordReceivePCM(ctx context.Context) {
 
 		// Push data into pcm channel in 10ms chunks of mono pcm data
 		dd.discordMutex.Lock()
-		for l := 0; l < len(p.PCM); l += 480 {
+		for l := 0; l < len(p.PCM); l += pcmChunkSize {
 			var next []int16
-			u := l + 480
+			u := l + pcmChunkSize
 
 			next = p.PCM[l:u]
 
@@ -330,7 +409,7 @@ func (dd *DiscordDuplex) discordReceivePCM(ctx context.Context) {
 
 func (dd *DiscordDuplex) fromDiscordMixer(ctx context.Context, toMumble chan<- gumble.AudioBuffer) {
 	mumbleSilence := gumble.AudioBuffer{}
-	for i := 3; i < 480; i++ {
+	for i := 3; i < pcmChunkSize; i++ {
 		mumbleSilence = append(mumbleSilence, 0x00)
 	}
 	var speakingStart time.Time
@@ -402,7 +481,7 @@ func (dd *DiscordDuplex) fromDiscordMixer(ctx context.Context, toMumble chan<- g
 
 		if sendAudio {
 			// Regular send mixed audio
-			outBuf := make([]int16, 480)
+			outBuf := make([]int16, pcmChunkSize)
 
 			for j := 0; j < len(internalMixerArr); j++ {
 				for i := 0; i < len(internalMixerArr[j]); i++ {

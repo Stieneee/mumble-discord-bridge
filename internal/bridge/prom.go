@@ -107,6 +107,11 @@ var (
 		Help: "The number of active audio streams streaming from discord",
 	})
 
+	promDiscordPLCPackets = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "mdb_discord_plc_packets_total",
+		Help: "Number of PLC (packet loss concealment) frames generated for lost Discord packets",
+	})
+
 	// Sleep Timer Performance
 
 	promTimerDiscordSend = promauto.NewHistogram(prometheus.HistogramOpts{

@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bwmarrin/discordgo"
+	"github.com/stieneee/gopus"
 	"github.com/stieneee/gumble/gumble"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -470,4 +472,417 @@ func TestDiscordDuplex_BridgeReference(t *testing.T) {
 
 	require.Same(t, bridge, duplex.Bridge)
 	require.Same(t, logger, duplex.Bridge.Logger)
+}
+
+// TestSequenceGap tests the sequenceGap function with various scenarios
+func TestSequenceGap(t *testing.T) {
+	tests := []struct {
+		name     string
+		current  uint16
+		last     uint16
+		expected int
+	}{
+		{
+			name:     "Sequential packets (no gap)",
+			current:  101,
+			last:     100,
+			expected: 0,
+		},
+		{
+			name:     "One lost packet",
+			current:  102,
+			last:     100,
+			expected: 1,
+		},
+		{
+			name:     "Five lost packets",
+			current:  106,
+			last:     100,
+			expected: 5,
+		},
+		{
+			name:     "Wrap-around at uint16 boundary (no gap)",
+			current:  0,
+			last:     65535,
+			expected: 0,
+		},
+		{
+			name:     "Wrap-around with one lost packet",
+			current:  1,
+			last:     65535,
+			expected: 1,
+		},
+		{
+			name:     "Wrap-around with multiple lost packets",
+			current:  5,
+			last:     65535,
+			expected: 5,
+		},
+		{
+			name:     "Large gap (100 packets)",
+			current:  200,
+			last:     100,
+			expected: 99,
+		},
+		{
+			name:     "Wrap-around large gap",
+			current:  100,
+			last:     65500,
+			expected: 135,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := sequenceGap(tt.current, tt.last)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+// TestSequenceGap_EdgeCases tests edge cases for sequence gap calculation
+func TestSequenceGap_EdgeCases(t *testing.T) {
+	// Same sequence number (should return -1, which represents a duplicate/reordered packet)
+	result := sequenceGap(100, 100)
+	assert.Equal(t, -1, result)
+
+	// Maximum uint16 values
+	result = sequenceGap(65535, 65534)
+	assert.Equal(t, 0, result)
+
+	// Minimum uint16 values
+	result = sequenceGap(1, 0)
+	assert.Equal(t, 0, result)
+}
+
+// --- Integration test helpers for discordReceivePCM ---
+
+// createTestDiscordVoiceConnectionManager creates a DiscordVoiceConnectionManager
+// with injected opus channels for testing, bypassing the need for a real Discord session.
+func createTestDiscordVoiceConnectionManager(opusSend chan []byte, opusRecv chan *discordgo.Packet) *DiscordVoiceConnectionManager {
+	base := NewBaseConnectionManager(NewMockLogger(), "discord-test", NewMockBridgeEventEmitter())
+	base.SetStatus(ConnectionConnected, nil)
+
+	mgr := &DiscordVoiceConnectionManager{
+		BaseConnectionManager: base,
+	}
+	mgr.opusSend = opusSend
+	mgr.opusRecv = opusRecv
+
+	return mgr
+}
+
+// encodeOpusSilence encodes a frame of silence using a real opus encoder.
+func encodeOpusSilence(t *testing.T) []byte {
+	t.Helper()
+
+	const channels = 1
+	const frameRate = 48000
+	const frameSize = 960
+	const maxBytes = frameSize * 2 * 2
+
+	encoder, err := gopus.NewEncoder(frameRate, channels, gopus.Audio)
+	require.NoError(t, err)
+
+	silence := make([]int16, frameSize)
+	opus, err := encoder.Encode(silence, frameSize, maxBytes)
+	require.NoError(t, err)
+
+	return opus
+}
+
+// makePacket creates a discordgo.Packet with the given parameters.
+func makePacket(ssrc uint32, seq uint16, ts uint32, opus []byte) *discordgo.Packet {
+	return &discordgo.Packet{
+		SSRC:      ssrc,
+		Sequence:  seq,
+		Timestamp: ts,
+		Opus:      opus,
+	}
+}
+
+// drainPCM reads all available PCM chunks from the channel within the timeout.
+func drainPCM(ch <-chan []int16, timeout time.Duration) [][]int16 {
+	var chunks [][]int16
+	deadline := time.After(timeout)
+
+	for {
+		select {
+		case chunk := <-ch:
+			chunks = append(chunks, chunk)
+		case <-deadline:
+			return chunks
+		}
+	}
+}
+
+// --- Integration tests for discordReceivePCM ---
+
+// TestDiscordReceivePCM_NormalFlow exercises the full decode + chunking pipeline
+// by feeding sequential opus packets through discordReceivePCM.
+func TestDiscordReceivePCM_NormalFlow(t *testing.T) {
+	opusSend := make(chan []byte, 10)
+	opusRecv := make(chan *discordgo.Packet, 10)
+
+	logger := NewMockLogger()
+	bridge := createTestBridgeState(logger)
+	bridge.DiscordVoiceConnectionManager = createTestDiscordVoiceConnectionManager(opusSend, opusRecv)
+
+	duplex := NewDiscordDuplex(bridge)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go duplex.discordReceivePCM(ctx)
+
+	opusData := encodeOpusSilence(t)
+	ssrc := uint32(1000)
+
+	// Send 3 sequential packets
+	opusRecv <- makePacket(ssrc, 100, 48000, opusData)
+	opusRecv <- makePacket(ssrc, 101, 48960, opusData)
+	opusRecv <- makePacket(ssrc, 102, 49920, opusData)
+
+	// Wait for processing
+	time.Sleep(200 * time.Millisecond)
+
+	// Verify PCM output: each 960-sample opus frame produces 2x 480-sample chunks
+	duplex.discordMutex.Lock()
+	s, exists := duplex.fromDiscordMap[ssrc]
+	duplex.discordMutex.Unlock()
+	require.True(t, exists, "Stream should exist for SSRC")
+
+	chunks := drainPCM(s.pcm, 100*time.Millisecond)
+	// 3 packets * 2 chunks each = 6 chunks
+	assert.Equal(t, 6, len(chunks), "Expected 6 PCM chunks from 3 packets")
+
+	for i, chunk := range chunks {
+		assert.Equal(t, pcmChunkSize, len(chunk), "Chunk %d should be %d samples", i, pcmChunkSize)
+	}
+
+	// No errors should have been logged
+	for _, entry := range logger.GetEntriesByLevel("ERROR") {
+		t.Errorf("Unexpected error log: %s", entry.Message)
+	}
+}
+
+// TestDiscordReceivePCM_PLCIntegration exercises PLC frame generation through
+// the actual discordReceivePCM path by introducing a sequence gap.
+func TestDiscordReceivePCM_PLCIntegration(t *testing.T) {
+	opusSend := make(chan []byte, 10)
+	opusRecv := make(chan *discordgo.Packet, 10)
+
+	logger := NewMockLogger()
+	bridge := createTestBridgeState(logger)
+	bridge.DiscordVoiceConnectionManager = createTestDiscordVoiceConnectionManager(opusSend, opusRecv)
+
+	duplex := NewDiscordDuplex(bridge)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go duplex.discordReceivePCM(ctx)
+
+	opusData := encodeOpusSilence(t)
+	ssrc := uint32(2000)
+
+	// Send first packet to establish stream
+	opusRecv <- makePacket(ssrc, 100, 48000, opusData)
+	time.Sleep(50 * time.Millisecond)
+
+	// Drain the first packet's PCM
+	duplex.discordMutex.Lock()
+	s := duplex.fromDiscordMap[ssrc]
+	duplex.discordMutex.Unlock()
+	drainPCM(s.pcm, 100*time.Millisecond)
+
+	// Send packet with gap of 2 (seq 101 and 102 are "lost")
+	opusRecv <- makePacket(ssrc, 103, 48000+960*3, opusData)
+	time.Sleep(200 * time.Millisecond)
+
+	// Expect: 2 PLC frames (2 chunks each) + 1 real frame (2 chunks) = 6 chunks
+	duplex.discordMutex.Lock()
+	s = duplex.fromDiscordMap[ssrc]
+	duplex.discordMutex.Unlock()
+
+	chunks := drainPCM(s.pcm, 100*time.Millisecond)
+	// 2 PLC packets * 2 chunks + 1 real packet * 2 chunks = 6
+	assert.Equal(t, 6, len(chunks), "Expected 6 PCM chunks (2 PLC + 1 real, each producing 2 chunks)")
+
+	// Verify PLC was logged
+	assert.True(t, logger.ContainsMessage("PLC"), "Should log PLC frame generation")
+}
+
+// TestDiscordReceivePCM_FrozenTimestampIntegration verifies that packets with
+// frozen timestamps (same timestamp, different sequence) are skipped.
+func TestDiscordReceivePCM_FrozenTimestampIntegration(t *testing.T) {
+	opusSend := make(chan []byte, 10)
+	opusRecv := make(chan *discordgo.Packet, 10)
+
+	logger := NewMockLogger()
+	bridge := createTestBridgeState(logger)
+	bridge.DiscordVoiceConnectionManager = createTestDiscordVoiceConnectionManager(opusSend, opusRecv)
+
+	duplex := NewDiscordDuplex(bridge)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go duplex.discordReceivePCM(ctx)
+
+	opusData := encodeOpusSilence(t)
+	ssrc := uint32(3000)
+	ts := uint32(48000)
+
+	// Send first normal packet
+	opusRecv <- makePacket(ssrc, 100, ts, opusData)
+	time.Sleep(50 * time.Millisecond)
+
+	// Drain first packet's PCM
+	duplex.discordMutex.Lock()
+	s := duplex.fromDiscordMap[ssrc]
+	duplex.discordMutex.Unlock()
+	drainPCM(s.pcm, 100*time.Millisecond)
+
+	// Send frozen timestamp packet (same timestamp, advanced sequence)
+	opusRecv <- makePacket(ssrc, 101, ts, opusData) // ts unchanged = frozen
+	time.Sleep(100 * time.Millisecond)
+
+	// Should produce NO PCM output (packet was skipped)
+	duplex.discordMutex.Lock()
+	s = duplex.fromDiscordMap[ssrc]
+	duplex.discordMutex.Unlock()
+
+	chunks := drainPCM(s.pcm, 100*time.Millisecond)
+	assert.Equal(t, 0, len(chunks), "Frozen timestamp packet should produce no PCM output")
+
+	// Verify skip was logged
+	assert.True(t, logger.ContainsMessage("frozen timestamp"), "Should log frozen timestamp skip")
+
+	// Send next normal packet (with advanced timestamp) to confirm stream still works
+	opusRecv <- makePacket(ssrc, 102, ts+960, opusData)
+	time.Sleep(100 * time.Millisecond)
+
+	duplex.discordMutex.Lock()
+	s = duplex.fromDiscordMap[ssrc]
+	duplex.discordMutex.Unlock()
+
+	chunks = drainPCM(s.pcm, 100*time.Millisecond)
+	assert.Equal(t, 2, len(chunks), "Normal packet after frozen should produce 2 PCM chunks")
+}
+
+// TestDiscordReceivePCM_MajorDiscontinuityIntegration verifies that large sequence
+// gaps (>maxPLCPackets) reset the decoder without generating PLC frames.
+func TestDiscordReceivePCM_MajorDiscontinuityIntegration(t *testing.T) {
+	opusSend := make(chan []byte, 10)
+	opusRecv := make(chan *discordgo.Packet, 10)
+
+	logger := NewMockLogger()
+	bridge := createTestBridgeState(logger)
+	bridge.DiscordVoiceConnectionManager = createTestDiscordVoiceConnectionManager(opusSend, opusRecv)
+
+	duplex := NewDiscordDuplex(bridge)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go duplex.discordReceivePCM(ctx)
+
+	opusData := encodeOpusSilence(t)
+	ssrc := uint32(4000)
+
+	// Send first packet to establish stream
+	opusRecv <- makePacket(ssrc, 100, 48000, opusData)
+	time.Sleep(50 * time.Millisecond)
+
+	// Drain first packet's PCM
+	duplex.discordMutex.Lock()
+	s := duplex.fromDiscordMap[ssrc]
+	duplex.discordMutex.Unlock()
+	drainPCM(s.pcm, 100*time.Millisecond)
+
+	// Send packet with major gap (99 lost > maxPLCPackets=10)
+	opusRecv <- makePacket(ssrc, 200, 48000+960*100, opusData)
+	time.Sleep(200 * time.Millisecond)
+
+	duplex.discordMutex.Lock()
+	s = duplex.fromDiscordMap[ssrc]
+	duplex.discordMutex.Unlock()
+
+	chunks := drainPCM(s.pcm, 100*time.Millisecond)
+	// Should get only the real packet's chunks (2), no PLC frames
+	assert.Equal(t, 2, len(chunks), "Major discontinuity should not generate PLC, only decode the arriving packet")
+
+	// Verify discontinuity was logged
+	assert.True(t, logger.ContainsMessage("Major discontinuity"), "Should log major discontinuity detection")
+}
+
+// TestDiscordReceivePCM_PCMChunking tests that PCM is chunked into 10ms frames
+func TestDiscordReceivePCM_PCMChunking(t *testing.T) {
+	// Test the chunking logic that splits PCM into pcmChunkSize chunks
+	testPCM := make([]int16, opusFrameSize) // 960 samples = 20ms
+	for i := range testPCM {
+		testPCM[i] = int16(i)
+	}
+
+	// Simulate chunking
+	expectedChunks := len(testPCM) / pcmChunkSize
+	chunks := make([][]int16, 0, expectedChunks)
+	for l := 0; l < len(testPCM); l += pcmChunkSize {
+		u := l + pcmChunkSize
+		chunk := testPCM[l:u]
+		chunks = append(chunks, chunk)
+	}
+
+	// Should produce 2 chunks (960 / 480 = 2)
+	assert.Equal(t, 2, len(chunks))
+
+	// Each chunk should be pcmChunkSize samples
+	for i, chunk := range chunks {
+		assert.Equal(t, pcmChunkSize, len(chunk), "Chunk %d should be %d samples", i, pcmChunkSize)
+	}
+
+	// Verify data integrity
+	assert.Equal(t, testPCM[0:pcmChunkSize], chunks[0])
+	assert.Equal(t, testPCM[pcmChunkSize:opusFrameSize], chunks[1])
+}
+
+// TestDiscordReceivePCM_SequenceTracking tests sequence number tracking
+func TestDiscordReceivePCM_SequenceTracking(t *testing.T) {
+	bridge := createTestBridgeState(nil)
+	duplex := NewDiscordDuplex(bridge)
+
+	ssrc := uint32(99999)
+
+	// Create stream
+	duplex.discordMutex.Lock()
+	duplex.fromDiscordMap[ssrc] = fromDiscord{
+		pcm:          make(chan []int16, 100),
+		receiving:    false,
+		lastSequence: 0,
+		lastActivity: time.Now(),
+	}
+	duplex.discordMutex.Unlock()
+
+	// Simulate receiving packets in sequence
+	sequences := []uint16{100, 101, 102, 103}
+
+	for _, seq := range sequences {
+		duplex.discordMutex.Lock()
+		s := duplex.fromDiscordMap[ssrc]
+
+		if s.receiving {
+			lostCount := sequenceGap(seq, s.lastSequence)
+			assert.Equal(t, 0, lostCount, "Sequential packets should have no gap")
+		} else {
+			s.receiving = true
+		}
+
+		s.lastSequence = seq
+		duplex.fromDiscordMap[ssrc] = s
+		duplex.discordMutex.Unlock()
+	}
+
+	// Verify final sequence
+	duplex.discordMutex.Lock()
+	finalSeq := duplex.fromDiscordMap[ssrc].lastSequence
+	duplex.discordMutex.Unlock()
+
+	assert.Equal(t, uint16(103), finalSeq)
 }
