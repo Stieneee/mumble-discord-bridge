@@ -527,6 +527,10 @@ func (c *SharedDiscordClient) attemptIndefiniteReconnection() {
 			}()
 
 			// Wait for Open() with timeout
+			// NOTE: We do NOT check ctx.Done() here because if we return early,
+			// the goroutine above will still hold sessionOpMutex, causing Disconnect()
+			// to deadlock. We must wait for the goroutine to complete and release the lock.
+			// Context cancellation will be caught on the next loop iteration (line 486).
 			var sessionOpenErr error
 			select {
 			case sessionOpenErr = <-openDone:
@@ -537,10 +541,6 @@ func (c *SharedDiscordClient) attemptIndefiniteReconnection() {
 				// Note: The goroutine may still be running session.Open(), but this is acceptable.
 				// On the next iteration, Close() will be called which unblocks Open() and allows
 				// the goroutine to exit. The buffered channel prevents the goroutine from leaking.
-			case <-c.ctx.Done():
-				c.logger.Info("DISCORD_CLIENT", "Reconnection canceled during session.Open()")
-
-				return
 			}
 
 			if sessionOpenErr != nil {
