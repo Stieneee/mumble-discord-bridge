@@ -298,7 +298,7 @@ func (m *MumbleDuplex) toMumbleSender(ctx context.Context, internalChan <-chan g
 				promMumbleSendTimeouts.Inc()
 				promToMumbleDropped.Inc()
 				bufferSize := len(internalChan)
-				if bufferSize > 50 { // Only log when significantly backed up
+				if bufferSize > 25 { // Only log when significantly backed up (buffer capacity is 50)
 					m.logger.Debug("MUMBLE_FORWARDER",
 						fmt.Sprintf("Send timeout, dropping packet (buffer: %d)", bufferSize))
 				}

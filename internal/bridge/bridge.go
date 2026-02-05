@@ -797,8 +797,8 @@ func (b *BridgeState) StartBridge() {
 	}()
 
 	// Set up audio channels with proper lifecycle management
-	toMumbleInternal := make(chan gumble.AudioBuffer, 100)
-	toDiscord := make(chan []int16, 200)
+	toMumbleInternal := make(chan gumble.AudioBuffer, 50)
+	toDiscord := make(chan []int16, 50)
 	defer close(toMumbleInternal)
 	defer close(toDiscord)
 
