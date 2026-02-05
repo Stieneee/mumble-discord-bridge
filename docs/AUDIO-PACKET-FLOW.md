@@ -34,7 +34,7 @@ graph TB
             DCM[Discord Connection Manager]
             DL[Discord Library - discordgo]
             DM[fromDiscord Mixer]
-            DSP[discordSendPCM]
+            DSP[toDiscordSender]
         end
         PS1[PacketsSunk discord,outbound]
     end
@@ -51,7 +51,7 @@ graph TB
             MCM[Mumble Connection Manager]
             ML[Mumble Library - gumble]
             MM[fromMumble Mixer]
-            FTM[forwardToMumble]
+            FTM[toMumbleSender]
         end
         PS2[PacketsSunk mumble,inbound]
     end
@@ -150,8 +150,8 @@ Mumble Audio Input
        │
        ▼
 ┌─────────────────┐     ┌─────────────────────────────────┐
-│  Discord        │────►│ IF Discord NOT connected:       │
-│  Send PCM       │     │   - Sink packet                 │
+│  toDiscordSender│────►│ IF Discord NOT connected:       │
+│ (discord_duplex)│     │   - Sink packet                 │
 │                 │     │   - Increment promPacketsSunk   │
 │                 │     │   - Log "sinking packet"        │
 │                 │     └─────────────────────────────────┘
@@ -172,8 +172,8 @@ Discord Audio Input
        │
        ▼
 ┌─────────────────┐     ┌─────────────────────────────────┐
-│  forwardToMumble│────►│ IF Mumble NOT connected:        │
-│  Function       │     │   - Sink packet                 │
+│  toMumbleSender │────►│ IF Mumble NOT connected:        │
+│ (mumble_duplex) │     │   - Sink packet                 │
 │                 │     │   - Increment promPacketsSunk   │
 │                 │     │   - Log "sinking packet"        │
 │                 │     └─────────────────────────────────┘
@@ -184,8 +184,8 @@ Discord Audio Input
 
 | Component | Sink Condition | Metric | Direction |
 |-----------|----------------|--------|-----------|
-| `discordSendPCM` | Discord connection down | `promPacketsSunk{discord,outbound}` | Mumble → Discord |
-| `forwardToMumble` | Mumble connection down | `promPacketsSunk{mumble,inbound}` | Discord → Mumble |
+| `toDiscordSender` | Discord connection down | `promPacketsSunk{discord,outbound}` | Mumble → Discord |
+| `toMumbleSender` | Mumble connection down | `promPacketsSunk{mumble,inbound}` | Discord → Mumble |
 
 ### Benefits of Local Responsibility
 
@@ -194,6 +194,57 @@ Discord Audio Input
 3. **Better Reliability**: No race conditions from checking remote state
 4. **Easier Testing**: Components can be tested independently
 5. **Cleaner Code**: Reduced complexity in audio processing paths
+
+## Pacing and Buffering
+
+### Audio Packet Timing and Rate Conversion
+
+The bridge handles rate conversion between Mumble's 10ms native frames and Discord's 20ms Opus frames:
+
+**Mumble → Discord:**
+- `fromMumbleMixer` (in `mumble_duplex.go`) - Paces at **10ms intervals** using SleepCT, sends 480-sample (10ms) PCM chunks
+- `toDiscordSender` (in `discord_duplex.go`) - Paces at **20ms intervals** using SleepCT, combines **two 10ms chunks** into one 960-sample Opus frame
+
+**Discord → Mumble:**
+- `discordReceivePCM` (in `discord_duplex.go`) - Receives 20ms Opus frames (960 samples), chunks into **two 10ms PCM chunks** (480 samples each)
+- `fromDiscordMixer` (in `discord_duplex.go`) - Paces at **10ms intervals** using SleepCT, sends 10ms chunks
+- `toMumbleSender` (in `mumble_duplex.go`) - **Blocking read** (no pacing), receives packets already at 10ms rate
+
+### Channel Buffers
+
+All buffers store **10ms packets** (480 samples @ 48kHz), regardless of send rate:
+
+| Buffer | Packet Count | Time Buffered | Direction | Purpose |
+|--------|--------------|---------------|-----------|---------|
+| `toMumbleInternal` | 50 packets | 0.5 seconds | Discord → Mumble | Buffers 10ms packets before sending to gumble's unbuffered channel |
+| `toDiscord` | 50 packets | 0.5 seconds | Mumble → Discord | Buffers 10ms packets before combining and encoding to 20ms Opus frames |
+
+**Why 10ms is the fundamental unit:**
+- Both mixers (`fromDiscordMixer` and `fromMumbleMixer`) output at 10ms intervals
+- Buffers store these 10ms packets, even when the sender reads at a different rate
+- `toDiscordSender` reads 2 packets at a time (every 20ms), but the buffer still stores 10ms packets
+- This makes buffer sizing consistent: 50 packets = 0.5 seconds, 100 packets = 1 second
+
+### Send Behavior
+
+**toMumbleSender** (in `mumble_duplex.go`):
+- **Blocking read** from `toMumbleInternal` - receives 10ms packets already paced by `fromDiscordMixer`
+- **Timeout send** (20ms timeout) to gumble's unbuffered channel
+- Drops packets on timeout to prevent blocking (tracked by `promMumbleSendTimeouts`)
+- No pacing needed - packets arrive at correct 10ms rate
+
+**toDiscordSender** (in `discord_duplex.go`):
+- **Blocking read** from `toDiscord` - receives 10ms PCM chunks from `fromMumbleMixer`
+- **Paces at 20ms intervals** - waits for two 10ms chunks before encoding
+- Combines two 10ms PCM chunks (480 samples each) into one 20ms Opus frame (960 samples)
+- Sends encoded Opus to Discord
+
+### Rate Conversion Rationale
+
+- **Mumble**: Native 10ms frames (480 samples @ 48kHz)
+- **Discord**: Native 20ms Opus frames (960 samples @ 48kHz)
+- The bridge converts between these rates to match each platform's native format
+- This explains why `toDiscordSender` paces at 20ms while `toMumbleSender` doesn't pace at all
 
 ## Connection States
 
@@ -244,15 +295,15 @@ connection.Ready == true  ──► Consider connected
 - `internal/bridge/connection_manager.go`: Base connection management
 - `internal/bridge/discord_connection_manager.go`: Discord-specific connection handling
 - `internal/bridge/mumble_connection_manager.go`: Mumble-specific connection handling
-- `internal/bridge/discord.go`: Discord audio processing and sinking
-- `internal/bridge/mumble.go`: Mumble audio processing
-- `internal/bridge/bridge.go`: Audio channel management and forwardToMumble
+- `internal/bridge/discord_duplex.go`: Discord audio processing (receive, mix, send)
+- `internal/bridge/mumble_duplex.go`: Mumble audio processing (receive, mix, send)
+- `internal/bridge/bridge.go`: Audio channel management and bridge orchestration
 
 ### Audio Flow Functions
-- `fromMumbleMixer()`: Processes Mumble audio → Discord
-- `fromDiscordMixer()`: Processes Discord audio → Mumble  
-- `discordSendPCM()`: Sends audio to Discord (with local sinking)
-- `forwardToMumble()`: Sends audio to Mumble (with local sinking)
+- `fromMumbleMixer()`: Processes Mumble audio → Discord (in `mumble_duplex.go`)
+- `fromDiscordMixer()`: Processes Discord audio → Mumble (in `discord_duplex.go`)
+- `toDiscordSender()`: Sends audio to Discord with local sinking (in `discord_duplex.go`)
+- `toMumbleSender()`: Sends audio to Mumble with local sinking (in `mumble_duplex.go`)
 
 ## Future Improvements
 
