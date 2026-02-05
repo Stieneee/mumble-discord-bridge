@@ -79,9 +79,8 @@ var OnError = func(str string, err error) {
 	}
 }
 
-// SendPCM will receive on the provied channel encode
-// received PCM data with Opus then send that to Discordgo
-func (dd *DiscordDuplex) discordSendPCM(ctx context.Context, pcm <-chan []int16) {
+// toDiscordSender receives PCM audio from Mumble, encodes it with Opus, and sends to Discord
+func (dd *DiscordDuplex) toDiscordSender(ctx context.Context, pcm <-chan []int16) {
 	const channels int = 1
 	const frameRate int = 48000              // audio sampling rate
 	const frameSize int = 960                // uint16 size of each audio frame

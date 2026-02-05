@@ -511,113 +511,6 @@ func (b *BridgeState) stopConnectionManagers() {
 	b.Logger.Info("BRIDGE", "Connection managers stopped")
 }
 
-// forwardToMumble manages the connection to Mumble's audio channel
-// It properly handles channel lifecycle and reconnections
-func (b *BridgeState) forwardToMumble(ctx context.Context, internalChan <-chan gumble.AudioBuffer) {
-	var mu sync.Mutex
-	var mumbleOutgoing chan<- gumble.AudioBuffer
-	var lastConnectionState bool
-	var connectionGeneration int64
-
-	// safeClose closes a channel with panic recovery for double-close protection
-	safeClose := func(ch chan<- gumble.AudioBuffer, gen int64) {
-		if ch == nil {
-			return
-		}
-		defer func() {
-			if r := recover(); r != nil {
-				b.Logger.Debug("MUMBLE_FORWARDER", fmt.Sprintf("Channel close recovered (gen %d): %v", gen, r))
-			}
-		}()
-		close(ch)
-		b.Logger.Debug("MUMBLE_FORWARDER", fmt.Sprintf("Closed Mumble audio channel (gen %d)", gen))
-	}
-
-	// Cleanup function to close Mumble channel and reset state
-	cleanup := func() {
-		mu.Lock()
-		defer mu.Unlock()
-		if mumbleOutgoing != nil {
-			safeClose(mumbleOutgoing, connectionGeneration)
-			mumbleOutgoing = nil
-		}
-	}
-
-	defer cleanup()
-
-	b.Logger.Debug("MUMBLE_FORWARDER", "Starting Mumble audio forwarder")
-
-	for {
-		select {
-		case <-ctx.Done():
-			b.Logger.Debug("MUMBLE_FORWARDER", "Stopping Mumble audio forwarder")
-
-			return
-
-		case packet := <-internalChan:
-			// Check current connection state
-			currentConnectionState := b.MumbleConnectionManager != nil && b.MumbleConnectionManager.IsConnected()
-
-			// Handle connection state changes
-			if currentConnectionState != lastConnectionState {
-				mu.Lock()
-				if currentConnectionState {
-					// Mumble just connected
-					b.Logger.Debug("MUMBLE_FORWARDER", "Mumble connected, creating audio channel")
-
-					// Close old channel if any (with old generation)
-					if mumbleOutgoing != nil {
-						safeClose(mumbleOutgoing, connectionGeneration)
-						mumbleOutgoing = nil
-					}
-
-					// Increment generation for new connection
-					connectionGeneration++
-					currentGen := connectionGeneration
-
-					// Get new channel for this connection session
-					if b.MumbleConnectionManager != nil {
-						mumbleOutgoing = b.MumbleConnectionManager.GetAudioOutgoing()
-						if mumbleOutgoing != nil {
-							b.Logger.Debug("MUMBLE_FORWARDER", fmt.Sprintf("Created audio channel (gen %d)", currentGen))
-						}
-					}
-				} else {
-					// Mumble disconnected
-					b.Logger.Debug("MUMBLE_FORWARDER", "Mumble disconnected, cleaning up audio channel")
-					if mumbleOutgoing != nil {
-						safeClose(mumbleOutgoing, connectionGeneration)
-						mumbleOutgoing = nil
-					}
-				}
-				lastConnectionState = currentConnectionState
-				mu.Unlock()
-			}
-
-			// Forward packet if we have a valid channel
-			// Check connection state and channel together under the same lock to avoid TOCTOU race
-			mu.Lock()
-			outChan := mumbleOutgoing
-			isConnected := b.MumbleConnectionManager != nil && b.MumbleConnectionManager.IsConnected()
-			mu.Unlock()
-
-			if outChan != nil && isConnected {
-				select {
-				case outChan <- packet:
-					promSentMumblePackets.Inc()
-				default:
-					// Channel full, drop packet
-					b.Logger.Debug("MUMBLE_FORWARDER", "Mumble channel full, dropping packet")
-					promToMumbleDropped.Inc()
-				}
-			} else {
-				// Not connected, sink packet
-				promPacketsSunk.WithLabelValues("mumble", "inbound").Inc()
-			}
-		}
-	}
-}
-
 // populateExistingDiscordUsers populates the DiscordUsers map with users already in the voice channel
 func (b *BridgeState) populateExistingDiscordUsers() {
 	b.Logger.Debug("BRIDGE", "Populating existing Discord users")
@@ -931,18 +824,18 @@ func (b *BridgeState) StartBridge() {
 		b.DiscordStream.fromDiscordMixer(ctx, toMumbleInternal)
 	}()
 
-	// Mumble audio forwarder - manages connection to actual Mumble channel
+	// Mumble audio sender - sends audio to Mumble channel
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		b.forwardToMumble(ctx, toMumbleInternal)
+		b.MumbleStream.toMumbleSender(ctx, toMumbleInternal)
 	}()
 
-	// Discord send PCM
+	// Discord audio sender - sends audio to Discord channel
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		b.DiscordStream.discordSendPCM(ctx, toDiscord)
+		b.DiscordStream.toDiscordSender(ctx, toDiscord)
 	}()
 
 	// Bridge health monitor - checks overall bridge state but doesn't kill on individual connection failures

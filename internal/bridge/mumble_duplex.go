@@ -231,3 +231,78 @@ func (m *MumbleDuplex) fromMumbleMixer(ctx context.Context, toDiscord chan []int
 		}
 	}
 }
+
+// toMumbleSender sends audio packets from Discord to Mumble's audio channel
+// Uses blocking read (packets are already paced by fromDiscordMixer) and timeout send to prevent blocking
+func (m *MumbleDuplex) toMumbleSender(ctx context.Context, internalChan <-chan gumble.AudioBuffer) {
+	const sendTimeout = 20 * time.Millisecond // Timeout for send to gumble
+
+	var mumbleOutgoing chan<- gumble.AudioBuffer
+	var lastConnectionState bool
+
+	sendTimer := time.NewTimer(sendTimeout)
+	sendTimer.Stop()
+
+	m.logger.Debug("MUMBLE_FORWARDER", "Starting Mumble audio forwarder")
+
+	for {
+		select {
+		case <-ctx.Done():
+			m.logger.Debug("MUMBLE_FORWARDER", "Stopping Mumble audio forwarder")
+			sendTimer.Stop()
+
+			return
+
+		case packet := <-internalChan:
+			// Update buffer metric
+			promMumbleBufferedPackets.Set(float64(len(internalChan)))
+
+			// Check connection state
+			currentConnectionState := m.bridge.MumbleConnectionManager != nil && m.bridge.MumbleConnectionManager.IsConnected()
+
+			if currentConnectionState != lastConnectionState {
+				if currentConnectionState {
+					// Connected - get new channel
+					m.logger.Debug("MUMBLE_FORWARDER", "Mumble connected, getting audio channel")
+					mumbleOutgoing = m.bridge.MumbleConnectionManager.GetAudioOutgoing()
+				} else {
+					// Disconnected
+					m.logger.Debug("MUMBLE_FORWARDER", "Mumble disconnected")
+					mumbleOutgoing = nil
+				}
+				lastConnectionState = currentConnectionState
+			}
+
+			// If not connected, sink packet
+			if !currentConnectionState {
+				promPacketsSunk.WithLabelValues("mumble", "inbound").Inc()
+
+				continue
+			}
+
+			if mumbleOutgoing == nil {
+				promPacketsSunk.WithLabelValues("mumble", "inbound").Inc()
+
+				continue
+			}
+
+			// Try to send with timeout
+			sendTimer.Reset(sendTimeout)
+			select {
+			case mumbleOutgoing <- packet:
+				if !sendTimer.Stop() {
+					<-sendTimer.C
+				}
+				promSentMumblePackets.Inc()
+			case <-sendTimer.C:
+				promMumbleSendTimeouts.Inc()
+				promToMumbleDropped.Inc()
+				bufferSize := len(internalChan)
+				if bufferSize > 50 { // Only log when significantly backed up
+					m.logger.Debug("MUMBLE_FORWARDER",
+						fmt.Sprintf("Send timeout, dropping packet (buffer: %d)", bufferSize))
+				}
+			}
+		}
+	}
+}

@@ -50,14 +50,21 @@ var (
 		Help: "The count of audio packets sent to mumble",
 	})
 
-	// promToMumbleBufferSize = promauto.NewGauge(prometheus.GaugeOpts{
-	// 	Name: "mdb_to_mumble_buffer_gauge",
-	// 	Help: "",
-	// })
+	promMumbleBufferedPackets = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "mdb_to_mumble_buffer_gauge",
+		Help: "The buffer size for packets to Mumble",
+	})
 
+	// promToMumbleDropped is kept for backward compatibility with existing dashboards.
+	// promMumbleSendTimeouts tracks the same timeout events with clearer naming.
 	promToMumbleDropped = promauto.NewCounter(prometheus.CounterOpts{
 		Name: "mdb_to_mumble_dropped",
 		Help: "The number of packets timeouts to mumble",
+	})
+
+	promMumbleSendTimeouts = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "mdb_mumble_send_timeouts_total",
+		Help: "Number of timeouts when sending to gumble channel (packets dropped)",
 	})
 
 	promMumbleArraySize = promauto.NewGauge(prometheus.GaugeOpts{
@@ -87,8 +94,10 @@ var (
 		Help: "The number of packets sent to Discord",
 	})
 
+	// Renamed from mdb_discord_buffer_gauge to mdb_to_discord_buffer_gauge for consistency.
+	// Operators should update dashboards/alerts referencing the old name.
 	promToDiscordBufferSize = promauto.NewGauge(prometheus.GaugeOpts{
-		Name: "mdb_discord_buffer_gauge",
+		Name: "mdb_to_discord_buffer_gauge",
 		Help: "The buffer size for packets to Discord",
 	})
 
