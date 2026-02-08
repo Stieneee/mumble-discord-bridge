@@ -563,8 +563,15 @@ func createTestDiscordVoiceConnectionManager(opusSend chan []byte, opusRecv chan
 	base := NewBaseConnectionManager(NewMockLogger(), "discord-test", NewMockBridgeEventEmitter())
 	base.SetStatus(ConnectionConnected, nil)
 
+	// Create a mock VoiceConnection with Ready=true so GetOpusChannels returns ready
+	voiceConn := &discordgo.VoiceConnection{}
+	voiceConn.Lock()
+	voiceConn.Ready = true
+	voiceConn.Unlock()
+
 	mgr := &DiscordVoiceConnectionManager{
 		BaseConnectionManager: base,
+		connection:            voiceConn,
 	}
 	mgr.opusSend = opusSend
 	mgr.opusRecv = opusRecv

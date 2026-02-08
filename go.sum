@@ -1,7 +1,5 @@
 github.com/beorn7/perks v1.0.1 h1:VlbKKnNfV8bJzeqoa4cOKqO6bYr3WgKZxO8Z16+hsOM=
 github.com/beorn7/perks v1.0.1/go.mod h1:G2ZrVWU2WbWT9wwq4/hrbKbnv/1ERSJQ0ibhJ6rlkpw=
-github.com/bwmarrin/discordgo v0.29.1-0.20251229161010-9f6aa8159fc6 h1:9qgN5dlTtXrRhZuFHMgBHR5RwPnqltoB75xFlz4mTeA=
-github.com/bwmarrin/discordgo v0.29.1-0.20251229161010-9f6aa8159fc6/go.mod h1:JsaNXATZGUDc+uiR1/TGW4Aq4IKc2Hh/O8LhsBiSIBs=
 github.com/cespare/xxhash/v2 v2.3.0 h1:UL815xU9SqsFlibzuggzjXhog7bL6oX9BbNZnL2UFvs=
 github.com/cespare/xxhash/v2 v2.3.0/go.mod h1:VGX0DQ3Q6kWi7AoAeZDth3/j3BFtOZR5XLFGgcrjCOs=
 github.com/coreos/go-systemd/v22 v22.5.0/go.mod h1:Y58oyj3AT4RCenI/lSvhwexgC+NSVTIJ3seZv2GcEnc=
