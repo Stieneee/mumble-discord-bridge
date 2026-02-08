@@ -81,7 +81,10 @@ func NewSharedDiscordClient(token string, lgr logger.Logger) (*SharedDiscordClie
 	session.StateEnabled = true
 	session.Identify.Intents = intents
 	session.ShouldReconnectOnError = true
-	session.ShouldReconnectVoiceOnSessionError = true
+	// Voice reconnection is handled by discordgo's wsListen → v.reconnect() when the
+	// voice WS closes. ShouldReconnectVoiceOnSessionError fires a SECOND v.reconnect()
+	// after session recovery which races with the first and can kill a working connection.
+	session.ShouldReconnectVoiceOnSessionError = false
 	session.ShouldRetryOnRateLimit = true
 	lgr.Debug("DISCORD_CLIENT", "Discord session settings configured")
 
@@ -126,18 +129,21 @@ func (c *SharedDiscordClient) Disconnect() error {
 	// Session.wsConn (under wsMutex) while CloseWithCode() writes wsConn=nil
 	// (under RWMutex). These are independent mutexes with no synchronization.
 	// See: github.com/bwmarrin/discordgo voice.go:150 vs wsapi.go:997
-	c.session.RLock()
-	voiceConnections := make([]*discordgo.VoiceConnection, 0, len(c.session.VoiceConnections))
-	for _, vc := range c.session.VoiceConnections {
-		voiceConnections = append(voiceConnections, vc)
-	}
-	c.session.RUnlock()
-
-	for _, vc := range voiceConnections {
-		c.logger.Debug("DISCORD_CLIENT", "Disconnecting voice connection for guild: "+vc.GuildID)
-		if err := vc.Disconnect(); err != nil {
-			c.logger.Warn("DISCORD_CLIENT", fmt.Sprintf("Error disconnecting voice connection: %v", err))
+	if c.session.TryRLock() {
+		voiceConnections := make([]*discordgo.VoiceConnection, 0, len(c.session.VoiceConnections))
+		for _, vc := range c.session.VoiceConnections {
+			voiceConnections = append(voiceConnections, vc)
 		}
+		c.session.RUnlock()
+
+		for _, vc := range voiceConnections {
+			c.logger.Debug("DISCORD_CLIENT", "Disconnecting voice connection for guild: "+vc.GuildID)
+			if err := vc.Disconnect(); err != nil {
+				c.logger.Warn("DISCORD_CLIENT", fmt.Sprintf("Error disconnecting voice connection: %v", err))
+			}
+		}
+	} else {
+		c.logger.Warn("DISCORD_CLIENT", "Could not acquire session lock for voice disconnect (possible deadlock), skipping")
 	}
 
 	c.logger.Debug("DISCORD_CLIENT", "Closing Discord session")
@@ -449,8 +455,14 @@ func (c *SharedDiscordClient) isSessionHealthy() bool {
 		return false
 	}
 
-	// Check if session is properly connected
-	c.session.RLock()
+	// Use TryRLock to avoid blocking if the session mutex is deadlocked
+	// (e.g. discordgo's Open() self-deadlock on Op 7/9). This keeps the
+	// monitor loop alive so lastResortSessionReset() can still fire.
+	if !c.session.TryRLock() {
+		c.logger.Warn("DISCORD_CLIENT", "Session health check: could not acquire session lock (possible deadlock)")
+
+		return false
+	}
 	defer c.session.RUnlock()
 
 	// Check DataReady flag - this indicates the session is fully initialized

@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	discordgo "github.com/bwmarrin/discordgo"
 	"github.com/stieneee/mumble-discord-bridge/pkg/logger"
 	"github.com/stretchr/testify/assert"
 )
@@ -89,6 +90,48 @@ func TestSharedDiscordClient_SessionMonitorLoop_ContextCancellation(t *testing.T
 		// Monitor loop exited cleanly
 	case <-time.After(2 * time.Second):
 		t.Fatal("sessionMonitorLoop did not exit after context cancellation")
+	}
+}
+
+// TestSharedDiscordClient_IsSessionHealthy_LockedMutex tests that isSessionHealthy()
+// returns false immediately when the session mutex is write-locked (simulating a
+// deadlocked session), rather than blocking indefinitely.
+func TestSharedDiscordClient_IsSessionHealthy_LockedMutex(t *testing.T) {
+	lgr := &MockBridgeLogger{}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	session := &discordgo.Session{
+		State:     discordgo.NewState(),
+		DataReady: true,
+	}
+	session.State.User = &discordgo.User{ID: "test", Username: "Test"}
+
+	client := &SharedDiscordClient{
+		logger:  lgr,
+		ctx:     ctx,
+		cancel:  cancel,
+		session: session,
+	}
+
+	// Verify healthy when unlocked
+	assert.True(t, client.isSessionHealthy(), "should be healthy when session is unlocked and ready")
+
+	// Simulate a deadlocked session by write-locking the mutex
+	session.Lock()
+	defer session.Unlock()
+
+	// isSessionHealthy must return false without blocking
+	done := make(chan bool, 1)
+	go func() {
+		done <- client.isSessionHealthy()
+	}()
+
+	select {
+	case healthy := <-done:
+		assert.False(t, healthy, "should return false when session mutex is locked")
+	case <-time.After(1 * time.Second):
+		t.Fatal("isSessionHealthy() blocked on locked mutex — TryRLock not working")
 	}
 }
 
