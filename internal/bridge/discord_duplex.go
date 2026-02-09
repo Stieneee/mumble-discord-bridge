@@ -15,8 +15,9 @@ import (
 
 // Constants for Discord audio handling
 const (
-	silenceFrameCount       = 5   // Number of silence frames to send after speaking
+	silenceFrameCount       = 3   // Number of silence frames to send after speaking
 	shortSpeakingThreshold  = 50  // Milliseconds - threshold for short speaking cycle warning
+	noDataGraceTicks        = 3   // Ticks (30ms) to wait for more audio before declaring end-of-speech
 	connectionCheckInterval = 100 // Milliseconds - sleep time when connection not ready
 	maxPLCPackets           = 10  // Maximum PLC frames to generate (prevents runaway on major discontinuity)
 	opusFrameSize           = 960 // Standard opus frame size (20ms at 48kHz)
@@ -79,8 +80,10 @@ var OnError = func(str string, err error) {
 	}
 }
 
-// toDiscordSender receives PCM audio from Mumble, encodes it with Opus, and sends to Discord
-func (dd *DiscordDuplex) toDiscordSender(ctx context.Context, pcm <-chan []int16) {
+// toDiscordSender mixes Mumble audio inline, encodes with Opus, and sends to Discord.
+// Runs at 10ms intervals (matching Mumble's chunk size), accumulates 2 chunks (20ms)
+// before encoding an Opus frame.
+func (dd *DiscordDuplex) toDiscordSender(ctx context.Context) {
 	const channels int = 1
 	const frameRate int = 48000              // audio sampling rate
 	const frameSize int = 960                // uint16 size of each audio frame
@@ -97,10 +100,12 @@ func (dd *DiscordDuplex) toDiscordSender(ctx context.Context, pcm <-chan []int16
 	// Generate Opus Silence Frame
 	opusSilence := []byte{0xf8, 0xff, 0xfe}
 
-	dd.discordSendSleepTick.Start(20 * time.Millisecond)
+	dd.discordSendSleepTick.Start(10 * time.Millisecond)
 
 	lastReady := true
 	var speakingStart time.Time
+	var pendingChunk []int16 // First of 2 chunks waiting for second
+	var noDataTicks int      // Consecutive ticks with no audio data
 
 	internalSend := func(opus []byte) {
 		// Get opus channels - this atomically checks connection state, readiness, and channel availability
@@ -130,8 +135,32 @@ func (dd *DiscordDuplex) toDiscordSender(ctx context.Context, pcm <-chan []int16
 		default:
 			// Channel full - this is not a connection issue, just congestion
 			dd.Bridge.Logger.Debug("DISCORD_SEND", "Discord send channel full, dropping packet")
-			// Note: Not incrementing promPacketsSunk here as this is a different issue
 		}
+	}
+
+	setSpeaking := func(speaking bool) {
+		connManager := dd.Bridge.DiscordVoiceConnectionManager
+		if connManager == nil {
+			return
+		}
+		connection := connManager.GetReadyConnection()
+		if connection == nil {
+			if speaking {
+				dd.Bridge.Logger.Debug("DISCORD_SEND", "Discord connection not available for speaking status")
+			}
+
+			return
+		}
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					dd.Bridge.Logger.Error("DISCORD_SEND", fmt.Sprintf("Panic setting speaking status: %v", r))
+				}
+			}()
+			if err := connection.Speaking(speaking); err != nil {
+				dd.Bridge.Logger.Error("DISCORD_SEND", fmt.Sprintf("Error setting speaking status to %v: %v", speaking, err))
+			}
+		}()
 	}
 
 	defer dd.Bridge.Logger.Info("DISCORD_SEND", "Stopping Discord send PCM")
@@ -145,82 +174,79 @@ func (dd *DiscordDuplex) toDiscordSender(ctx context.Context, pcm <-chan []int16
 
 		promTimerDiscordSend.Observe(float64(dd.discordSendSleepTick.SleepNextTarget(ctx, false)))
 
-		if (len(pcm) > 1 && streaming) || (len(pcm) > dd.Bridge.BridgeConfig.DiscordStartStreamingCount && !streaming) {
-			if !streaming {
-				speakingStart = time.Now()
+		// Mix one 10ms chunk directly from Mumble streams
+		chunk, streamingCount := dd.Bridge.MumbleStream.MixOneChunk()
+		promMumbleStreaming.Set(float64(streamingCount))
 
-				// Set speaking status directly - connection manager handles safety
-				connManager := dd.Bridge.DiscordVoiceConnectionManager
-				if connManager != nil {
-					connection := connManager.GetReadyConnection()
-					if connection != nil {
-						// Safely call Speaking with panic protection
-						func() {
-							defer func() {
-								if r := recover(); r != nil {
-									dd.Bridge.Logger.Error("DISCORD_SEND", fmt.Sprintf("Panic setting speaking status: %v", r))
-								}
-							}()
-							if err := connection.Speaking(true); err != nil {
-								dd.Bridge.Logger.Error("DISCORD_SEND", fmt.Sprintf("Error setting speaking status to true: %v", err))
-							}
-						}()
-					} else {
-						dd.Bridge.Logger.Debug("DISCORD_SEND", "Discord connection not available for speaking status")
-					}
-				}
+		if chunk != nil {
+			noDataTicks = 0
 
-				streaming = true
+			if pendingChunk == nil {
+				// Save first chunk, wait for second on next 10ms tick.
+				// This ensures consistent 20ms send intervals which keeps
+				// Discord's adaptive jitter buffer from growing.
+				pendingChunk = chunk
+
+				continue
 			}
 
-			r1 := <-pcm
-			r2 := <-pcm
+			// Have pending + new chunk (20ms) — encode and send
+			opus, err := opusEncoder.Encode(append(pendingChunk, chunk...), frameSize, maxBytes)
+			pendingChunk = nil
 
-			// try encoding pcm frame with Opus
-			opus, err := opusEncoder.Encode(append(r1, r2...), frameSize, maxBytes)
 			if err != nil {
 				OnError("Encoding Error", err)
 
 				continue
 			}
 
+			if !streaming {
+				speakingStart = time.Now()
+				setSpeaking(true)
+				streaming = true
+			}
+
 			internalSend(opus)
-		} else if streaming {
-			// Check to see if there is a short speaking cycle.
-			// It is possible that short speaking cycle is the result of a short input to mumble (Not a problem). ie a quick tap of push to talk button.
-			// Or when timing delays are introduced via network, hardware or kernel delays (Problem).
-			// The problem delays result in choppy or stuttering sounds, especially when the silence frames are introduced into the opus frames below.
-			// Multiple short cycle delays can result in a discord rate limiter being trigger due to of multiple JSON speaking/not-speaking state changes
-			if time.Since(speakingStart).Milliseconds() < shortSpeakingThreshold {
-				dd.Bridge.Logger.Warn("DISCORD_SEND", "Short Mumble to Discord speaking cycle. Consider increasing the size of the to Discord jitter buffer.")
-			}
+		} else {
+			if pendingChunk != nil {
+				// Don't discard the pending chunk — pad with silence to complete
+				// a 20ms frame. Preserves audio at speech boundaries.
+				silencePad := make([]int16, len(pendingChunk))
+				opus, err := opusEncoder.Encode(append(pendingChunk, silencePad...), frameSize, maxBytes)
+				pendingChunk = nil
 
-			// Send silence as suggested by Discord Documentation.
-			// We want to do this after alerting the user of possible short speaking cycles
-			for range silenceFrameCount {
-				internalSend(opusSilence)
-				promTimerDiscordSend.Observe(float64(dd.discordSendSleepTick.SleepNextTarget(ctx, false)))
-			}
+				if err != nil {
+					OnError("Encoding Error", err)
+				} else {
+					if !streaming {
+						speakingStart = time.Now()
+						setSpeaking(true)
+						streaming = true
+					}
 
-			// Set speaking to false safely
-			connManager := dd.Bridge.DiscordVoiceConnectionManager
-			if connManager != nil {
-				connection := connManager.GetReadyConnection()
-				if connection != nil {
-					// Safely call Speaking with panic protection
-					func() {
-						defer func() {
-							if r := recover(); r != nil {
-								dd.Bridge.Logger.Error("DISCORD_SEND", fmt.Sprintf("Panic setting speaking status: %v", r))
-							}
-						}()
-						if err := connection.Speaking(false); err != nil {
-							dd.Bridge.Logger.Error("DISCORD_SEND", fmt.Sprintf("Error setting speaking status to false: %v", err))
-						}
-					}()
+					internalSend(opus)
 				}
+
+				continue
 			}
-			streaming = false
+
+			noDataTicks++
+
+			if streaming && noDataTicks >= noDataGraceTicks {
+				if time.Since(speakingStart).Milliseconds() < shortSpeakingThreshold {
+					dd.Bridge.Logger.Warn("DISCORD_SEND", "Short Mumble to Discord speaking cycle.")
+				}
+
+				// Send silence frames as required by Discord documentation
+				for range silenceFrameCount {
+					internalSend(opusSilence)
+					promTimerDiscordSend.Observe(float64(dd.discordSendSleepTick.SleepNextTarget(ctx, false)))
+				}
+
+				setSpeaking(false)
+				streaming = false
+				noDataTicks = 0
+			}
 		}
 	}
 }

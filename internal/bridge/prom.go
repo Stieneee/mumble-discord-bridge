@@ -77,6 +77,11 @@ var (
 		Help: "The number of active audio streams streaming audio from mumble",
 	})
 
+	promMumbleChunksSkipped = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "mdb_mumble_chunks_skipped_total",
+		Help: "Number of stale audio chunks skipped due to buffer depth exceeding threshold (indicates clock drift)",
+	})
+
 	// DISCORD
 
 	promDiscordUsers = promauto.NewGauge(prometheus.GaugeOpts{
@@ -92,18 +97,6 @@ var (
 	promDiscordSentPackets = promauto.NewCounter(prometheus.CounterOpts{
 		Name: "mdb_discord_sent_count",
 		Help: "The number of packets sent to Discord",
-	})
-
-	// Renamed from mdb_discord_buffer_gauge to mdb_to_discord_buffer_gauge for consistency.
-	// Operators should update dashboards/alerts referencing the old name.
-	promToDiscordBufferSize = promauto.NewGauge(prometheus.GaugeOpts{
-		Name: "mdb_to_discord_buffer_gauge",
-		Help: "The buffer size for packets to Discord",
-	})
-
-	promToDiscordDropped = promauto.NewCounter(prometheus.CounterOpts{
-		Name: "mdb_to_discord_dropped",
-		Help: "The count of packets dropped to discord",
 	})
 
 	promDiscordArraySize = promauto.NewGauge(prometheus.GaugeOpts{
@@ -125,19 +118,13 @@ var (
 
 	promTimerDiscordSend = promauto.NewHistogram(prometheus.HistogramOpts{
 		Name:    "mdb_timer_discord_send",
-		Help:    "Timer performance for Discord send",
+		Help:    "Timer performance for Discord send (10ms target)",
 		Buckets: []float64{1000, 2000, 5000, 10000, 20000},
 	})
 
 	promTimerDiscordMixer = promauto.NewHistogram(prometheus.HistogramOpts{
 		Name:    "mdb_timer_discord_mixer",
 		Help:    "Timer performance for the Discord mixer",
-		Buckets: []float64{1000, 2000, 5000, 10000, 20000},
-	})
-
-	promTimerMumbleMixer = promauto.NewHistogram(prometheus.HistogramOpts{
-		Name:    "mdb_timer_mumble_mixer",
-		Help:    "Timer performance for the Mumble mixer",
 		Buckets: []float64{1000, 2000, 5000, 10000, 20000},
 	})
 

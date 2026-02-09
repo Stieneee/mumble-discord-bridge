@@ -9,24 +9,21 @@ import (
 	"github.com/stieneee/gumble/gumble"
 	_ "github.com/stieneee/gumble/opus" // Register opus codec
 	"github.com/stieneee/mumble-discord-bridge/pkg/logger"
-	"github.com/stieneee/mumble-discord-bridge/pkg/sleepct"
 )
 
 // Constants for Mumble audio handling
 const (
-	mumbleStreamBufferSize  = 100 // Buffer size for individual audio streams
-	mumbleAudioChunkSize    = 480 // Samples per 10ms audio chunk
-	mumbleMixerInterval     = 10 * time.Millisecond
-	mumbleMaxDroppedPackets = 250 // Maximum dropped packets before warning reset
+	mumbleStreamBufferSize = 24  // Buffer size for individual audio streams (240ms, sufficient for TCP jitter)
+	mumbleAudioChunkSize   = 480 // Samples per 10ms audio chunk
+	mumbleMaxBufferDepth   = 4   // Max per-stream chunks before skipping old ones (40ms; prevents clock drift accumulation)
 )
 
 // MumbleDuplex - listener and outgoing
 type MumbleDuplex struct {
-	mutex           sync.Mutex
-	streams         []chan gumble.AudioBuffer
-	mumbleSleepTick sleepct.SleepCT
-	logger          logger.Logger
-	bridge          *BridgeState // Reference to bridge for connection manager access
+	mutex   sync.Mutex
+	streams []chan gumble.AudioBuffer
+	logger  logger.Logger
+	bridge  *BridgeState // Reference to bridge for connection manager access
 	// Track stream cleanup for reconnections - using map for O(1) removal
 	streamCleanupCallbacks map[chan gumble.AudioBuffer]func() // Protected by mutex
 }
@@ -35,7 +32,6 @@ type MumbleDuplex struct {
 func NewMumbleDuplex(log logger.Logger, bridge *BridgeState) *MumbleDuplex {
 	return &MumbleDuplex{
 		streams:                make([]chan gumble.AudioBuffer, 0),
-		mumbleSleepTick:        sleepct.SleepCT{},
 		logger:                 log,
 		bridge:                 bridge,
 		streamCleanupCallbacks: make(map[chan gumble.AudioBuffer]func()),
@@ -124,7 +120,6 @@ func (m *MumbleDuplex) OnAudioStream(e *gumble.AudioStreamEvent) {
 			streamMutex.Unlock()
 
 			promReceivedMumblePackets.Inc()
-			m.mumbleSleepTick.Notify()
 		}
 
 		m.logger.Info("MUMBLE_STREAM", fmt.Sprintf("Mumble audio stream ended: %s", name))
@@ -157,79 +152,41 @@ func (m *MumbleDuplex) OnAudioStream(e *gumble.AudioStreamEvent) {
 	}()
 }
 
-func (m *MumbleDuplex) fromMumbleMixer(ctx context.Context, toDiscord chan []int16) {
-	m.mumbleSleepTick.Start(mumbleMixerInterval)
+// MixOneChunk reads one 10ms chunk from all active Mumble audio streams and mixes them.
+// Returns the mixed audio buffer and the number of active streams, or nil if no streams have data.
+// Thread-safe: acquires mutex internally.
+func (m *MumbleDuplex) MixOneChunk() (mixed []int16, streamingCount int) {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
 
-	sendAudio := false
+	mixed = make([]int16, mumbleAudioChunkSize)
 
-	droppingPackets := false
-	droppingPacketCount := 0
-
-	for {
-		select {
-		case <-ctx.Done():
-			m.logger.Info("MUMBLE_MIXER", "Stopping From Mumble Mixer")
-
-			return
-		default:
-		}
-
-		promTimerMumbleMixer.Observe(float64(m.mumbleSleepTick.SleepNextTarget(ctx, false)))
-
-		m.mutex.Lock()
-
-		sendAudio = false
-		internalMixerArr := make([]gumble.AudioBuffer, 0)
-		streamingCount := 0
-
-		// Work through each stream
-		for i := range m.streams {
-			if len(m.streams[i]) > 0 {
-				sendAudio = true
-				streamingCount++
-				audioData := <-m.streams[i]
-				internalMixerArr = append(internalMixerArr, audioData)
+	for i := range m.streams {
+		bufLen := len(m.streams[i])
+		if bufLen > 0 {
+			streamingCount++
+			// Skip old chunks when buffer is too deep. This happens when the Mumble
+			// server's clock runs faster than ours — audio accumulates faster than
+			// we consume it. Without this, delay grows monotonically over time.
+			if bufLen > mumbleMaxBufferDepth {
+				skip := bufLen - mumbleMaxBufferDepth
+				for range skip {
+					<-m.streams[i]
+				}
+				promMumbleChunksSkipped.Add(float64(skip))
 			}
-		}
-
-		m.mutex.Unlock()
-
-		promMumbleStreaming.Set(float64(streamingCount))
-
-		if sendAudio {
-			outBuf := make([]int16, mumbleAudioChunkSize)
-
-			// Mix audio from all active streams
-			for i := range outBuf {
-				for _, audioData := range internalMixerArr {
-					outBuf[i] += audioData[i]
-				}
-			}
-
-			// Always try to send to Discord - let Discord side handle its own connection state
-			promToDiscordBufferSize.Set(float64(len(toDiscord)))
-			select {
-			case toDiscord <- outBuf:
-				if droppingPackets {
-					m.logger.Info("MUMBLE_MIXER", fmt.Sprintf("Discord buffer ok, total packets dropped: %d", droppingPacketCount))
-					droppingPackets = false
-				}
-			default:
-				if !droppingPackets {
-					m.logger.Warn("MUMBLE_MIXER", "toDiscord buffer full. Dropping packets")
-					droppingPackets = true
-					droppingPacketCount = 0
-				}
-				droppingPacketCount++
-				promToDiscordDropped.Inc()
-				// Don't cancel the entire bridge for Discord buffer issues in managed mode
-				if droppingPacketCount > mumbleMaxDroppedPackets {
-					m.logger.Warn("MUMBLE_MIXER", "Discord buffer overflowing, packets will be sunk")
-					droppingPacketCount = 0 // Reset to avoid spam
-				}
+			audioData := <-m.streams[i]
+			for j := range mixed {
+				mixed[j] += audioData[j]
 			}
 		}
 	}
+
+	if streamingCount == 0 {
+		return nil, 0
+	}
+
+	return mixed, streamingCount
 }
 
 // toMumbleSender sends audio packets from Discord to Mumble's audio channel.
@@ -279,13 +236,14 @@ func (m *MumbleDuplex) toMumbleSender(ctx context.Context, internalChan <-chan g
 
 			// Detect channel change: reconnection, disconnect, or first connect
 			if currentOutgoing != mumbleOutgoing {
-				if mumbleOutgoing != nil && currentOutgoing != nil {
+				switch {
+				case mumbleOutgoing != nil && currentOutgoing != nil:
 					closeOldChannel(mumbleOutgoing)
 					m.logger.Info("MUMBLE_FORWARDER", "Mumble reconnected, refreshed audio channel")
-				} else if currentOutgoing == nil {
+				case currentOutgoing == nil:
 					closeOldChannel(mumbleOutgoing)
 					m.logger.Info("MUMBLE_FORWARDER", "Mumble disconnected")
-				} else {
+				default:
 					m.logger.Info("MUMBLE_FORWARDER", "Mumble connected, got audio channel")
 				}
 				mumbleOutgoing = currentOutgoing
