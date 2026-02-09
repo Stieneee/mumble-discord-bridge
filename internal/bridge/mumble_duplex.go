@@ -232,52 +232,63 @@ func (m *MumbleDuplex) fromMumbleMixer(ctx context.Context, toDiscord chan []int
 	}
 }
 
-// toMumbleSender sends audio packets from Discord to Mumble's audio channel
-// Uses blocking read (packets are already paced by fromDiscordMixer) and timeout send to prevent blocking
+// toMumbleSender sends audio packets from Discord to Mumble's audio channel.
+// Detects Mumble reconnections by comparing the cached audio channel pointer against
+// MumbleConnectionManager.GetAudioOutgoing(). The pointer changes when a new gumble
+// client is created, so even if Mumble reconnects while this goroutine is blocked
+// waiting for Discord packets, the stale channel is detected on the next packet.
 func (m *MumbleDuplex) toMumbleSender(ctx context.Context, internalChan <-chan gumble.AudioBuffer) {
-	const sendTimeout = 20 * time.Millisecond // Timeout for send to gumble
+	const sendTimeout = 20 * time.Millisecond
 
 	var mumbleOutgoing chan<- gumble.AudioBuffer
-	var lastConnectionState bool
 
 	sendTimer := time.NewTimer(sendTimeout)
 	sendTimer.Stop()
 
-	m.logger.Debug("MUMBLE_FORWARDER", "Starting Mumble audio forwarder")
+	// closeOldChannel safely closes a stale gumble AudioOutgoing channel,
+	// allowing gumble's goroutine to exit cleanly.
+	closeOldChannel := func(ch chan<- gumble.AudioBuffer) {
+		if ch == nil {
+			return
+		}
+		defer func() {
+			if r := recover(); r != nil {
+				m.logger.Warn("MUMBLE_FORWARDER", fmt.Sprintf("Panic closing old audio channel: %v", r))
+			}
+		}()
+		close(ch)
+	}
 
 	for {
 		select {
 		case <-ctx.Done():
-			m.logger.Debug("MUMBLE_FORWARDER", "Stopping Mumble audio forwarder")
 			sendTimer.Stop()
+			closeOldChannel(mumbleOutgoing)
 
 			return
 
 		case packet := <-internalChan:
-			// Update buffer metric
 			promMumbleBufferedPackets.Set(float64(len(internalChan)))
 
-			// Check connection state
-			currentConnectionState := m.bridge.MumbleConnectionManager != nil && m.bridge.MumbleConnectionManager.IsConnected()
-
-			if currentConnectionState != lastConnectionState {
-				if currentConnectionState {
-					// Connected - get new channel
-					m.logger.Debug("MUMBLE_FORWARDER", "Mumble connected, getting audio channel")
-					mumbleOutgoing = m.bridge.MumbleConnectionManager.GetAudioOutgoing()
-				} else {
-					// Disconnected
-					m.logger.Debug("MUMBLE_FORWARDER", "Mumble disconnected")
-					mumbleOutgoing = nil
-				}
-				lastConnectionState = currentConnectionState
+			// Get current audio channel from connection manager.
+			// The pointer is cached per-client, so a different pointer means reconnection.
+			var currentOutgoing chan<- gumble.AudioBuffer
+			if m.bridge.MumbleConnectionManager != nil {
+				currentOutgoing = m.bridge.MumbleConnectionManager.GetAudioOutgoing()
 			}
 
-			// If not connected, sink packet
-			if !currentConnectionState {
-				promPacketsSunk.WithLabelValues("mumble", "inbound").Inc()
-
-				continue
+			// Detect channel change: reconnection, disconnect, or first connect
+			if currentOutgoing != mumbleOutgoing {
+				if mumbleOutgoing != nil && currentOutgoing != nil {
+					closeOldChannel(mumbleOutgoing)
+					m.logger.Info("MUMBLE_FORWARDER", "Mumble reconnected, refreshed audio channel")
+				} else if currentOutgoing == nil {
+					closeOldChannel(mumbleOutgoing)
+					m.logger.Info("MUMBLE_FORWARDER", "Mumble disconnected")
+				} else {
+					m.logger.Info("MUMBLE_FORWARDER", "Mumble connected, got audio channel")
+				}
+				mumbleOutgoing = currentOutgoing
 			}
 
 			if mumbleOutgoing == nil {
@@ -286,7 +297,6 @@ func (m *MumbleDuplex) toMumbleSender(ctx context.Context, internalChan <-chan g
 				continue
 			}
 
-			// Try to send with timeout
 			sendTimer.Reset(sendTimeout)
 			select {
 			case mumbleOutgoing <- packet:
@@ -297,11 +307,6 @@ func (m *MumbleDuplex) toMumbleSender(ctx context.Context, internalChan <-chan g
 			case <-sendTimer.C:
 				promMumbleSendTimeouts.Inc()
 				promToMumbleDropped.Inc()
-				bufferSize := len(internalChan)
-				if bufferSize > 25 { // Only log when significantly backed up (buffer capacity is 50)
-					m.logger.Debug("MUMBLE_FORWARDER",
-						fmt.Sprintf("Send timeout, dropping packet (buffer: %d)", bufferSize))
-				}
 			}
 		}
 	}
