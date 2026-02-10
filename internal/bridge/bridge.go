@@ -168,9 +168,10 @@ type BridgeState struct { //nolint:revive // API consistency: keeping Bridge pre
 	// Metrics change callback for event-driven updates
 	MetricsChangeCallback func()
 
-	// Connection event handling context and cancellation
+	// Connection event handling context, cancellation, and goroutine tracking
 	connectionCtx    context.Context
 	connectionCancel context.CancelFunc
+	connectionWg     sync.WaitGroup
 
 	// Reference to BridgeInstance for event forwarding (if available)
 	BridgeInstance interface {
@@ -304,10 +305,18 @@ func (b *BridgeState) startConnectionManagers() error {
 	}
 
 	// Start connection event monitoring
-	go b.monitorConnectionEvents()
+	b.connectionWg.Add(1)
+	go func() {
+		defer b.connectionWg.Done()
+		b.monitorConnectionEvents()
+	}()
 
 	// Start metrics updater for connection uptimes
-	go b.updateConnectionMetrics()
+	b.connectionWg.Add(1)
+	go func() {
+		defer b.connectionWg.Done()
+		b.updateConnectionMetrics()
+	}()
 
 	b.Logger.Info("BRIDGE", "Connection managers started successfully")
 
@@ -323,7 +332,9 @@ func (b *BridgeState) monitorConnectionEvents() {
 			b.Logger.Error("BRIDGE", fmt.Sprintf("Connection event monitoring panic recovered: %v", r))
 			// Restart monitoring after a brief delay if context is still active
 			if b.connectionCtx.Err() == nil {
+				b.connectionWg.Add(1)
 				go func() {
+					defer b.connectionWg.Done()
 					time.Sleep(5 * time.Second)
 					b.monitorConnectionEvents()
 				}()
@@ -488,6 +499,9 @@ func (b *BridgeState) stopConnectionManagers() {
 	if b.connectionCancel != nil {
 		b.connectionCancel()
 	}
+
+	// Wait for connection monitoring goroutines to exit before cleaning up
+	b.connectionWg.Wait()
 
 	if b.DiscordVoiceConnectionManager != nil {
 		if err := b.DiscordVoiceConnectionManager.Stop(); err != nil {
