@@ -160,9 +160,13 @@ func (m *MumbleDuplex) MixOneChunk() (mixed []int16, streamingCount int) {
 	defer m.mutex.Unlock()
 
 	mixed = make([]int16, mumbleAudioChunkSize)
+	var maxDepth int
 
 	for i := range m.streams {
 		bufLen := len(m.streams[i])
+		if bufLen > maxDepth {
+			maxDepth = bufLen
+		}
 		if bufLen > 0 {
 			streamingCount++
 			// Skip old chunks when buffer is too deep. This happens when the Mumble
@@ -181,6 +185,8 @@ func (m *MumbleDuplex) MixOneChunk() (mixed []int16, streamingCount int) {
 			}
 		}
 	}
+
+	promMumbleMaxStreamDepth.Set(float64(maxDepth))
 
 	if streamingCount == 0 {
 		return nil, 0

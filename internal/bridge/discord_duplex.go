@@ -107,6 +107,11 @@ func (dd *DiscordDuplex) toDiscordSender(ctx context.Context) {
 	var pendingChunk []int16 // First of 2 chunks waiting for second
 	var noDataTicks int      // Consecutive ticks with no audio data
 
+	// Diagnostic: track speaking/silence cycles and RTP timestamp drift
+	var lastSilenceStart time.Time
+	senderStart := time.Now()
+	var totalPacketsSent int64
+
 	internalSend := func(opus []byte) {
 		// Get opus channels - this atomically checks connection state, readiness, and channel availability
 		opusSend, _, connectionReady := dd.Bridge.DiscordVoiceConnectionManager.GetOpusChannels()
@@ -129,7 +134,12 @@ func (dd *DiscordDuplex) toDiscordSender(ctx context.Context) {
 		// Send opus packet with timeout protection using safely obtained channel
 		select {
 		case opusSend <- opus:
+			totalPacketsSent++
 			promDiscordSentPackets.Inc()
+			// RTP drift: wall clock elapsed minus audio time represented by packets sent.
+			// discordgo increments RTP timestamp by 960 (20ms) per packet, but freezes
+			// during silence. This metric shows how far behind the timestamp falls.
+			promRtpTimestampDrift.Set(time.Since(senderStart).Seconds() - float64(totalPacketsSent)*0.02)
 		case <-ctx.Done():
 			// Context canceled, don't log as error
 		default:
@@ -201,6 +211,10 @@ func (dd *DiscordDuplex) toDiscordSender(ctx context.Context) {
 			}
 
 			if !streaming {
+				if !lastSilenceStart.IsZero() {
+					promSilenceGapMs.Observe(float64(time.Since(lastSilenceStart).Milliseconds()))
+				}
+				promSpeakingTransitions.Inc()
 				speakingStart = time.Now()
 				setSpeaking(true)
 				streaming = true
@@ -219,6 +233,10 @@ func (dd *DiscordDuplex) toDiscordSender(ctx context.Context) {
 					OnError("Encoding Error", err)
 				} else {
 					if !streaming {
+						if !lastSilenceStart.IsZero() {
+							promSilenceGapMs.Observe(float64(time.Since(lastSilenceStart).Milliseconds()))
+						}
+						promSpeakingTransitions.Inc()
 						speakingStart = time.Now()
 						setSpeaking(true)
 						streaming = true
@@ -245,6 +263,7 @@ func (dd *DiscordDuplex) toDiscordSender(ctx context.Context) {
 
 				setSpeaking(false)
 				streaming = false
+				lastSilenceStart = time.Now()
 				noDataTicks = 0
 			}
 		}

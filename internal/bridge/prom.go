@@ -82,7 +82,28 @@ var (
 		Help: "Number of stale audio chunks skipped due to buffer depth exceeding threshold (indicates clock drift)",
 	})
 
+	promMumbleMaxStreamDepth = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "mdb_mumble_max_stream_depth_gauge",
+		Help: "Maximum buffer depth across all active Mumble audio streams (diagnostic for latency investigation)",
+	})
+
 	// DISCORD
+
+	promSpeakingTransitions = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "mdb_discord_speaking_transitions_total",
+		Help: "Number of silence-to-speaking transitions on Mumble-to-Discord path (each transition may grow Discord jitter buffer)",
+	})
+
+	promSilenceGapMs = promauto.NewHistogram(prometheus.HistogramOpts{
+		Name:    "mdb_discord_silence_gap_ms",
+		Help:    "Duration of silence gaps before speaking resumes on Mumble-to-Discord path (milliseconds)",
+		Buckets: []float64{50, 100, 500, 1000, 2000, 5000, 10000, 30000, 60000},
+	})
+
+	promRtpTimestampDrift = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "mdb_discord_rtp_timestamp_drift_seconds",
+		Help: "Cumulative drift between wall clock and RTP timestamp (seconds). Grows during silence because discordgo freezes the RTP timestamp when no packets are sent.",
+	})
 
 	promDiscordUsers = promauto.NewGauge(prometheus.GaugeOpts{
 		Name: "mdb_discord_users_gauge",

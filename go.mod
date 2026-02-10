@@ -30,4 +30,4 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
-replace github.com/bwmarrin/discordgo => github.com/Stieneee/discordgo v0.0.0-20260208155000-7b96d2d8d1a2
+replace github.com/bwmarrin/discordgo => github.com/Stieneee/discordgo v0.0.0-20260210053631-8000b7e6fa12
