@@ -15,7 +15,7 @@ import (
 const (
 	mumbleStreamBufferSize = 24  // Buffer size for individual audio streams (240ms, sufficient for TCP jitter)
 	mumbleAudioChunkSize   = 480 // Samples per 10ms audio chunk
-	mumbleMaxBufferDepth   = 4   // Max per-stream chunks before skipping old ones (40ms; prevents clock drift accumulation)
+	mumbleMaxBufferDepth   = 6   // Max per-stream chunks before skipping old ones (60ms; prevents clock drift accumulation)
 )
 
 // MumbleDuplex - listener and outgoing

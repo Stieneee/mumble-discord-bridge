@@ -217,7 +217,7 @@ All buffers store **10ms packets** (480 samples @ 48kHz):
 
 ### Buffer Depth Cap (Clock Drift Protection)
 
-`MixOneChunk()` enforces a maximum per-stream buffer depth of 4 chunks (40ms). If a stream's buffer exceeds this threshold, old chunks are skipped before reading. This prevents latency from growing monotonically when the Mumble server's clock runs slightly faster than the bridge's clock. Skipped chunks are tracked by `promMumbleChunksSkipped`.
+`MixOneChunk()` enforces a maximum per-stream buffer depth of 6 chunks (60ms). If a stream's buffer exceeds this threshold, old chunks are skipped before reading. This prevents latency from growing monotonically when the Mumble server's clock runs slightly faster than the bridge's clock. Skipped chunks are tracked by `promMumbleChunksSkipped`.
 
 ### Send Behavior
 
@@ -275,9 +275,16 @@ connection.Ready == true  --> Consider connected
 ### Stream and Buffer Metrics
 - `promMumbleArraySize`: Number of active per-user Mumble stream channels
 - `promMumbleStreaming`: Number of streams currently producing audio
+- `promMumbleMaxStreamDepth`: Maximum buffer depth across all active Mumble audio streams
 - `promDiscordArraySize`: Number of active Discord receiver entries
 - `promDiscordStreaming`: Number of Discord streams currently producing audio
 - `promDiscordPLCPackets`: PLC frames generated for lost Discord packets
+
+### RTP and Speaking Diagnostics
+
+- `promSpeakingTransitions`: Number of silence-to-speaking transitions on Mumble-to-Discord path
+- `promSilenceGapMs`: Histogram of silence gap durations before speaking resumes (milliseconds)
+- `promRtpTimestampDrift`: Cumulative silence time between wall clock and packets sent (seconds)
 
 ### Timer Performance Metrics
 - `promTimerDiscordSend`: SleepCT drift for Mumble->Discord sender (10ms target)
