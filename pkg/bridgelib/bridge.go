@@ -186,6 +186,9 @@ func NewBridgeInstanceWithContext(ctx context.Context, id string, config *Bridge
 	inst.State.BridgeConfig.MumbleConfig.Username = config.MumbleUsername
 	inst.State.BridgeConfig.MumbleConfig.Password = config.MumblePassword
 	inst.State.BridgeConfig.MumbleConfig.AudioInterval = time.Millisecond * 10
+	if config.MumbleBotFlag {
+		inst.State.BridgeConfig.MumbleConfig.ClientType = 1 // BOT — tells Mumble server to exclude from user count
+	}
 	bridgeLogger.Debug("BRIDGE_INIT", fmt.Sprintf("Mumble config created for user: %s", config.MumbleUsername))
 
 	// Create the Mumble listener
