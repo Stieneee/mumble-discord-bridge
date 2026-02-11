@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -117,8 +118,13 @@ type BridgeState struct { //nolint:revive // API consistency: keeping Bridge pre
 	// Bridge State Mutex
 	BridgeMutex sync.Mutex
 
-	// Bridge connection status - now tracks overall bridge state
+	// Connected is true when both Discord and Mumble connections are healthy.
+	// Used for readiness checks, text message gating, and MumbleUserCount adjustment.
 	Connected bool
+
+	// BridgeActive is true while a StartBridge() session is running (from entry to return).
+	// Prevents AutoBridge from queuing duplicate StartBridge() calls during the connection window.
+	BridgeActive bool
 
 	// Individual connection states
 	DiscordConnected bool
@@ -167,6 +173,9 @@ type BridgeState struct { //nolint:revive // API consistency: keeping Bridge pre
 
 	// Metrics change callback for event-driven updates
 	MetricsChangeCallback func()
+
+	// Latch to fire presence announcement exactly once per bridge session. Protected by BridgeMutex.
+	presenceAnnounced bool
 
 	// Connection event handling context, cancellation, and goroutine tracking
 	connectionCtx    context.Context
@@ -457,31 +466,22 @@ func (b *BridgeState) handleMumbleConnectionEvent(event ConnectionEvent) {
 	}
 }
 
-// updateOverallConnectionState updates the overall bridge connection state based on bridge mode
-// This version requires the caller to hold the BridgeMutex
+// updateOverallConnectionState updates the overall bridge connection state.
+// Connected means both sides are up and the bridge is functional.
+// This version requires the caller to hold the BridgeMutex.
 func (b *BridgeState) updateOverallConnectionState() {
-	// Bridge is considered connected if both connections are up
-	// or if in auto mode and at least one connection is up
 	oldConnected := b.Connected
-
-	switch b.Mode {
-	case BridgeModeConstant:
-		// Constant mode: bridge is running regardless of connection states
-		b.Connected = true
-	case BridgeModeAuto:
-		// Auto mode: bridge is connected if at least one connection is up
-		b.Connected = b.DiscordConnected || b.MumbleConnected
-	case BridgeModeManual:
-		// Manual mode: bridge is connected if both connections are up
-		b.Connected = b.DiscordConnected && b.MumbleConnected
-	default:
-		// Default to constant mode behavior
-		b.Connected = true
-	}
+	b.Connected = b.DiscordConnected && b.MumbleConnected
 
 	if oldConnected != b.Connected {
 		b.Logger.Info("BRIDGE", fmt.Sprintf("Overall bridge connection state changed: %v -> %v (Discord: %v, Mumble: %v)",
 			oldConnected, b.Connected, b.DiscordConnected, b.MumbleConnected))
+	}
+
+	// Presence announcement: fire once when both sides are connected
+	if b.DiscordConnected && b.MumbleConnected && !b.presenceAnnounced {
+		b.presenceAnnounced = true
+		go b.sendPresenceAnnouncement()
 	}
 }
 
@@ -490,6 +490,95 @@ func (b *BridgeState) UpdateOverallConnectionState() {
 	b.BridgeMutex.Lock()
 	defer b.BridgeMutex.Unlock()
 	b.updateOverallConnectionState()
+}
+
+// tryPresenceAnnouncement checks the latch and fires the presence announcement if both
+// sides are connected. Used as a second trigger point from populateExistingDiscordUsers
+// to handle the case where Discord users are populated asynchronously after DiscordConnected.
+func (b *BridgeState) tryPresenceAnnouncement() {
+	b.BridgeMutex.Lock()
+	if !b.DiscordConnected || !b.MumbleConnected || b.presenceAnnounced {
+		b.BridgeMutex.Unlock()
+
+		return
+	}
+	b.presenceAnnounced = true
+	b.BridgeMutex.Unlock()
+
+	go b.sendPresenceAnnouncement()
+}
+
+// sendPresenceAnnouncement sends a one-time message to each side listing users on the other side.
+// Runs in its own goroutine. No locks held on entry.
+func (b *BridgeState) sendPresenceAnnouncement() {
+	// Collect Mumble user names
+	b.MumbleUsersMutex.Lock()
+	mumbleNames := make([]string, 0, len(b.MumbleUsers))
+	for name := range b.MumbleUsers {
+		mumbleNames = append(mumbleNames, name)
+	}
+	b.MumbleUsersMutex.Unlock()
+
+	// Collect Discord user names
+	b.DiscordUsersMutex.Lock()
+	discordNames := make([]string, 0, len(b.DiscordUsers))
+	for _, u := range b.DiscordUsers {
+		discordNames = append(discordNames, u.username)
+	}
+	b.DiscordUsersMutex.Unlock()
+
+	b.Logger.Info("BRIDGE", fmt.Sprintf("Sending presence announcement (Mumble users: %d, Discord users: %d)",
+		len(mumbleNames), len(discordNames)))
+
+	// Send to Discord: tell them who's on Mumble
+	if len(mumbleNames) > 0 {
+		b.discordSendMessage(fmt.Sprintf("Bridge connected. Mumble users: %s",
+			strings.Join(mumbleNames, ", ")))
+	} else {
+		b.discordSendMessage("Bridge connected.")
+	}
+
+	// Send to Mumble: tell them who's on Discord
+	if !b.BridgeConfig.MumbleDisableText {
+		var msg string
+		if len(discordNames) > 0 {
+			msg = fmt.Sprintf("Bridge connected. Discord users: %s",
+				strings.Join(discordNames, ", "))
+		} else {
+			msg = "Bridge connected."
+		}
+
+		var client *gumble.Client
+		if b.MumbleConnectionManager != nil {
+			client = b.MumbleConnectionManager.GetClient()
+		}
+		if client != nil {
+			done := make(chan bool, 1)
+			go func() {
+				defer func() {
+					if r := recover(); r != nil {
+						b.Logger.Error("BRIDGE", fmt.Sprintf("Panic in presence announcement to Mumble: %v", r))
+					}
+					select {
+					case done <- true:
+					default:
+					}
+				}()
+				client.Do(func() {
+					if client.Self != nil && client.Self.Channel != nil {
+						client.Self.Channel.Send(msg, false)
+					}
+				})
+			}()
+
+			select {
+			case <-done:
+				b.Logger.Debug("BRIDGE", "Sent presence announcement to Mumble")
+			case <-time.After(2 * time.Second):
+				b.Logger.Warn("BRIDGE", "Timeout sending presence announcement to Mumble")
+			}
+		}
+	}
 }
 
 // stopConnectionManagers stops both connection managers
@@ -514,6 +603,11 @@ func (b *BridgeState) stopConnectionManagers() {
 			b.Logger.Error("BRIDGE", fmt.Sprintf("Error stopping Mumble connection manager: %v", err))
 		}
 	}
+
+	// Brief sleep to let gumble's readRoutine finish iterating config.Listeners
+	// after Disconnect(). The readRoutine calls onDisconnect asynchronously, and
+	// without this, a new bridge session's config.Attach() can race with it.
+	time.Sleep(200 * time.Millisecond)
 
 	b.BridgeMutex.Lock()
 	b.DiscordConnected = false
@@ -630,6 +724,10 @@ func (b *BridgeState) populateExistingDiscordUsers() {
 	} else {
 		b.Logger.Debug("BRIDGE", "No existing Discord users found in voice channel")
 	}
+
+	// Second trigger point for presence announcement: Discord users are now populated.
+	// Covers constant/manual mode where user list is populated asynchronously.
+	b.tryPresenceAnnouncement()
 }
 
 // sendMumbleNotifications sends notifications to Mumble with timeout protection
@@ -730,14 +828,16 @@ func (b *BridgeState) StartBridge() {
 	b.Logger.Debug("BRIDGE", "StartBridge called, checking connection status")
 
 	b.BridgeMutex.Lock()
-	if b.Connected {
-		b.Logger.Info("BRIDGE", "Bridge already connected, aborting start")
+	if b.Connected || b.BridgeActive {
+		b.Logger.Info("BRIDGE", "Bridge already active, aborting start")
 		b.BridgeMutex.Unlock()
 
 		return
 	}
+	b.BridgeActive = true
 	// Set StartTime while holding lock to prevent races
 	b.StartTime = time.Now()
+	b.presenceAnnounced = false
 	b.BridgeMutex.Unlock()
 
 	b.Logger.Info("BRIDGE", "Starting bridge process with managed connections")
@@ -878,13 +978,9 @@ func (b *BridgeState) StartBridge() {
 		}
 	}()
 
-	// Mark bridge as connected (overall state)
-	b.BridgeMutex.Lock()
-	b.Connected = true
-	b.BridgeMutex.Unlock()
-
-	b.notifyMetricsChange()
-	b.Logger.Info("BRIDGE", "Bridge started with managed connections")
+	// Connected will be set to true by updateOverallConnectionState() once both
+	// Discord and Mumble report connected via their connection event handlers.
+	b.Logger.Info("BRIDGE", "Bridge started with managed connections, waiting for connections")
 
 	// Hold until canceled or external die request
 	select {
@@ -897,6 +993,7 @@ func (b *BridgeState) StartBridge() {
 
 	b.BridgeMutex.Lock()
 	b.Connected = false
+	b.BridgeActive = false
 	b.BridgeMutex.Unlock()
 
 	b.notifyMetricsChange()
@@ -977,7 +1074,10 @@ func (b *BridgeState) MumblePingLoop(ctx context.Context) {
 			b.BridgeMutex.Lock()
 			b.MumbleUsersMutex.Lock()
 			b.MumbleUserCount = resp.ConnectedUsers
-			if b.Connected {
+			// Subtract the bridge bot when it is included in the ping count.
+			// Mumble 1.5+ servers with MumbleBotFlag already exclude bots from
+			// ConnectedUsers, so only decrement when the flag is NOT set.
+			if b.BridgeActive && !b.BridgeConfig.MumbleBotFlag {
 				b.MumbleUserCount--
 			}
 			b.MumbleUsersMutex.Unlock()
@@ -1128,19 +1228,19 @@ func (b *BridgeState) AutoBridge() {
 		b.MumbleUsersMutex.Lock()
 		b.DiscordUsersMutex.Lock()
 
-		// Check if bridge should be started
-		if !b.Connected && b.MumbleUserCount > 0 && len(b.DiscordUsers) > 0 {
+		// Check if bridge should be started (use BridgeActive to avoid starting during connection window)
+		if !b.BridgeActive && b.MumbleUserCount > 0 && len(b.DiscordUsers) > 0 {
 			b.Logger.Info("BRIDGE", "Users detected in mumble and discord, starting bridge")
 			go b.StartBridge()
 		}
 
-		// Stop bridge when either side has no users (symmetric with start condition)
-		if b.Connected && (b.MumbleUserCount == 0 || len(b.DiscordUsers) == 0) {
-			b.Logger.Info("BRIDGE", "No users detected on one side, stopping bridge")
-			go b.StopBridge() // Use graceful stop instead of direct signal
+		// Stop bridge when either side has no users
+		if b.BridgeActive && (b.MumbleUserCount == 0 || len(b.DiscordUsers) == 0) {
+			b.Logger.Info("BRIDGE", fmt.Sprintf(
+				"No users on one side (mumble=%d, discord=%d), stopping bridge",
+				b.MumbleUserCount, len(b.DiscordUsers)))
+			go b.StopBridge()
 		}
-
-		// Auto mode check completed - no periodic status logging
 
 		b.DiscordUsersMutex.Unlock()
 		b.MumbleUsersMutex.Unlock()

@@ -98,7 +98,7 @@ func (m *MumbleDuplex) OnAudioStream(e *gumble.AudioStreamEvent) {
 			}
 		}()
 
-		loop:
+	loop:
 		for {
 			select {
 			case p, ok := <-e.C:

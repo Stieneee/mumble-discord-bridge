@@ -174,9 +174,9 @@ func TestBridge_UpdateOverallConnectionState(t *testing.T) {
 		expectedConn bool
 	}{
 		{"Constant - both connected", BridgeModeConstant, true, true, true},
-		{"Constant - none connected", BridgeModeConstant, false, false, true},
+		{"Constant - none connected", BridgeModeConstant, false, false, false},
 		{"Auto - both connected", BridgeModeAuto, true, true, true},
-		{"Auto - one connected", BridgeModeAuto, true, false, true},
+		{"Auto - one connected", BridgeModeAuto, true, false, false},
 		{"Auto - none connected", BridgeModeAuto, false, false, false},
 		{"Manual - both connected", BridgeModeManual, true, true, true},
 		{"Manual - one connected", BridgeModeManual, true, false, false},

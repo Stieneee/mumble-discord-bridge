@@ -433,10 +433,10 @@ func (b *BridgeInstance) Stop() error {
 		b.logger.Debug("BRIDGE_STOP", "Auto bridge stop signal sent")
 	}
 
-	// Stop the bridge if it's connected
+	// Stop the bridge if it's active
 	b.logger.Debug("BRIDGE_STOP", "Checking bridge connection status")
 	b.State.BridgeMutex.Lock()
-	connected := b.State.Connected
+	connected := b.State.Connected || b.State.BridgeActive
 	if connected {
 		b.logger.Debug("BRIDGE_STOP", "Bridge is connected, sending die signal")
 		b.State.BridgeDie <- true
