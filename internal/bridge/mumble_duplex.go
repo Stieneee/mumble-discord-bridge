@@ -74,11 +74,13 @@ func (m *MumbleDuplex) OnAudioStream(e *gumble.AudioStreamEvent) {
 	m.mutex.Lock()
 	m.streams = append(m.streams, stream)
 	// Add cleanup callback for this stream using map for O(1) access
+	done := make(chan struct{})
 	m.streamCleanupCallbacks[stream] = func() {
 		streamMutex.Lock()
 		defer streamMutex.Unlock()
 		if !streamClosed {
 			close(stream)
+			close(done)
 			streamClosed = true
 			m.logger.Debug("MUMBLE_STREAM", fmt.Sprintf("Forcibly closed stream for user: %s during cleanup", e.User.Name))
 		}
@@ -96,30 +98,42 @@ func (m *MumbleDuplex) OnAudioStream(e *gumble.AudioStreamEvent) {
 			}
 		}()
 
-		for p := range e.C {
-			// Hold lock once per packet instead of per chunk to reduce overhead
-			streamMutex.Lock()
-			if streamClosed {
+		loop:
+		for {
+			select {
+			case p, ok := <-e.C:
+				if !ok {
+					// gumble closed the audio stream channel
+					break loop
+				}
+
+				// Hold lock once per packet instead of per chunk to reduce overhead
+				streamMutex.Lock()
+				if streamClosed {
+					streamMutex.Unlock()
+
+					break loop
+				}
+
+				// Process all audio chunks while holding lock
+				for i := 0; i < len(p.AudioBuffer)/mumbleAudioChunkSize; i++ {
+					start := mumbleAudioChunkSize * i
+					end := mumbleAudioChunkSize * (i + 1)
+					// Non-blocking send to avoid hanging on closed stream
+					select {
+					case stream <- p.AudioBuffer[start:end]:
+					default:
+						// Stream buffer full, drop packet
+						m.logger.Debug("MUMBLE_STREAM", fmt.Sprintf("Stream buffer full for %s, dropping packet", name))
+					}
+				}
 				streamMutex.Unlock()
 
-				break
-			}
+				promReceivedMumblePackets.Inc()
 
-			// Process all audio chunks while holding lock
-			for i := 0; i < len(p.AudioBuffer)/mumbleAudioChunkSize; i++ {
-				start := mumbleAudioChunkSize * i
-				end := mumbleAudioChunkSize * (i + 1)
-				// Non-blocking send to avoid hanging on closed stream
-				select {
-				case stream <- p.AudioBuffer[start:end]:
-				default:
-					// Stream buffer full, drop packet
-					m.logger.Debug("MUMBLE_STREAM", fmt.Sprintf("Stream buffer full for %s, dropping packet", name))
-				}
+			case <-done:
+				break loop
 			}
-			streamMutex.Unlock()
-
-			promReceivedMumblePackets.Inc()
 		}
 
 		m.logger.Info("MUMBLE_STREAM", fmt.Sprintf("Mumble audio stream ended: %s", name))
