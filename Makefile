@@ -39,4 +39,23 @@ clean:
 	rm -rf dist
 	rm -rf LICENSES.zip LICENSES
 
-.PHONY: mumble-discord-bridge dev dev-profile dev-race licenses clean lint format
+# Packet loss testing (requires sudo, uses lo interface by default)
+# Usage: make test-packet-loss-start IFACE=eth0 LOSS=5
+IFACE ?= lo
+LOSS ?= 5
+
+test-packet-loss-start:
+	@echo "Enabling $(LOSS)% packet loss on interface $(IFACE)..."
+	sudo tc qdisc add dev $(IFACE) root netem loss $(LOSS)%
+	@echo "Packet loss enabled. Run 'make test-packet-loss-stop' to disable."
+
+test-packet-loss-stop:
+	@echo "Disabling packet loss on interface $(IFACE)..."
+	sudo tc qdisc del dev $(IFACE) root netem 2>/dev/null || true
+	@echo "Packet loss disabled."
+
+test-packet-loss-status:
+	@echo "Current tc qdisc status:"
+	tc qdisc show dev $(IFACE)
+
+.PHONY: mumble-discord-bridge dev dev-profile dev-race licenses clean lint format test-packet-loss-start test-packet-loss-stop test-packet-loss-status

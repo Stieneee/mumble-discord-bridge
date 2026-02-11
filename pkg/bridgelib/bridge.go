@@ -186,6 +186,9 @@ func NewBridgeInstanceWithContext(ctx context.Context, id string, config *Bridge
 	inst.State.BridgeConfig.MumbleConfig.Username = config.MumbleUsername
 	inst.State.BridgeConfig.MumbleConfig.Password = config.MumblePassword
 	inst.State.BridgeConfig.MumbleConfig.AudioInterval = time.Millisecond * 10
+	if config.MumbleBotFlag {
+		inst.State.BridgeConfig.MumbleConfig.ClientType = 1 // BOT — tells Mumble server to exclude from user count
+	}
 	bridgeLogger.Debug("BRIDGE_INIT", fmt.Sprintf("Mumble config created for user: %s", config.MumbleUsername))
 
 	// Create the Mumble listener
@@ -430,10 +433,10 @@ func (b *BridgeInstance) Stop() error {
 		b.logger.Debug("BRIDGE_STOP", "Auto bridge stop signal sent")
 	}
 
-	// Stop the bridge if it's connected
+	// Stop the bridge if it's active
 	b.logger.Debug("BRIDGE_STOP", "Checking bridge connection status")
 	b.State.BridgeMutex.Lock()
-	connected := b.State.Connected
+	connected := b.State.Connected || b.State.BridgeActive
 	if connected {
 		b.logger.Debug("BRIDGE_STOP", "Bridge is connected, sending die signal")
 		b.State.BridgeDie <- true

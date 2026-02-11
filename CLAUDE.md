@@ -86,6 +86,30 @@ Always acquire in this order to prevent deadlocks.
 - **auto**: Connects when users present on both sides, disconnects when empty
 - **manual**: Controlled via chat commands (`!mumble-discord link/unlink`)
 
+### discordgo Fork
+
+The project uses a fork of `bwmarrin/discordgo` at `github.com/Stieneee/discordgo`. The fork lives at `../discordgo` relative to this repo (for local development, use `replace github.com/bwmarrin/discordgo => ../discordgo` in go.mod).
+
+Key branches:
+
+- **`mumble-discord-bridge`**: Stacked branch combining all MDB-related fixes (use this for go.mod replace in CI)
+- **`fix/voice-aead-data-race`**: RLock snapshot for v.aead in opusSender/opusReceiver
+- **`fix/session-open-deadlock-v2`**: Guard Open() inline onEvent against Op 7/9 deadlock
+- **`fix/voice-rtp-silence-gap`**: Advance RTP timestamp across silence gaps + set marker bit
+
+When adding a new discordgo fix: create an independent branch from `upstream/master`, cherry-pick it onto `mumble-discord-bridge`, push both, update go.mod replace.
+
+### Audio Architecture
+
+See `docs/AUDIO-PACKET-FLOW.md` for detailed audio pipeline documentation including packet flow diagrams, buffer sizing, and metrics reference.
+
+Key audio concepts:
+
+- **RTP timestamp must track wall clock** across silence gaps, otherwise Discord's adaptive jitter buffer grows monotonically
+- **RTP marker bit (RFC 3551)** signals start of new talk-spurt after silence, allowing receivers to reset jitter buffer timing
+- **Buffer depth cap** (`mumbleMaxBufferDepth`) prevents Mumble clock drift from accumulating latency
+- Mumble uses 10ms frames, Discord uses 20ms Opus frames; the bridge converts between them
+
 ## Testing Patterns
 
 Tests use mocks defined in `internal/bridge/mocks_test.go`. Common test utilities in `testutil_test.go`.

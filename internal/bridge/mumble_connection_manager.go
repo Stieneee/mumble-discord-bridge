@@ -24,6 +24,12 @@ type MumbleConnectionManager struct {
 	disconnectCh       chan *gumble.DisconnectEvent // Channel to signal disconnection events
 	disconnectMux      sync.Mutex                   // Protects disconnectCh and disconnectChClosed
 	disconnectChClosed bool                         // Flag to track if disconnectCh is closed
+
+	// Cached audio channel — created once per client in connect(), set to nil in disconnectInternal().
+	// gumble.AudioOutgoing() spawns a goroutine per channel, so we must not call it more than once
+	// per client. The caller (toMumbleSender) detects reconnections by comparing channel pointers
+	// and closes the stale channel to clean up gumble's goroutine.
+	audioOutgoing chan<- gumble.AudioBuffer // Protected by clientMutex
 }
 
 // NewMumbleConnectionManager creates a new Mumble connection manager
@@ -146,9 +152,10 @@ func (m *MumbleConnectionManager) connect() error {
 		return fmt.Errorf("failed to connect to Mumble server: %w", err)
 	}
 
-	// Store connection
+	// Store connection and create audio channel
 	m.clientMutex.Lock()
 	m.client = client
+	m.audioOutgoing = client.AudioOutgoing()
 	m.clientMutex.Unlock()
 
 	m.logger.Debug("MUMBLE_CONN", fmt.Sprintf("Mumble connection established successfully to %s, client state: %d",
@@ -157,10 +164,15 @@ func (m *MumbleConnectionManager) connect() error {
 	return nil
 }
 
-// disconnectInternal disconnects from Mumble without changing status
+// disconnectInternal disconnects from Mumble without changing status.
+// Sets audioOutgoing to nil but does NOT close the channel — the caller
+// (toMumbleSender) closes it when it detects the pointer change, avoiding
+// a send-on-closed-channel race.
 func (m *MumbleConnectionManager) disconnectInternal() {
 	m.clientMutex.Lock()
 	defer m.clientMutex.Unlock()
+
+	m.audioOutgoing = nil
 
 	if m.client != nil {
 		m.logger.Debug("MUMBLE_CONN", "Disconnecting from Mumble")
@@ -285,16 +297,14 @@ func (m *MumbleConnectionManager) OnContextActionChange(_ *gumble.ContextActionC
 // OnServerConfig implements gumble.EventListener interface (unused)
 func (m *MumbleConnectionManager) OnServerConfig(_ *gumble.ServerConfigEvent) {}
 
-// GetAudioOutgoing returns the audio outgoing channel from the Mumble client
+// GetAudioOutgoing returns the cached audio outgoing channel for the current client.
+// Returns nil when disconnected. The channel pointer changes on each reconnection,
+// so callers can detect reconnections by comparing pointers.
 func (m *MumbleConnectionManager) GetAudioOutgoing() chan<- gumble.AudioBuffer {
 	m.clientMutex.RLock()
 	defer m.clientMutex.RUnlock()
 
-	if m.client == nil {
-		return nil
-	}
-
-	return m.client.AudioOutgoing()
+	return m.audioOutgoing
 }
 
 // GetSelfName safely returns the client's own name

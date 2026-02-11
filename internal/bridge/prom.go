@@ -50,14 +50,21 @@ var (
 		Help: "The count of audio packets sent to mumble",
 	})
 
-	// promToMumbleBufferSize = promauto.NewGauge(prometheus.GaugeOpts{
-	// 	Name: "mdb_to_mumble_buffer_gauge",
-	// 	Help: "",
-	// })
+	promMumbleBufferedPackets = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "mdb_to_mumble_buffer_gauge",
+		Help: "The buffer size for packets to Mumble",
+	})
 
+	// promToMumbleDropped is kept for backward compatibility with existing dashboards.
+	// promMumbleSendTimeouts tracks the same timeout events with clearer naming.
 	promToMumbleDropped = promauto.NewCounter(prometheus.CounterOpts{
 		Name: "mdb_to_mumble_dropped",
 		Help: "The number of packets timeouts to mumble",
+	})
+
+	promMumbleSendTimeouts = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "mdb_mumble_send_timeouts_total",
+		Help: "Number of timeouts when sending to gumble channel (packets dropped)",
 	})
 
 	promMumbleArraySize = promauto.NewGauge(prometheus.GaugeOpts{
@@ -70,7 +77,33 @@ var (
 		Help: "The number of active audio streams streaming audio from mumble",
 	})
 
+	promMumbleChunksSkipped = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "mdb_mumble_chunks_skipped_total",
+		Help: "Number of stale audio chunks skipped due to buffer depth exceeding threshold (indicates clock drift)",
+	})
+
+	promMumbleMaxStreamDepth = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "mdb_mumble_max_stream_depth_gauge",
+		Help: "Maximum buffer depth across all active Mumble audio streams (diagnostic for latency investigation)",
+	})
+
 	// DISCORD
+
+	promSpeakingTransitions = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "mdb_discord_speaking_transitions_total",
+		Help: "Number of silence-to-speaking transitions on Mumble-to-Discord path (each transition may grow Discord jitter buffer)",
+	})
+
+	promSilenceGapMs = promauto.NewHistogram(prometheus.HistogramOpts{
+		Name:    "mdb_discord_silence_gap_ms",
+		Help:    "Duration of silence gaps before speaking resumes on Mumble-to-Discord path (milliseconds)",
+		Buckets: []float64{50, 100, 500, 1000, 2000, 5000, 10000, 30000, 60000},
+	})
+
+	promRtpTimestampDrift = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "mdb_discord_rtp_timestamp_drift_seconds",
+		Help: "Drift between wall clock elapsed time and cumulative audio time sent (seconds). Grows during silence gaps when no packets are sent; resets are not expected.",
+	})
 
 	promDiscordUsers = promauto.NewGauge(prometheus.GaugeOpts{
 		Name: "mdb_discord_users_gauge",
@@ -87,16 +120,6 @@ var (
 		Help: "The number of packets sent to Discord",
 	})
 
-	promToDiscordBufferSize = promauto.NewGauge(prometheus.GaugeOpts{
-		Name: "mdb_discord_buffer_gauge",
-		Help: "The buffer size for packets to Discord",
-	})
-
-	promToDiscordDropped = promauto.NewCounter(prometheus.CounterOpts{
-		Name: "mdb_to_discord_dropped",
-		Help: "The count of packets dropped to discord",
-	})
-
 	promDiscordArraySize = promauto.NewGauge(prometheus.GaugeOpts{
 		Name: "mdb_discord_array_size_gauge",
 		Help: "The discord receiving array size",
@@ -107,23 +130,22 @@ var (
 		Help: "The number of active audio streams streaming from discord",
 	})
 
+	promDiscordPLCPackets = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "mdb_discord_plc_packets_total",
+		Help: "Number of PLC (packet loss concealment) frames generated for lost Discord packets",
+	})
+
 	// Sleep Timer Performance
 
 	promTimerDiscordSend = promauto.NewHistogram(prometheus.HistogramOpts{
 		Name:    "mdb_timer_discord_send",
-		Help:    "Timer performance for Discord send",
+		Help:    "Timer performance for Discord send (10ms target)",
 		Buckets: []float64{1000, 2000, 5000, 10000, 20000},
 	})
 
 	promTimerDiscordMixer = promauto.NewHistogram(prometheus.HistogramOpts{
 		Name:    "mdb_timer_discord_mixer",
 		Help:    "Timer performance for the Discord mixer",
-		Buckets: []float64{1000, 2000, 5000, 10000, 20000},
-	})
-
-	promTimerMumbleMixer = promauto.NewHistogram(prometheus.HistogramOpts{
-		Name:    "mdb_timer_mumble_mixer",
-		Help:    "Timer performance for the Mumble mixer",
 		Buckets: []float64{1000, 2000, 5000, 10000, 20000},
 	})
 
