@@ -102,7 +102,7 @@ var (
 
 	promRtpTimestampDrift = promauto.NewGauge(prometheus.GaugeOpts{
 		Name: "mdb_discord_rtp_timestamp_drift_seconds",
-		Help: "Cumulative drift between wall clock and RTP timestamp (seconds). Grows during silence because discordgo freezes the RTP timestamp when no packets are sent.",
+		Help: "Drift between wall clock elapsed time and cumulative audio time sent (seconds). Grows during silence gaps when no packets are sent; resets are not expected.",
 	})
 
 	promDiscordUsers = promauto.NewGauge(prometheus.GaugeOpts{

@@ -136,9 +136,9 @@ func (dd *DiscordDuplex) toDiscordSender(ctx context.Context) {
 		case opusSend <- opus:
 			totalPacketsSent++
 			promDiscordSentPackets.Inc()
-			// RTP drift: wall clock elapsed minus audio time represented by packets sent.
-			// discordgo increments RTP timestamp by 960 (20ms) per packet, but freezes
-			// during silence. This metric shows how far behind the timestamp falls.
+			// Drift: wall clock elapsed minus audio time represented by packets sent.
+			// Grows during silence when MDB doesn't send. The discordgo fork advances
+			// the actual RTP timestamp across silence, so this tracks MDB's send gaps.
 			promRtpTimestampDrift.Set(time.Since(senderStart).Seconds() - float64(totalPacketsSent)*0.02)
 		case <-ctx.Done():
 			// Context canceled, don't log as error
@@ -255,9 +255,12 @@ func (dd *DiscordDuplex) toDiscordSender(ctx context.Context) {
 					dd.Bridge.Logger.Warn("DISCORD_SEND", "Short Mumble to Discord speaking cycle.")
 				}
 
-				// Send silence frames as required by Discord documentation
+				// Send silence frames as required by Discord documentation.
+				// Each frame is 20ms of Opus silence but SleepCT ticks at 10ms,
+				// so sleep twice per frame to maintain correct 20ms send cadence.
 				for range silenceFrameCount {
 					internalSend(opusSilence)
+					promTimerDiscordSend.Observe(float64(dd.discordSendSleepTick.SleepNextTarget(ctx, false)))
 					promTimerDiscordSend.Observe(float64(dd.discordSendSleepTick.SleepNextTarget(ctx, false)))
 				}
 

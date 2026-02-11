@@ -244,7 +244,14 @@ func (m *MumbleDuplex) toMumbleSender(ctx context.Context, internalChan <-chan g
 
 			return
 
-		case packet := <-internalChan:
+		case packet, ok := <-internalChan:
+			if !ok {
+				sendTimer.Stop()
+				closeOldChannel(mumbleOutgoing)
+				m.logger.Info("MUMBLE_FORWARDER", "Internal audio channel closed, stopping toMumbleSender")
+
+				return
+			}
 			promMumbleBufferedPackets.Set(float64(len(internalChan)))
 
 			// Get current audio channel from connection manager.

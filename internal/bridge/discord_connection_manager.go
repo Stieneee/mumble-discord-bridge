@@ -11,9 +11,10 @@ import (
 )
 
 // DiscordVoiceConnectionManager manages Discord voice connections.
-// Initial connection is handled by MDB; reconnection is delegated to discordgo's
-// built-in reconnect logic (ShouldReconnectOnError + ShouldReconnectVoiceOnSessionError).
-// The manager monitors health and reports status. A safety timeout forces a full
+// Initial connection is handled by MDB. Voice reconnection is driven by discordgo
+// internally: when the voice WebSocket closes, discordgo calls v.reconnect().
+// ShouldReconnectVoiceOnSessionError is explicitly disabled to avoid a double-reconnect
+// race. The manager monitors health and reports status; a safety timeout forces a full
 // reconnect if voice stays unhealthy for too long.
 type DiscordVoiceConnectionManager struct {
 	*BaseConnectionManager
