@@ -4,6 +4,7 @@ go 1.24.0
 
 require (
 	github.com/bwmarrin/discordgo v0.29.1-0.20251229161010-9f6aa8159fc6
+	github.com/getsentry/sentry-go v0.30.0
 	github.com/joho/godotenv v1.5.1
 	github.com/prometheus/client_golang v1.23.0
 	github.com/rs/zerolog v1.30.0

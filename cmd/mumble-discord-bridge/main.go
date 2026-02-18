@@ -9,7 +9,9 @@ import (
 	"os/signal"
 	"runtime/pprof"
 	"syscall"
+	"time"
 
+	"github.com/getsentry/sentry-go"
 	"github.com/joho/godotenv"
 	"github.com/stieneee/mumble-discord-bridge/internal/bridge"
 	"github.com/stieneee/mumble-discord-bridge/pkg/bridgelib"
@@ -30,11 +32,49 @@ const (
 	commandModeNone    = "none"
 )
 
+// initSentry initializes the Sentry error tracking client
+func initSentry(dsn string, environment string, release string) {
+	if dsn == "" {
+		log.Println("Sentry DSN not configured, error tracking disabled")
+		return
+	}
+
+	err := sentry.Init(sentry.ClientOptions{
+		Dsn:         dsn,
+		Environment: environment,
+		Release:     release,
+		// TracesSampleRate: 1.0, // Enable if you want trace sampling
+	})
+	if err != nil {
+		log.Fatalf("Failed to initialize Sentry: %v", err)
+	}
+	log.Println("Sentry initialized")
+}
+
 func main() {
 	var err error
 
 	fmt.Println("Mumble-Discord-Bridge")
 	fmt.Println(version + " " + commit + " " + date)
+
+	// Build release string for Sentry
+	release := fmt.Sprintf("mumble-discord-bridge@%s", version)
+
+	// Sentry configuration flags
+	sentryDsn := flag.String("sentry-dsn", lookupEnvOrString("SENTRY_DSN", ""), "SENTRY_DSN, Sentry error tracking DSN, optional")
+	sentryEnvironment := flag.String("sentry-environment", lookupEnvOrString("SENTRY_ENVIRONMENT", "production"), "SENTRY_ENVIRONMENT, environment name for Sentry")
+
+	// Initialize Sentry
+	initSentry(*sentryDsn, *sentryEnvironment, release)
+
+	// Set up Sentry recovery for main goroutine
+	defer func() {
+		if r := recover(); r != nil {
+			sentry.CaptureException(r.(error))
+			sentry.Flush(2 * time.Second)
+			panic(r)
+		}
+	}()
 
 	if err := godotenv.Load(); err != nil {
 		log.Println("Failed to load .env file:", err)
@@ -262,6 +302,9 @@ func main() {
 	<-sc
 
 	log.Println("OS Signal. Bot shutting down")
+
+	// Flush Sentry before shutdown
+	sentry.Flush(2 * time.Second)
 
 	if err := bridgeInstance.Stop(); err != nil {
 		log.Println("Error stopping bridge:", err)

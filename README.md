@@ -183,6 +183,8 @@ Note boolean vales are flags when set via command line. example `-mumble-insecur
 | MUMBLE_BOT                 | -mumble-bot                 | flag   | false            | exclude bot from mumble user count, optional, requires mumble v1.5 or later                                                    |
 | PROMETHEUS_ENABLE          | -prometheus-enable          | flag   | false            | enable prometheus metrics                                                                                                      |
 | PROMETHEUS_PORT            | -prometheus-port            | int    | 9559             | prometheus metrics port                                                                                                        |
+| SENTRY_DSN                 | -sentry-dsn                 | string | ""               | Sentry error tracking DSN, optional                                                                                            |
+| SENTRY_ENVIRONMENT         | -sentry-environment         | string | "production"    | Sentry environment name                                                                                                       |
 | TO_DISCORD_BUFFER          | -to-discord-buffer          | int    | 50               | jitter buffer from Mumble to Discord to absorb timing issues related to network, OS and hardware quality. (Increments of 10ms) |
 | TO_MUMBLE_BUFFER           | -to-mumble-buffer           | int    | 50               | jitter buffer from Discord to Mumble to absorb timing issues related to network, OS and hardware quality. (Increments of 10ms) |
 
