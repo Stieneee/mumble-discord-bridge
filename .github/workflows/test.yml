@@ -41,7 +41,7 @@ jobs:
         run: go test -race -coverprofile=coverage.out -covermode=atomic ./internal/bridge ./pkg/bridgelib
 
       - name: Upload coverage to artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: coverage
           path: coverage.out
