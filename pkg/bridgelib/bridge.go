@@ -68,6 +68,10 @@ type BridgeConfig struct {
 	// Event configuration
 	EventBufferSize int
 
+	// Sound notifications for Discord connect/disconnect events
+	ConnectSoundURL    string
+	DisconnectSoundURL string
+
 	// Logger for the bridge instance
 	Logger logger.Logger
 }
