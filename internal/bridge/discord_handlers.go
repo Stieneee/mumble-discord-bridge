@@ -5,35 +5,45 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bwmarrin/discordgo"
 	"github.com/stieneee/gumble/gumble"
+	"github.com/stieneee/mumble-discord-bridge/internal/discord"
 )
 
 // DiscordListener holds references to the current BridgeConf
-// and BridgeState for use by the event handlers
+// and BridgeState for use by the event handlers.
+// It implements discord.EventHandler.
 type DiscordListener struct {
 	Bridge *BridgeState
 }
 
-// GuildCreate handles Discord guild creation events.
-func (l *DiscordListener) GuildCreate(s *discordgo.Session, event *discordgo.GuildCreate) {
-	if event.ID != l.Bridge.BridgeConfig.GID {
+// OnReady handles the Discord ready event.
+func (l *DiscordListener) OnReady() {
+	l.Bridge.Logger.Info("DISCORD_HANDLER", "Discord client is ready")
+}
+
+// OnGuildCreate handles Discord guild creation/availability events.
+func (l *DiscordListener) OnGuildCreate(guild *discord.Guild) {
+	if guild.ID != l.Bridge.BridgeConfig.GID {
 		return
 	}
 
-	for _, vs := range event.VoiceStates {
+	botID := l.Bridge.DiscordClient.GetBotUserID()
+
+	for _, vs := range guild.VoiceStates {
 		if vs.ChannelID == l.Bridge.DiscordChannelID {
-			if s.State.User.ID == vs.UserID {
+			if botID == vs.UserID {
 				// Ignore bot
 				continue
 			}
 
-			u, err := s.User(vs.UserID)
+			u, err := l.Bridge.DiscordClient.GetUser(vs.UserID)
 			if err != nil {
 				l.Bridge.Logger.Error("DISCORD_HANDLER", "Error looking up username")
+
+				continue
 			}
 
-			dm, err := s.UserChannelCreate(u.ID)
+			dmID, err := l.Bridge.DiscordClient.CreateDM(u.ID)
 			if err != nil {
 				l.Bridge.Logger.Error("DISCORD_HANDLER", fmt.Sprintf("Error creating private channel for %s", u.Username))
 			}
@@ -42,7 +52,7 @@ func (l *DiscordListener) GuildCreate(s *discordgo.Session, event *discordgo.Gui
 			l.Bridge.DiscordUsers[vs.UserID] = DiscordUser{
 				username: u.Username,
 				seen:     true,
-				dm:       dm,
+				dmID:     dmID,
 			}
 			l.Bridge.DiscordUsersMutex.Unlock()
 
@@ -58,9 +68,10 @@ func (l *DiscordListener) GuildCreate(s *discordgo.Session, event *discordgo.Gui
 			l.Bridge.BridgeMutex.Unlock()
 
 			if connected && !disableText && mumbleClient != nil {
+				username := u.Username
 				mumbleClient.Do(func() {
 					if mumbleClient.Self != nil && mumbleClient.Self.Channel != nil {
-						mumbleClient.Self.Channel.Send(fmt.Sprintf("%v has joined Discord\n", u.Username), false)
+						mumbleClient.Self.Channel.Send(fmt.Sprintf("%v has joined Discord\n", username), false)
 					}
 				})
 			}
@@ -71,91 +82,24 @@ func (l *DiscordListener) GuildCreate(s *discordgo.Session, event *discordgo.Gui
 	}
 }
 
-// MessageCreate handles Discord message creation events.
-func (l *DiscordListener) MessageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
+// OnMessageCreate handles Discord message creation events.
+func (l *DiscordListener) OnMessageCreate(m *discord.Message) {
 	l.Bridge.Logger.Debug("DISCORD_HANDLER", fmt.Sprintf("MessageCreate called from Discord user: %s", m.Author.Username))
 
+	botID := l.Bridge.DiscordClient.GetBotUserID()
+
 	// Ignore all messages created by the bot itself
-	if m.Author.ID == s.State.User.ID {
+	if m.Author.ID == botID {
 		l.Bridge.Logger.Debug("DISCORD_HANDLER", "Ignoring message from self")
 
 		return
 	}
 
-	// Find the channel that the message came from.
-	var guildID string
+	// Check guild matches config
+	if m.GuildID != l.Bridge.BridgeConfig.GID {
+		l.Bridge.Logger.Debug("DISCORD_HANDLER", "Guild ID mismatch, ignoring message")
 
-	// Try to get channel from state cache first
-	c, err := s.State.Channel(m.ChannelID)
-	if err != nil {
-		l.Bridge.Logger.Debug("DISCORD_HANDLER", fmt.Sprintf("Channel not in state cache: %s - Error: %v", m.ChannelID, err))
-		l.Bridge.Logger.Debug("DISCORD_HANDLER", fmt.Sprintf("Falling back to direct guild ID from message: %s", m.GuildID))
-
-		// If we can't find the channel in state, use the guild ID from the message directly
-		guildID = m.GuildID
-
-		// Try to fetch the channel directly from the API if we need to (optional)
-		apiChannel, err := s.Channel(m.ChannelID)
-		if err != nil {
-			l.Bridge.Logger.Debug("DISCORD_HANDLER", fmt.Sprintf("Could not fetch channel via API: %s - Error: %v", m.ChannelID, err))
-			// Continue with the guild ID from the message
-		} else {
-			l.Bridge.Logger.Debug("DISCORD_HANDLER", fmt.Sprintf("Successfully fetched channel via API: %s in guild %s",
-				apiChannel.ID, apiChannel.GuildID))
-			c = apiChannel
-		}
-	} else {
-		guildID = c.GuildID
-		l.Bridge.Logger.Debug("DISCORD_HANDLER", fmt.Sprintf("Found channel %s in state cache", m.ChannelID))
-	}
-
-	// Find the guild for that channel
-	var g *discordgo.Guild
-	if c != nil && c.GuildID != "" {
-		g, err = s.State.Guild(c.GuildID)
-		if err != nil {
-			l.Bridge.Logger.Debug("DISCORD_HANDLER", fmt.Sprintf("Could not find guild for channel: %s - Error: %v", c.ID, err))
-			// Continue with guild ID from message
-		}
-	}
-
-	// If we still don't have a guild, try to get it directly from the state using message's guild ID
-	if g == nil && m.GuildID != "" {
-		g, err = s.State.Guild(m.GuildID)
-		if err != nil {
-			l.Bridge.Logger.Debug("DISCORD_HANDLER", fmt.Sprintf("Could not find guild from message guild ID: %s - Error: %v",
-				m.GuildID, err))
-			// Continue without guild object
-		}
-	}
-
-	// Check if we have a valid guild to work with
-	if g == nil {
-		l.Bridge.Logger.Debug("DISCORD_HANDLER", fmt.Sprintf("Guild object is nil, comparing message guild ID: %s with expected guild: %s",
-			guildID, l.Bridge.BridgeConfig.GID))
-
-		// Use the guild ID we extracted earlier
-		if guildID != l.Bridge.BridgeConfig.GID {
-			l.Bridge.Logger.Debug("DISCORD_HANDLER", "Guild ID mismatch using message guild ID, ignoring message")
-
-			return
-		}
-
-		l.Bridge.Logger.Debug("DISCORD_HANDLER", "Guild ID matches configuration using message guild ID")
-	} else {
-		l.Bridge.Logger.Debug("DISCORD_HANDLER", fmt.Sprintf("Message from guild %s (%s), expected guild: %s",
-			g.Name, g.ID, l.Bridge.BridgeConfig.GID))
-
-		// the guild has to match the config
-		// If we maintain a single bridge per bot and guild this provides sufficient protection
-		// If a user wants multiple bridges in one guild they will need to define multiple bots
-		if g.ID != l.Bridge.BridgeConfig.GID {
-			l.Bridge.Logger.Debug("DISCORD_HANDLER", "Guild ID mismatch, ignoring message")
-
-			return
-		}
-
-		l.Bridge.Logger.Debug("DISCORD_HANDLER", "Guild ID matches configuration")
+		return
 	}
 
 	prefix := "!" + l.Bridge.BridgeConfig.Command
@@ -183,7 +127,7 @@ func (l *DiscordListener) MessageCreate(s *discordgo.Session, m *discordgo.Messa
 
 		// process the shared command options
 		l.Bridge.HandleCommand(m.Content, func(s string) {
-			_, err := l.Bridge.DiscordSession.ChannelMessageSend(m.ChannelID, s)
+			err := l.Bridge.DiscordClient.SendMessage(m.ChannelID, s)
 			if err != nil {
 				l.Bridge.Logger.Error("DISCORD_HANDLER", fmt.Sprintf("Error sending command response: %v", err))
 			}
@@ -193,7 +137,7 @@ func (l *DiscordListener) MessageCreate(s *discordgo.Session, m *discordgo.Messa
 
 		if strings.HasPrefix(m.Content, prefix+" link") {
 			if l.Bridge.Mode == BridgeModeConstant && strings.HasPrefix(m.Content, prefix) {
-				_, err := l.Bridge.DiscordSession.ChannelMessageSend(m.ChannelID, "Constant mode enabled, link commands can not be entered")
+				err := l.Bridge.DiscordClient.SendMessage(m.ChannelID, "Constant mode enabled, link commands can not be entered")
 				if err != nil {
 					l.Bridge.Logger.Error("DISCORD_HANDLER", fmt.Sprintf("Error sending constant mode message: %v", err))
 				}
@@ -202,7 +146,7 @@ func (l *DiscordListener) MessageCreate(s *discordgo.Session, m *discordgo.Messa
 			}
 			// Look for the message sender in that guild's current voice states.
 			if bridgeConnected {
-				_, err := l.Bridge.DiscordSession.ChannelMessageSend(m.ChannelID, "Bridge already running, unlink first")
+				err := l.Bridge.DiscordClient.SendMessage(m.ChannelID, "Bridge already running, unlink first")
 				if err != nil {
 					l.Bridge.Logger.Error("DISCORD_HANDLER", fmt.Sprintf("Error sending bridge status message: %v", err))
 				}
@@ -210,83 +154,48 @@ func (l *DiscordListener) MessageCreate(s *discordgo.Session, m *discordgo.Messa
 				return
 			}
 
-			// If we have a guild object, check voice states
-			if g != nil {
-				// Look for the message sender in that guild's current voice states.
-				for _, vs := range g.VoiceStates {
-					if vs.UserID == m.Author.ID {
-						// User must be in the configured voice channel
-						if vs.ChannelID != l.Bridge.BridgeConfig.CID {
-							_, err := l.Bridge.DiscordSession.ChannelMessageSend(m.ChannelID,
-								"Please join the configured voice channel to use this bridge")
-							if err != nil {
-								l.Bridge.Logger.Error("DISCORD_HANDLER", fmt.Sprintf("Error sending channel mismatch message: %v", err))
-							}
-
-							return
-						}
-
-						l.Bridge.Logger.Info("DISCORD_HANDLER", fmt.Sprintf("Trying to join GID %v and VID %v", g.ID, vs.ChannelID))
-						go l.Bridge.StartBridge()
-
-						return
-					}
-				}
-			} else {
-				// We can't get voice states if we don't have a guild
-				guild, err := s.Guild(guildID)
-				if err != nil {
-					l.Bridge.Logger.Error("DISCORD_HANDLER", fmt.Sprintf("Error fetching guild: %v", err))
-					_, err := l.Bridge.DiscordSession.ChannelMessageSend(m.ChannelID,
-						"Couldn't detect your voice channel. Please join a voice channel first.")
-					if err != nil {
-						l.Bridge.Logger.Error("DISCORD_HANDLER", fmt.Sprintf("Error sending voice channel message: %v", err))
-					}
-
-					return
-				}
-
-				// Process the guild's voice states
-				foundUser := false
-				for _, vs := range guild.VoiceStates {
-					if vs.UserID == m.Author.ID {
-						foundUser = true
-						if vs.ChannelID != "" {
-							// User must be in the configured voice channel
-							if vs.ChannelID != l.Bridge.BridgeConfig.CID {
-								_, err := l.Bridge.DiscordSession.ChannelMessageSend(m.ChannelID,
-									"Please join the configured voice channel to use this bridge")
-								if err != nil {
-									l.Bridge.Logger.Error("DISCORD_HANDLER", fmt.Sprintf("Error sending channel mismatch message: %v", err))
-								}
-
-								return
-							}
-
-							l.Bridge.Logger.Info("DISCORD_HANDLER", fmt.Sprintf("Trying to join GID %v and VID %v", guildID, vs.ChannelID))
-							go l.Bridge.StartBridge()
-
-							return
-						}
-					}
-				}
-
-				// If we get here, user isn't in a voice channel
-				message := "Couldn't find you in a voice channel. Please join a voice channel first."
-				if foundUser {
-					message = "Please join a voice channel first."
-				}
-
-				_, err = l.Bridge.DiscordSession.ChannelMessageSend(m.ChannelID, message)
+			// Get guild to check voice states
+			guild, err := l.Bridge.DiscordClient.GetGuild(m.GuildID)
+			if err != nil {
+				l.Bridge.Logger.Error("DISCORD_HANDLER", fmt.Sprintf("Error fetching guild: %v", err))
+				err := l.Bridge.DiscordClient.SendMessage(m.ChannelID,
+					"Couldn't detect your voice channel. Please join a voice channel first.")
 				if err != nil {
 					l.Bridge.Logger.Error("DISCORD_HANDLER", fmt.Sprintf("Error sending voice channel message: %v", err))
 				}
+
+				return
+			}
+
+			for _, vs := range guild.VoiceStates {
+				if vs.UserID == m.Author.ID {
+					if vs.ChannelID != l.Bridge.BridgeConfig.CID {
+						err := l.Bridge.DiscordClient.SendMessage(m.ChannelID,
+							"Please join the configured voice channel to use this bridge")
+						if err != nil {
+							l.Bridge.Logger.Error("DISCORD_HANDLER", fmt.Sprintf("Error sending channel mismatch message: %v", err))
+						}
+
+						return
+					}
+
+					l.Bridge.Logger.Info("DISCORD_HANDLER", fmt.Sprintf("Trying to join GID %v and VID %v", guild.ID, vs.ChannelID))
+					go l.Bridge.StartBridge()
+
+					return
+				}
+			}
+
+			err = l.Bridge.DiscordClient.SendMessage(m.ChannelID,
+				"Couldn't find you in a voice channel. Please join a voice channel first.")
+			if err != nil {
+				l.Bridge.Logger.Error("DISCORD_HANDLER", fmt.Sprintf("Error sending voice channel message: %v", err))
 			}
 		}
 
 		if strings.HasPrefix(m.Content, prefix+" unlink") {
 			if l.Bridge.Mode == BridgeModeConstant && strings.HasPrefix(m.Content, prefix) {
-				_, err := l.Bridge.DiscordSession.ChannelMessageSend(m.ChannelID, "Constant mode enabled, link commands can not be entered")
+				err := l.Bridge.DiscordClient.SendMessage(m.ChannelID, "Constant mode enabled, link commands can not be entered")
 				if err != nil {
 					l.Bridge.Logger.Error("DISCORD_HANDLER", fmt.Sprintf("Error sending constant mode message: %v", err))
 				}
@@ -295,7 +204,7 @@ func (l *DiscordListener) MessageCreate(s *discordgo.Session, m *discordgo.Messa
 			}
 			// Look for the message sender in that guild's current voice states.
 			if !bridgeConnected {
-				_, err := l.Bridge.DiscordSession.ChannelMessageSend(m.ChannelID, "Bridge is not currently running")
+				err := l.Bridge.DiscordClient.SendMessage(m.ChannelID, "Bridge is not currently running")
 				if err != nil {
 					l.Bridge.Logger.Error("DISCORD_HANDLER", fmt.Sprintf("Error sending bridge status message: %v", err))
 				}
@@ -303,17 +212,17 @@ func (l *DiscordListener) MessageCreate(s *discordgo.Session, m *discordgo.Messa
 				return
 			}
 
-			// Handle the case when guild might be nil
-			if g == nil {
-				l.Bridge.Logger.Info("DISCORD_HANDLER", fmt.Sprintf("Guild object is nil, allowing unlink for guild ID %v anyway", guildID))
+			guild, err := l.Bridge.DiscordClient.GetGuild(m.GuildID)
+			if err != nil {
+				l.Bridge.Logger.Info("DISCORD_HANDLER", "Could not get guild, allowing unlink anyway")
 				l.Bridge.BridgeDie <- true
 
 				return
 			}
 
-			for _, vs := range g.VoiceStates {
+			for _, vs := range guild.VoiceStates {
 				if vs.UserID == m.Author.ID && vs.ChannelID == l.Bridge.DiscordChannelID {
-					l.Bridge.Logger.Info("DISCORD_HANDLER", fmt.Sprintf("Trying to leave GID %v and VID %v", g.ID, vs.ChannelID))
+					l.Bridge.Logger.Info("DISCORD_HANDLER", fmt.Sprintf("Trying to leave GID %v and VID %v", guild.ID, vs.ChannelID))
 					l.Bridge.BridgeDie <- true
 
 					return
@@ -323,7 +232,7 @@ func (l *DiscordListener) MessageCreate(s *discordgo.Session, m *discordgo.Messa
 
 		if strings.HasPrefix(m.Content, prefix+" refresh") {
 			if l.Bridge.Mode == BridgeModeConstant && strings.HasPrefix(m.Content, prefix) {
-				_, err := l.Bridge.DiscordSession.ChannelMessageSend(m.ChannelID, "Constant mode enabled, link commands can not be entered")
+				err := l.Bridge.DiscordClient.SendMessage(m.ChannelID, "Constant mode enabled, link commands can not be entered")
 				if err != nil {
 					l.Bridge.Logger.Error("DISCORD_HANDLER", fmt.Sprintf("Error sending constant mode message: %v", err))
 				}
@@ -332,7 +241,7 @@ func (l *DiscordListener) MessageCreate(s *discordgo.Session, m *discordgo.Messa
 			}
 			// Look for the message sender in that guild's current voice states.
 			if !bridgeConnected {
-				_, err := l.Bridge.DiscordSession.ChannelMessageSend(m.ChannelID, "Bridge is not currently running")
+				err := l.Bridge.DiscordClient.SendMessage(m.ChannelID, "Bridge is not currently running")
 				if err != nil {
 					l.Bridge.Logger.Error("DISCORD_HANDLER", fmt.Sprintf("Error sending bridge status message: %v", err))
 				}
@@ -340,9 +249,9 @@ func (l *DiscordListener) MessageCreate(s *discordgo.Session, m *discordgo.Messa
 				return
 			}
 
-			// Handle the case when guild might be nil
-			if g == nil {
-				l.Bridge.Logger.Info("DISCORD_HANDLER", fmt.Sprintf("Guild object is nil, allowing refresh for guild ID %v anyway", guildID))
+			guild, err := l.Bridge.DiscordClient.GetGuild(m.GuildID)
+			if err != nil {
+				l.Bridge.Logger.Info("DISCORD_HANDLER", "Could not get guild, allowing refresh anyway")
 				l.Bridge.BridgeDie <- true
 				time.Sleep(5 * time.Second)
 				go l.Bridge.StartBridge()
@@ -350,13 +259,11 @@ func (l *DiscordListener) MessageCreate(s *discordgo.Session, m *discordgo.Messa
 				return
 			}
 
-			for _, vs := range g.VoiceStates {
+			for _, vs := range guild.VoiceStates {
 				if vs.UserID == m.Author.ID {
-					l.Bridge.Logger.Info("DISCORD_HANDLER", fmt.Sprintf("Trying to refresh GID %v and VID %v", g.ID, vs.ChannelID))
+					l.Bridge.Logger.Info("DISCORD_HANDLER", fmt.Sprintf("Trying to refresh GID %v and VID %v", guild.ID, vs.ChannelID))
 					l.Bridge.BridgeDie <- true
-
 					time.Sleep(5 * time.Second)
-
 					go l.Bridge.StartBridge()
 
 					return
@@ -438,37 +345,27 @@ func (l *DiscordListener) MessageCreate(s *discordgo.Session, m *discordgo.Messa
 	}
 }
 
-// VoiceUpdate handles Discord voice state update events.
+// OnVoiceStateUpdate handles Discord voice state update events.
 // Lock order: BridgeMutex -> MumbleUsersMutex -> DiscordUsersMutex
 // This function is careful to avoid nested lock acquisition by collecting data
 // under one lock, releasing it, then acquiring another lock.
-func (l *DiscordListener) VoiceUpdate(s *discordgo.Session, event *discordgo.VoiceStateUpdate) {
-	if event.GuildID != l.Bridge.BridgeConfig.GID {
+func (l *DiscordListener) OnVoiceStateUpdate(state *discord.VoiceState) {
+	if state.GuildID != l.Bridge.BridgeConfig.GID {
 		return
 	}
 
-	// Use State.RLock to safely read guild state
-	s.State.RLock()
-	g, err := s.State.Guild(l.Bridge.BridgeConfig.GID)
+	botID := l.Bridge.DiscordClient.GetBotUserID()
+
+	// Get full guild voice state to reconcile
+	guild, err := l.Bridge.DiscordClient.GetGuild(l.Bridge.BridgeConfig.GID)
 	if err != nil {
-		s.State.RUnlock()
-		// Don't panic, just return since we can't proceed
 		return
 	}
 
-	// Make a defensive copy of VoiceStates to avoid race conditions
-	var voiceStates []*discordgo.VoiceState
-	if g.VoiceStates != nil {
-		voiceStates = make([]*discordgo.VoiceState, len(g.VoiceStates))
-		copy(voiceStates, g.VoiceStates)
-	}
-	s.State.RUnlock()
-
-	// Collect users to add and users to remove under DiscordUsersMutex
 	type userToAdd struct {
 		userID   string
 		username string
-		dm       *discordgo.Channel
+		dmID     string
 	}
 	type userToRemove struct {
 		userID   string
@@ -488,15 +385,15 @@ func (l *DiscordListener) VoiceUpdate(s *discordgo.Session, event *discordgo.Voi
 	}
 
 	// Sync the channel voice states to the local discordUsersMap
-	for _, vs := range voiceStates {
+	for _, vs := range guild.VoiceStates {
 		if vs.ChannelID == l.Bridge.DiscordChannelID {
-			if s.State.User.ID == vs.UserID {
+			if botID == vs.UserID {
 				// Ignore bot
 				continue
 			}
 
 			if _, ok := l.Bridge.DiscordUsers[vs.UserID]; !ok {
-				u, err := s.User(vs.UserID)
+				u, err := l.Bridge.DiscordClient.GetUser(vs.UserID)
 				if err != nil {
 					l.Bridge.Logger.Error("DISCORD_HANDLER", "Error looking up username")
 
@@ -507,19 +404,20 @@ func (l *DiscordListener) VoiceUpdate(s *discordgo.Session, event *discordgo.Voi
 
 				// Emit user joined event
 				l.Bridge.EmitUserEvent("discord", 0, u.Username, nil)
-				dm, err := s.UserChannelCreate(u.ID)
+
+				dmID, err := l.Bridge.DiscordClient.CreateDM(u.ID)
 				if err != nil {
 					l.Bridge.Logger.Error("DISCORD_HANDLER", fmt.Sprintf("Error creating private channel for %s", u.Username))
 				}
 				l.Bridge.DiscordUsers[vs.UserID] = DiscordUser{
 					username: u.Username,
 					seen:     true,
-					dm:       dm,
+					dmID:     dmID,
 				}
 				usersToAdd = append(usersToAdd, userToAdd{
 					userID:   vs.UserID,
 					username: u.Username,
-					dm:       dm,
+					dmID:     dmID,
 				})
 			} else {
 				du := l.Bridge.DiscordUsers[vs.UserID]

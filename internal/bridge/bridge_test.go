@@ -459,10 +459,10 @@ func TestBridge_DiscordUserStruct(t *testing.T) {
 	user := DiscordUser{
 		username: "TestUser",
 		seen:     true,
-		dm:       nil,
+		dmID:     "",
 	}
 
 	assert.Equal(t, "TestUser", user.username)
 	assert.True(t, user.seen)
-	assert.Nil(t, user.dm)
+	assert.Empty(t, user.dmID)
 }

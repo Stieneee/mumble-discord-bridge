@@ -2,536 +2,685 @@ package bridge
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/bwmarrin/discordgo"
+	discord "github.com/stieneee/mumble-discord-bridge/internal/discord"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// createMockDiscordSession creates a mock Discord session for testing
-func createMockDiscordSession() *discordgo.Session {
-	session := &discordgo.Session{
-		State:     discordgo.NewState(),
-		DataReady: true,
-	}
-	session.State.User = &discordgo.User{
-		ID:       "test-bot-id",
-		Username: "TestBot",
-	}
-	return session
+// ---------------------------------------------------------------------------
+// Mock types for Discord client and voice connection
+// ---------------------------------------------------------------------------
+
+// mockDiscordClientForConn implements discord.Client for connection manager tests.
+type mockDiscordClientForConn struct {
+	ready     bool
+	mu        sync.Mutex
+	voiceConn *mockVoiceConn
 }
 
-// TestDiscord_SessionNotReadyWaits tests that manager waits for session ready
-func TestDiscord_SessionNotReadyWaits(t *testing.T) {
-	logger := NewMockLogger()
-	emitter := NewMockBridgeEventEmitter()
+func (m *mockDiscordClientForConn) Connect(_ context.Context) error { return nil }
 
-	session := createMockDiscordSession()
-	session.Lock()
-	session.DataReady = false
-	session.Unlock()
+func (m *mockDiscordClientForConn) Disconnect(_ context.Context) error { return nil }
 
-	manager := NewDiscordVoiceConnectionManager(session, "test-guild", "test-channel", logger, emitter)
+func (m *mockDiscordClientForConn) SendMessage(_, _ string) error { return nil }
+
+func (m *mockDiscordClientForConn) GetUser(_ string) (*discord.User, error) {
+	return &discord.User{ID: "mock-user"}, nil
+}
+
+func (m *mockDiscordClientForConn) CreateDM(_ string) (string, error) { return "dm-channel", nil }
+
+func (m *mockDiscordClientForConn) GetGuild(_ string) (*discord.Guild, error) {
+	return &discord.Guild{ID: "mock-guild"}, nil
+}
+
+func (m *mockDiscordClientForConn) GetBotUserID() string { return "bot-user-id" }
+
+func (m *mockDiscordClientForConn) SetEventHandler(_ discord.EventHandler) {}
+
+func (m *mockDiscordClientForConn) IsReady() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.ready
+}
+
+func (m *mockDiscordClientForConn) CreateVoiceConnection(_ string) discord.VoiceConnection {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.voiceConn
+}
+
+// mockVoiceConn implements discord.VoiceConnection for connection manager tests.
+type mockVoiceConn struct {
+	ready   bool
+	opened  bool
+	closed  bool
+	mu      sync.Mutex
+	openErr error
+}
+
+func (m *mockVoiceConn) Open(_ context.Context, _, _ string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.opened = true
+	return m.openErr
+}
+
+func (m *mockVoiceConn) Close(_ context.Context) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.closed = true
+	return nil
+}
+
+func (m *mockVoiceConn) SendOpus(_ []byte) error { return nil }
+
+func (m *mockVoiceConn) ReceiveOpus() (*discord.AudioPacket, error) {
+	return nil, nil
+}
+
+func (m *mockVoiceConn) SetSpeaking(_ context.Context, _ bool) error { return nil }
+
+func (m *mockVoiceConn) IsReady() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.ready
+}
+
+func (m *mockVoiceConn) setReady(ready bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.ready = ready
+}
+
+func (m *mockVoiceConn) UserIDBySSRC(_ uint32) string { return "" }
+
+// ---------------------------------------------------------------------------
+// Helper to create a standard test manager
+// ---------------------------------------------------------------------------
+
+func newTestDiscordManager(client *mockDiscordClientForConn) (*DiscordVoiceConnectionManager, *MockLogger, *MockBridgeEventEmitter) {
+	l := NewMockLogger()
+	e := NewMockBridgeEventEmitter()
+	mgr := NewDiscordVoiceConnectionManager(client, "test-guild", "test-channel", l, e)
+	return mgr, l, e
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+// TestDiscord_ClientNotReadyWaits verifies that the manager does not reach
+// Connected status when the Discord client never becomes ready.
+func TestDiscord_ClientNotReadyWaits(t *testing.T) {
+	client := &mockDiscordClientForConn{
+		ready:     false,
+		voiceConn: &mockVoiceConn{},
+	}
+	mgr, _, _ := newTestDiscordManager(client)
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	err := mgr.Start(ctx)
+	require.NoError(t, err)
+
+	// Give the loop a moment to attempt connection, then cancel.
+	time.Sleep(200 * time.Millisecond)
+	cancel()
+
+	// Allow goroutines to wind down.
+	time.Sleep(100 * time.Millisecond)
+
+	status := mgr.GetStatus()
+	assert.NotEqual(t, ConnectionConnected, status,
+		"Manager should not be Connected when client.IsReady() is false")
+
+	require.NoError(t, mgr.Stop())
+}
+
+// TestDiscord_ConcurrentGetVoiceConnection ensures 100 goroutines can safely
+// call GetVoiceConnection concurrently without data races or panics.
+func TestDiscord_ConcurrentGetVoiceConnection(t *testing.T) {
+	client := &mockDiscordClientForConn{
+		ready:     false,
+		voiceConn: &mockVoiceConn{},
+	}
+	mgr, _, _ := newTestDiscordManager(client)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	manager.InitContext(ctx)
+	mgr.InitContext(ctx)
 
-	time.Sleep(50 * time.Millisecond)
+	runConcurrentlyWithTimeout(t, 5*time.Second, 100, func(_ int) {
+		_ = mgr.GetVoiceConnection()
+	})
 
-	status := manager.GetStatus()
-	assert.True(t, status == ConnectionConnecting || status == ConnectionFailed || status == ConnectionDisconnected,
-		"Expected connecting, failed, or disconnected, got %s", status)
-
-	cancel()
-	err := manager.Stop()
-	require.NoError(t, err)
+	require.NoError(t, mgr.Stop())
 }
 
-// TestDiscord_ConcurrentGetOpusChannels tests multiple readers during state change
-func TestDiscord_ConcurrentGetOpusChannels(_ *testing.T) {
-	logger := NewMockLogger()
-	emitter := NewMockBridgeEventEmitter()
-
-	session := createMockDiscordSession()
-	manager := NewDiscordVoiceConnectionManager(session, "test-guild", "test-channel", logger, emitter)
-
-	var wg sync.WaitGroup
-	for i := 0; i < 100; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			send, recv, ready := manager.GetOpusChannels()
-			_ = send
-			_ = recv
-			_ = ready
-		}()
+// TestDiscord_UpdateChannel verifies that 50 goroutines can call UpdateChannel
+// concurrently without data races.
+func TestDiscord_UpdateChannel(t *testing.T) {
+	client := &mockDiscordClientForConn{
+		ready:     false,
+		voiceConn: &mockVoiceConn{},
 	}
-
-	wg.Wait()
-}
-
-// TestDiscord_UpdateChannel tests thread-safe channel update
-func TestDiscord_UpdateChannel(_ *testing.T) {
-	logger := NewMockLogger()
-	emitter := NewMockBridgeEventEmitter()
-
-	session := createMockDiscordSession()
-	manager := NewDiscordVoiceConnectionManager(session, "test-guild", "initial-channel", logger, emitter)
-
-	var wg sync.WaitGroup
-	for i := 0; i < 50; i++ {
-		wg.Add(1)
-		go func(idx int) {
-			defer wg.Done()
-			manager.UpdateChannel("channel-" + string(rune('0'+idx%10)))
-		}(i)
-	}
-
-	wg.Wait()
-}
-
-// TestDiscord_StopIdempotent ensures multiple Stop calls are safe
-func TestDiscord_StopIdempotent(t *testing.T) {
-	logger := NewMockLogger()
-	emitter := NewMockBridgeEventEmitter()
-
-	session := createMockDiscordSession()
-	manager := NewDiscordVoiceConnectionManager(session, "test-guild", "test-channel", logger, emitter)
+	mgr, _, _ := newTestDiscordManager(client)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	manager.InitContext(ctx)
+	defer cancel()
+
+	mgr.InitContext(ctx)
+
+	runConcurrentlyWithTimeout(t, 5*time.Second, 50, func(i int) {
+		mgr.UpdateChannel(fmt.Sprintf("channel-%d", i))
+	})
+
+	require.NoError(t, mgr.Stop())
+}
+
+// TestDiscord_StopIdempotent ensures calling Stop() multiple times after cancel
+// does not panic or return errors.
+func TestDiscord_StopIdempotent(t *testing.T) {
+	client := &mockDiscordClientForConn{
+		ready:     false,
+		voiceConn: &mockVoiceConn{},
+	}
+	mgr, _, _ := newTestDiscordManager(client)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	mgr.InitContext(ctx)
 	cancel()
 
 	for i := 0; i < 5; i++ {
-		err := manager.Stop()
-		require.NoError(t, err, "Stop call %d failed", i)
+		err := mgr.Stop()
+		require.NoError(t, err, "Stop call %d should not error", i)
 	}
 }
 
-// TestDiscord_GetReadyConnection tests GetReadyConnection method
-func TestDiscord_GetReadyConnection(t *testing.T) {
-	logger := NewMockLogger()
-	emitter := NewMockBridgeEventEmitter()
+// TestDiscord_GetVoiceConnection_NilWhenNotConnected verifies that
+// GetVoiceConnection returns nil before any connection is established.
+func TestDiscord_GetVoiceConnection_NilWhenNotConnected(t *testing.T) {
+	client := &mockDiscordClientForConn{
+		ready:     false,
+		voiceConn: &mockVoiceConn{},
+	}
+	mgr, _, _ := newTestDiscordManager(client)
 
-	session := createMockDiscordSession()
-	manager := NewDiscordVoiceConnectionManager(session, "test-guild", "test-channel", logger, emitter)
+	// Do not start or init context — no connection has been made.
+	vc := mgr.GetVoiceConnection()
+	assert.Nil(t, vc, "Expected nil VoiceConnection before starting")
+}
 
-	// Before starting, should return nil
-	conn := manager.GetReadyConnection()
-	assert.Nil(t, conn)
+// TestDiscord_GetVoiceConnection_ChecksReady returns nil when the underlying
+// voiceConn exists but IsReady() is false, and non-nil when true.
+func TestDiscord_GetVoiceConnection_ChecksReady(t *testing.T) {
+	vc := &mockVoiceConn{ready: false}
+	client := &mockDiscordClientForConn{
+		ready:     true,
+		voiceConn: vc,
+	}
+	mgr, _, _ := newTestDiscordManager(client)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	manager.InitContext(ctx)
+	mgr.InitContext(ctx)
 
-	_ = manager.GetReadyConnection()
+	// Inject the voice connection directly (package-level access).
+	mgr.connMutex.Lock()
+	mgr.voiceConn = vc
+	mgr.connMutex.Unlock()
 
-	cancel()
-	err := manager.Stop()
-	require.NoError(t, err)
+	// Not ready yet.
+	assert.Nil(t, mgr.GetVoiceConnection(),
+		"Expected nil when voiceConn.IsReady() is false")
+
+	// Now mark as ready.
+	vc.setReady(true)
+	assert.NotNil(t, mgr.GetVoiceConnection(),
+		"Expected non-nil when voiceConn.IsReady() is true")
+
+	require.NoError(t, mgr.Stop())
 }
 
-// TestDiscord_GetReadyConnection_ChecksReady verifies GetReadyConnection checks Ready flag
-func TestDiscord_GetReadyConnection_ChecksReady(t *testing.T) {
-	logger := NewMockLogger()
-	emitter := NewMockBridgeEventEmitter()
+// TestDiscord_IsConnectionHealthy_NilConn verifies isConnectionHealthy returns
+// false when voiceConn is nil.
+func TestDiscord_IsConnectionHealthy_NilConn(t *testing.T) {
+	client := &mockDiscordClientForConn{
+		ready:     false,
+		voiceConn: &mockVoiceConn{},
+	}
+	mgr, _, _ := newTestDiscordManager(client)
 
-	session := createMockDiscordSession()
-	manager := NewDiscordVoiceConnectionManager(session, "test-guild", "test-channel", logger, emitter)
-
-	sendChan := make(chan []byte, 1)
-	recvChan := make(chan *discordgo.Packet, 1)
-	voiceConn := &discordgo.VoiceConnection{}
-
-	// Set Ready=false
-	voiceConn.Lock()
-	voiceConn.Ready = false
-	voiceConn.Unlock()
-
-	manager.connMutex.Lock()
-	manager.connection = voiceConn
-	manager.opusSend = sendChan
-	manager.opusRecv = recvChan
-	manager.connMutex.Unlock()
-
-	// Should return nil when Ready=false
-	assert.Nil(t, manager.GetReadyConnection(), "Should return nil when Ready is false")
-
-	// Set Ready=true
-	voiceConn.Lock()
-	voiceConn.Ready = true
-	voiceConn.Unlock()
-
-	// Should return connection when Ready=true
-	assert.NotNil(t, manager.GetReadyConnection(), "Should return connection when Ready is true")
+	// voiceConn starts as nil in the manager.
+	assert.False(t, mgr.isConnectionHealthy(),
+		"Expected unhealthy when voiceConn is nil")
 }
 
-// TestDiscord_IsConnectionHealthy tests health check method
-func TestDiscord_IsConnectionHealthy(t *testing.T) {
-	logger := NewMockLogger()
-	emitter := NewMockBridgeEventEmitter()
-
-	session := createMockDiscordSession()
-	manager := NewDiscordVoiceConnectionManager(session, "test-guild", "test-channel", logger, emitter)
-
-	healthy := manager.isConnectionHealthy()
-	assert.False(t, healthy, "Should not be healthy without channels")
-}
-
-// TestDiscord_RapidStartStop tests multiple start/stop cycles
+// TestDiscord_RapidStartStop runs 10 create/start/cancel/stop cycles to ensure
+// no goroutine leaks or panics.
 func TestDiscord_RapidStartStop(t *testing.T) {
-	logger := NewMockLogger()
-	emitter := NewMockBridgeEventEmitter()
-
-	session := createMockDiscordSession()
-
 	for i := 0; i < 10; i++ {
-		manager := NewDiscordVoiceConnectionManager(session, "test-guild", "test-channel", logger, emitter)
+		client := &mockDiscordClientForConn{
+			ready:     false,
+			voiceConn: &mockVoiceConn{},
+		}
+		mgr, _, _ := newTestDiscordManager(client)
 
 		ctx, cancel := context.WithCancel(context.Background())
 
-		manager.InitContext(ctx)
+		err := mgr.Start(ctx)
+		require.NoError(t, err, "Start failed on cycle %d", i)
 
-		time.Sleep(10 * time.Millisecond)
+		// Give the goroutine time to enter the connection loop and register
+		// its select on closedChan before we tear it down.
+		time.Sleep(50 * time.Millisecond)
 
 		cancel()
-		err := manager.Stop()
-		require.NoError(t, err, "Failed to stop on cycle %d", i)
+		err = mgr.Stop()
+		require.NoError(t, err, "Stop failed on cycle %d", i)
+
+		// Allow goroutines to fully wind down before next cycle.
+		time.Sleep(20 * time.Millisecond)
 	}
 }
 
-// TestDiscord_ConcurrentStatusReads tests concurrent status access
+// TestDiscord_ConcurrentStatusReads ensures 100 goroutines can concurrently
+// read GetStatus() and IsConnected() without data races.
 func TestDiscord_ConcurrentStatusReads(t *testing.T) {
-	logger := NewMockLogger()
-	emitter := NewMockBridgeEventEmitter()
-
-	session := createMockDiscordSession()
-	manager := NewDiscordVoiceConnectionManager(session, "test-guild", "test-channel", logger, emitter)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	manager.InitContext(ctx)
-
-	var wg sync.WaitGroup
-	for i := 0; i < 100; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for j := 0; j < 100; j++ {
-				_ = manager.GetStatus()
-				_ = manager.IsConnected()
-			}
-		}()
+	client := &mockDiscordClientForConn{
+		ready:     false,
+		voiceConn: &mockVoiceConn{},
 	}
-
-	wg.Wait()
-
-	cancel()
-	err := manager.Stop()
-	require.NoError(t, err)
-}
-
-// TestDiscord_EventHandlerRegistration tests voice event handler lifecycle
-func TestDiscord_EventHandlerRegistration(t *testing.T) {
-	logger := NewMockLogger()
-	emitter := NewMockBridgeEventEmitter()
-
-	session := createMockDiscordSession()
-	manager := NewDiscordVoiceConnectionManager(session, "test-guild", "test-channel", logger, emitter)
+	mgr, _, _ := newTestDiscordManager(client)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	manager.InitContext(ctx)
+	mgr.InitContext(ctx)
+
+	runConcurrentlyWithTimeout(t, 5*time.Second, 100, func(_ int) {
+		_ = mgr.GetStatus()
+		_ = mgr.IsConnected()
+	})
+
+	require.NoError(t, mgr.Stop())
+}
+
+// TestDiscord_EventHandlerRegistration exercises the InitContext + Stop
+// lifecycle to verify no panics during basic event handler setup.
+func TestDiscord_EventHandlerRegistration(t *testing.T) {
+	client := &mockDiscordClientForConn{
+		ready:     false,
+		voiceConn: &mockVoiceConn{},
+	}
+	mgr, _, _ := newTestDiscordManager(client)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	mgr.InitContext(ctx)
+
+	// Verify that we can read status after init.
+	status := mgr.GetStatus()
+	assert.Equal(t, ConnectionDisconnected, status)
 
 	cancel()
-	err := manager.Stop()
+	err := mgr.Stop()
 	require.NoError(t, err)
 }
 
-// TestDiscord_IsConnectionHealthy_WithNilConnection tests health check with nil connection
+// TestDiscord_IsConnectionHealthy_WithNilConnection is an explicit test that
+// isConnectionHealthy returns false when voiceConn is nil (complementary to
+// TestDiscord_IsConnectionHealthy_NilConn with a different setup path).
 func TestDiscord_IsConnectionHealthy_WithNilConnection(t *testing.T) {
-	logger := NewMockLogger()
-	emitter := NewMockBridgeEventEmitter()
+	client := &mockDiscordClientForConn{
+		ready:     true,
+		voiceConn: &mockVoiceConn{},
+	}
+	mgr, _, _ := newTestDiscordManager(client)
 
-	session := createMockDiscordSession()
-	manager := NewDiscordVoiceConnectionManager(session, "test-guild", "test-channel", logger, emitter)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-	healthy := manager.isConnectionHealthy()
-	assert.False(t, healthy, "Should not be healthy with nil connection")
+	mgr.InitContext(ctx)
+
+	// Explicitly ensure voiceConn is nil.
+	mgr.connMutex.Lock()
+	mgr.voiceConn = nil
+	mgr.connMutex.Unlock()
+
+	assert.False(t, mgr.isConnectionHealthy(),
+		"Expected false when voiceConn is explicitly nil")
+
+	require.NoError(t, mgr.Stop())
 }
 
-// TestDiscord_IsConnectionHealthy_WithNilChannels tests health check with nil opus channels
-func TestDiscord_IsConnectionHealthy_WithNilChannels(t *testing.T) {
-	logger := NewMockLogger()
-	emitter := NewMockBridgeEventEmitter()
+// TestDiscord_IsConnectionHealthy_WithNotReady verifies isConnectionHealthy
+// returns false when voiceConn exists but IsReady() returns false.
+func TestDiscord_IsConnectionHealthy_WithNotReady(t *testing.T) {
+	vc := &mockVoiceConn{ready: false}
+	client := &mockDiscordClientForConn{
+		ready:     true,
+		voiceConn: vc,
+	}
+	mgr, _, _ := newTestDiscordManager(client)
 
-	session := createMockDiscordSession()
-	manager := NewDiscordVoiceConnectionManager(session, "test-guild", "test-channel", logger, emitter)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-	manager.connMutex.Lock()
-	manager.connection = &discordgo.VoiceConnection{}
-	manager.opusSend = nil
-	manager.opusRecv = nil
-	manager.connMutex.Unlock()
+	mgr.InitContext(ctx)
 
-	healthy := manager.isConnectionHealthy()
-	assert.False(t, healthy, "Should not be healthy without opus channels")
+	// Inject voice connection that is not ready.
+	mgr.connMutex.Lock()
+	mgr.voiceConn = vc
+	mgr.connMutex.Unlock()
+
+	assert.False(t, mgr.isConnectionHealthy(),
+		"Expected false when voiceConn.IsReady() is false")
+
+	require.NoError(t, mgr.Stop())
 }
 
-// TestDiscord_IsConnectionHealthy_ChecksReadyFlag tests that health check verifies Ready flag
-func TestDiscord_IsConnectionHealthy_ChecksReadyFlag(t *testing.T) {
-	logger := NewMockLogger()
-	emitter := NewMockBridgeEventEmitter()
+// TestDiscord_IsConnectionHealthy_WithReady verifies isConnectionHealthy
+// returns true when voiceConn exists and IsReady() returns true.
+func TestDiscord_IsConnectionHealthy_WithReady(t *testing.T) {
+	vc := &mockVoiceConn{ready: true}
+	client := &mockDiscordClientForConn{
+		ready:     true,
+		voiceConn: vc,
+	}
+	mgr, _, _ := newTestDiscordManager(client)
 
-	session := createMockDiscordSession()
-	manager := NewDiscordVoiceConnectionManager(session, "test-guild", "test-channel", logger, emitter)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-	sendChan := make(chan []byte, 1)
-	recvChan := make(chan *discordgo.Packet, 1)
+	mgr.InitContext(ctx)
 
-	voiceConn := &discordgo.VoiceConnection{}
-	voiceConn.Lock()
-	voiceConn.Ready = false
-	voiceConn.Unlock()
+	// Inject a ready voice connection.
+	mgr.connMutex.Lock()
+	mgr.voiceConn = vc
+	mgr.connMutex.Unlock()
 
-	manager.connMutex.Lock()
-	manager.connection = voiceConn
-	manager.opusSend = sendChan
-	manager.opusRecv = recvChan
-	manager.connMutex.Unlock()
+	assert.True(t, mgr.isConnectionHealthy(),
+		"Expected true when voiceConn.IsReady() is true")
 
-	healthy := manager.isConnectionHealthy()
-	assert.False(t, healthy, "Should not be healthy when Ready is false")
-
-	voiceConn.Lock()
-	voiceConn.Ready = true
-	voiceConn.Unlock()
-
-	healthy = manager.isConnectionHealthy()
-	assert.True(t, healthy, "Should be healthy when Ready is true")
+	require.NoError(t, mgr.Stop())
 }
 
-// TestDiscord_ConcurrentHealthChecks tests concurrent health check access
+// TestDiscord_ConcurrentHealthChecks runs 100 goroutines reading health while
+// 10 goroutines toggle the ready flag, checking for data races.
 func TestDiscord_ConcurrentHealthChecks(t *testing.T) {
-	t.Parallel()
-	logger := NewMockLogger()
-	emitter := NewMockBridgeEventEmitter()
+	vc := &mockVoiceConn{ready: false}
+	client := &mockDiscordClientForConn{
+		ready:     true,
+		voiceConn: vc,
+	}
+	mgr, _, _ := newTestDiscordManager(client)
 
-	session := createMockDiscordSession()
-	manager := NewDiscordVoiceConnectionManager(session, "test-guild", "test-channel", logger, emitter)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-	sendChan := make(chan []byte, 1)
-	recvChan := make(chan *discordgo.Packet, 1)
-	voiceConn := &discordgo.VoiceConnection{}
+	mgr.InitContext(ctx)
 
-	manager.connMutex.Lock()
-	manager.connection = voiceConn
-	manager.opusSend = sendChan
-	manager.opusRecv = recvChan
-	manager.connMutex.Unlock()
+	// Inject voice connection.
+	mgr.connMutex.Lock()
+	mgr.voiceConn = vc
+	mgr.connMutex.Unlock()
 
 	var wg sync.WaitGroup
+
+	// 100 health-check readers.
 	for i := 0; i < 100; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			for j := 0; j < 50; j++ {
-				_ = manager.isConnectionHealthy()
+				_ = mgr.isConnectionHealthy()
+				_ = mgr.GetVoiceConnection()
 			}
 		}()
 	}
 
+	// 10 ready-flag togglers.
 	for i := 0; i < 10; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for j := 0; j < 10; j++ {
-				voiceConn.Lock()
-				voiceConn.Ready = !voiceConn.Ready
-				voiceConn.Unlock()
+			for j := 0; j < 50; j++ {
+				vc.setReady(j%2 == 0)
 			}
 		}()
 	}
 
-	wg.Wait()
-}
-
-// TestDiscord_DisconnectInternalClearsChannels tests that disconnect clears channels
-func TestDiscord_DisconnectInternalClearsChannels(t *testing.T) {
-	logger := NewMockLogger()
-	emitter := NewMockBridgeEventEmitter()
-
-	session := createMockDiscordSession()
-	manager := NewDiscordVoiceConnectionManager(session, "test-guild", "test-channel", logger, emitter)
-
-	sendChan := make(chan []byte, 1)
-	recvChan := make(chan *discordgo.Packet, 1)
-	voiceConn := &discordgo.VoiceConnection{}
-
-	manager.connMutex.Lock()
-	manager.opusSend = sendChan
-	manager.opusRecv = recvChan
-	manager.connection = voiceConn
-	manager.connMutex.Unlock()
-
-	manager.disconnectInternal()
-
-	manager.connMutex.RLock()
-	assert.Nil(t, manager.opusSend, "OpusSend should be nil after disconnect")
-	assert.Nil(t, manager.opusRecv, "OpusRecv should be nil after disconnect")
-	assert.Nil(t, manager.connection, "Connection should be nil after disconnect")
-	manager.connMutex.RUnlock()
-}
-
-// TestDiscord_WaitForSessionReady_LockedMutex tests that waitForSessionReady()
-// does not block forever when the session mutex is write-locked (simulating a
-// deadlocked session). It should time out normally via TryRLock.
-func TestDiscord_WaitForSessionReady_LockedMutex(t *testing.T) {
-	logger := NewMockLogger()
-	emitter := NewMockBridgeEventEmitter()
-
-	session := createMockDiscordSession()
-
-	manager := NewDiscordVoiceConnectionManager(session, "test-guild", "test-channel", logger, emitter)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	manager.InitContext(ctx)
-
-	session.Lock()
-	defer session.Unlock()
-
-	done := make(chan error, 1)
-	go func() {
-		done <- manager.waitForSessionReady(500 * time.Millisecond)
-	}()
-
-	select {
-	case err := <-done:
-		assert.Error(t, err, "should return timeout error")
-		assert.Contains(t, err.Error(), "timeout")
-	case <-time.After(3 * time.Second):
-		t.Fatal("waitForSessionReady() blocked on locked mutex — TryRLock not working")
-	}
-}
-
-// TestDiscord_SetStatusAfterStop ensures SetStatus is safe after stop
-func TestDiscord_SetStatusAfterStop(t *testing.T) {
-	logger := NewMockLogger()
-	emitter := NewMockBridgeEventEmitter()
-
-	session := createMockDiscordSession()
-	manager := NewDiscordVoiceConnectionManager(session, "test-guild", "test-channel", logger, emitter)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	manager.InitContext(ctx)
-
-	err := manager.Stop()
-	require.NoError(t, err)
-
-	assert.NotPanics(t, func() {
-		manager.SetStatus(ConnectionConnected, nil)
-	})
-}
-
-// TestDiscord_EventEmission tests that events are emitted properly
-func TestDiscord_EventEmission(t *testing.T) {
-	logger := NewMockLogger()
-	emitter := NewMockBridgeEventEmitter()
-
-	session := createMockDiscordSession()
-	manager := NewDiscordVoiceConnectionManager(session, "test-guild", "test-channel", logger, emitter)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	manager.InitContext(ctx)
-
-	manager.SetStatus(ConnectionConnecting, nil)
-	manager.SetStatus(ConnectionConnected, nil)
-	manager.SetStatus(ConnectionReconnecting, nil)
-
-	events := emitter.GetEventsByService("discord")
-	assert.NotEmpty(t, events, "Expected events to be emitted")
-
-	cancel()
-	err := manager.Stop()
-	require.NoError(t, err)
-}
-
-// TestDiscord_GetOpusChannels_ChecksReady tests that GetOpusChannels returns not-ready
-// when the voice connection is down (Ready=false)
-func TestDiscord_GetOpusChannels_ChecksReady(t *testing.T) {
-	logger := NewMockLogger()
-	emitter := NewMockBridgeEventEmitter()
-
-	session := createMockDiscordSession()
-	manager := NewDiscordVoiceConnectionManager(session, "test-guild", "test-channel", logger, emitter)
-
-	sendChan := make(chan []byte, 1)
-	recvChan := make(chan *discordgo.Packet, 1)
-	voiceConn := &discordgo.VoiceConnection{}
-
-	// Set Ready=false
-	voiceConn.Lock()
-	voiceConn.Ready = false
-	voiceConn.Unlock()
-
-	manager.connMutex.Lock()
-	manager.connection = voiceConn
-	manager.opusSend = sendChan
-	manager.opusRecv = recvChan
-	manager.connMutex.Unlock()
-
-	// Should return not-ready when Ready=false
-	_, _, ready := manager.GetOpusChannels()
-	assert.False(t, ready, "GetOpusChannels should return not-ready when Ready is false")
-
-	// Set Ready=true
-	voiceConn.Lock()
-	voiceConn.Ready = true
-	voiceConn.Unlock()
-
-	// Should return ready when Ready=true
-	send, recv, ready := manager.GetOpusChannels()
-	assert.True(t, ready, "GetOpusChannels should return ready when Ready is true")
-	assert.NotNil(t, send)
-	assert.NotNil(t, recv)
-}
-
-// TestDiscord_MonitorConnection_ContextCancel tests that monitor exits on context cancellation
-func TestDiscord_MonitorConnection_ContextCancel(t *testing.T) {
-	logger := NewMockLogger()
-	emitter := NewMockBridgeEventEmitter()
-
-	session := createMockDiscordSession()
-	manager := NewDiscordVoiceConnectionManager(session, "test-guild", "test-channel", logger, emitter)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	manager.InitContext(ctx)
-
 	done := make(chan struct{})
 	go func() {
-		manager.monitorConnection(ctx)
+		wg.Wait()
 		close(done)
 	}()
 
-	time.Sleep(50 * time.Millisecond)
+	select {
+	case <-done:
+		// Success.
+	case <-time.After(10 * time.Second):
+		t.Fatal("Timeout waiting for concurrent health checks to complete")
+	}
+
+	require.NoError(t, mgr.Stop())
+}
+
+// TestDiscord_DisconnectInternalClearsConnection verifies that calling
+// disconnectInternal() sets voiceConn to nil.
+func TestDiscord_DisconnectInternalClearsConnection(t *testing.T) {
+	vc := &mockVoiceConn{ready: true}
+	client := &mockDiscordClientForConn{
+		ready:     true,
+		voiceConn: vc,
+	}
+	mgr, _, _ := newTestDiscordManager(client)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	mgr.InitContext(ctx)
+
+	// Inject voice connection.
+	mgr.connMutex.Lock()
+	mgr.voiceConn = vc
+	mgr.connMutex.Unlock()
+
+	// Confirm it is set.
+	assert.True(t, mgr.isConnectionHealthy())
+
+	// Disconnect.
+	mgr.disconnectInternal()
+
+	// voiceConn should now be nil.
+	mgr.connMutex.RLock()
+	isNil := mgr.voiceConn == nil
+	mgr.connMutex.RUnlock()
+
+	assert.True(t, isNil, "Expected voiceConn to be nil after disconnectInternal()")
+
+	// Close should have been called on the mock.
+	vc.mu.Lock()
+	wasClosed := vc.closed
+	vc.mu.Unlock()
+	assert.True(t, wasClosed, "Expected Close() to have been called on voiceConn")
+
+	require.NoError(t, mgr.Stop())
+}
+
+// TestDiscord_WaitForClientReady_AlreadyReady verifies that waitForClientReady
+// returns nil immediately when the client is already ready.
+func TestDiscord_WaitForClientReady_AlreadyReady(t *testing.T) {
+	client := &mockDiscordClientForConn{
+		ready:     true,
+		voiceConn: &mockVoiceConn{},
+	}
+	mgr, _, _ := newTestDiscordManager(client)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	mgr.InitContext(ctx)
+
+	start := time.Now()
+	err := mgr.waitForClientReady(5 * time.Second)
+	elapsed := time.Since(start)
+
+	require.NoError(t, err, "Expected no error when client is already ready")
+	assert.Less(t, elapsed, 500*time.Millisecond,
+		"Expected waitForClientReady to return quickly when already ready")
+
+	require.NoError(t, mgr.Stop())
+}
+
+// TestDiscord_SetStatusAfterStop ensures that calling SetStatus after Stop does
+// not panic.
+func TestDiscord_SetStatusAfterStop(t *testing.T) {
+	client := &mockDiscordClientForConn{
+		ready:     false,
+		voiceConn: &mockVoiceConn{},
+	}
+	mgr, _, _ := newTestDiscordManager(client)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	mgr.InitContext(ctx)
+	cancel()
+
+	err := mgr.Stop()
+	require.NoError(t, err)
+
+	// SetStatus after Stop should not panic.
+	assert.NotPanics(t, func() {
+		mgr.SetStatus(ConnectionConnected, nil)
+		mgr.SetStatus(ConnectionFailed, fmt.Errorf("post-stop error"))
+	})
+}
+
+// TestDiscord_EventEmission verifies that status changes emit events through
+// the BridgeEventEmitter.
+func TestDiscord_EventEmission(t *testing.T) {
+	client := &mockDiscordClientForConn{
+		ready:     false,
+		voiceConn: &mockVoiceConn{},
+	}
+	mgr, _, emitter := newTestDiscordManager(client)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	mgr.InitContext(ctx)
+
+	// Trigger several status changes.
+	mgr.SetStatus(ConnectionConnecting, nil)
+	mgr.SetStatus(ConnectionConnected, nil)
+	mgr.SetStatus(ConnectionReconnecting, nil)
+	mgr.SetStatus(ConnectionFailed, fmt.Errorf("test failure"))
+
+	events := emitter.GetEvents()
+	assert.Len(t, events, 4, "Expected 4 events for 4 distinct status changes")
+
+	// All events should be tagged with the "discord" service name.
+	for _, ev := range events {
+		assert.Equal(t, "discord", ev.Service,
+			"Expected service name 'discord' in emitted event")
+	}
+
+	require.NoError(t, mgr.Stop())
+}
+
+// TestDiscord_MonitorConnection_ContextCancel verifies that monitorConnection
+// exits promptly when the context is canceled.
+func TestDiscord_MonitorConnection_ContextCancel(t *testing.T) {
+	vc := &mockVoiceConn{ready: true}
+	client := &mockDiscordClientForConn{
+		ready:     true,
+		voiceConn: vc,
+	}
+	mgr, _, _ := newTestDiscordManager(client)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	mgr.InitContext(ctx)
+
+	// Inject a ready voice connection so monitor has something to watch.
+	mgr.connMutex.Lock()
+	mgr.voiceConn = vc
+	mgr.connMutex.Unlock()
+
+	done := make(chan struct{})
+	go func() {
+		mgr.monitorConnection(ctx)
+		close(done)
+	}()
+
+	// Cancel the context; monitorConnection should exit.
 	cancel()
 
 	select {
 	case <-done:
-		// Monitor exited cleanly
-	case <-time.After(2 * time.Second):
+		// Success.
+	case <-time.After(5 * time.Second):
 		t.Fatal("monitorConnection did not exit after context cancellation")
 	}
+
+	require.NoError(t, mgr.Stop())
 }
+
+// TestDiscord_ConnectOnce_ClientNotReady verifies that connectOnce returns an
+// error when the Discord client never becomes ready.
+func TestDiscord_ConnectOnce_ClientNotReady(t *testing.T) {
+	client := &mockDiscordClientForConn{
+		ready:     false,
+		voiceConn: &mockVoiceConn{},
+	}
+	mgr, _, _ := newTestDiscordManager(client)
+
+	// Use a short reconnect delay so the test finishes quickly.
+	mgr.baseReconnectDelay = 50 * time.Millisecond
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	mgr.InitContext(ctx)
+
+	// connectOnce waits up to 10s for client ready; override by using a context
+	// with a tight deadline so we don't wait the full timeout. We call
+	// connectOnce directly and expect an error.
+	var connectErr error
+	done := make(chan struct{})
+	go func() {
+		connectErr = mgr.connectOnce()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		require.Error(t, connectErr, "Expected error from connectOnce when client is not ready")
+		assert.Contains(t, connectErr.Error(), "not ready",
+			"Error should mention client not being ready")
+	case <-time.After(30 * time.Second):
+		t.Fatal("connectOnce did not return in time")
+	}
+
+	status := mgr.GetStatus()
+	assert.Equal(t, ConnectionFailed, status,
+		"Status should be ConnectionFailed after connectOnce fails")
+
+	require.NoError(t, mgr.Stop())
+}
+
+// ---------------------------------------------------------------------------
+// Ensure the mocks satisfy their respective interfaces at compile time.
+// ---------------------------------------------------------------------------
+
+var (
+	_ discord.Client          = (*mockDiscordClientForConn)(nil)
+	_ discord.VoiceConnection = (*mockVoiceConn)(nil)
+)

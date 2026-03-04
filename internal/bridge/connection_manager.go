@@ -130,6 +130,8 @@ type BaseConnectionManager struct {
 	stopOnce   sync.Once
 	stopped    bool
 	closedChan chan struct{} // Signal channel to prevent sends after close
+
+	eventMutex sync.Mutex // Protects eventChan send/close to prevent data race
 }
 
 // NewBaseConnectionManager creates a new base connection manager
@@ -169,9 +171,12 @@ func (b *BaseConnectionManager) SetStatus(status ConnectionStatus, err error) {
 			Error:  err,
 		}
 
-		// Check again before sending to event channel
+		// Guard send with eventMutex to prevent race with Stop() closing eventChan
+		b.eventMutex.Lock()
 		select {
 		case <-b.closedChan:
+			b.eventMutex.Unlock()
+
 			return // Manager stopping, don't send events
 		default:
 		}
@@ -192,6 +197,7 @@ func (b *BaseConnectionManager) SetStatus(status ConnectionStatus, err error) {
 				b.logger.Warn("CONNECTION", "Event channel full or closed, dropping event")
 			}
 		}
+		b.eventMutex.Unlock()
 
 		// Emit bridge-level event if emitter is available
 		if b.eventEmitter != nil {
@@ -264,12 +270,12 @@ func (b *BaseConnectionManager) Stop() error {
 			b.cancel()
 		}
 
-		// Close the closedChan first to signal all SetStatus calls to stop
-		// This prevents sends to eventChan after we close it
+		// Close closedChan and eventChan under eventMutex to prevent races
+		// with concurrent SetStatus sends.
+		b.eventMutex.Lock()
 		close(b.closedChan)
-
-		// Now safe to close the event channel immediately
 		close(b.eventChan)
+		b.eventMutex.Unlock()
 	})
 
 	return nil

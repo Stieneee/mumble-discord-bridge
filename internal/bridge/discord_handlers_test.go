@@ -1,64 +1,131 @@
 package bridge
 
 import (
+	"context"
+	"fmt"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/bwmarrin/discordgo"
+	discord "github.com/stieneee/mumble-discord-bridge/internal/discord"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-// TestVoiceUpdate_LockOrderNoDeadlock tests that VoiceUpdate doesn't deadlock
+// ---------------------------------------------------------------------------
+// Mock Discord client
+// ---------------------------------------------------------------------------
+
+type mockDiscordClient struct {
+	botUserID    string
+	guild        *discord.Guild
+	ready        bool
+	mu           sync.Mutex
+	sentMessages []struct{ channelID, content string }
+}
+
+func (m *mockDiscordClient) Connect(_ context.Context) error { return nil }
+
+func (m *mockDiscordClient) Disconnect(_ context.Context) error { return nil }
+
+func (m *mockDiscordClient) SendMessage(channelID, content string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.sentMessages = append(m.sentMessages, struct{ channelID, content string }{channelID, content})
+	return nil
+}
+
+func (m *mockDiscordClient) GetUser(userID string) (*discord.User, error) {
+	return &discord.User{ID: userID, Username: "user-" + userID}, nil
+}
+
+func (m *mockDiscordClient) CreateDM(userID string) (string, error) {
+	return "dm-" + userID, nil
+}
+
+func (m *mockDiscordClient) GetGuild(guildID string) (*discord.Guild, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.guild != nil && m.guild.ID == guildID {
+		return m.guild, nil
+	}
+	return nil, fmt.Errorf("guild not found")
+}
+
+func (m *mockDiscordClient) GetBotUserID() string { return m.botUserID }
+
+func (m *mockDiscordClient) IsReady() bool { return m.ready }
+
+func (m *mockDiscordClient) CreateVoiceConnection(_ string) discord.VoiceConnection { return nil }
+
+func (m *mockDiscordClient) SetEventHandler(_ discord.EventHandler) {}
+
+// getSentMessages returns a snapshot of sent messages.
+func (m *mockDiscordClient) getSentMessages() []struct{ channelID, content string } {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]struct{ channelID, content string }, len(m.sentMessages))
+	copy(out, m.sentMessages)
+	return out
+}
+
+// ---------------------------------------------------------------------------
+// Helper: create a BridgeState wired to the mock Discord client
+// ---------------------------------------------------------------------------
+
+func setupDiscordHandlerTest(voiceStates []discord.VoiceState) (*DiscordListener, *BridgeState, *mockDiscordClient) {
+	mockLog := NewMockLogger()
+	bs := createTestBridgeState(mockLog)
+
+	mc := &mockDiscordClient{
+		botUserID: "bot-user-id",
+		guild: &discord.Guild{
+			ID:          bs.BridgeConfig.GID,
+			Name:        "Test Guild",
+			VoiceStates: voiceStates,
+		},
+		ready: true,
+	}
+	bs.DiscordClient = mc
+	bs.DiscordChannelID = bs.BridgeConfig.CID
+
+	listener := &DiscordListener{Bridge: bs}
+	return listener, bs, mc
+}
+
+// ===========================================================================
+// 1. TestVoiceUpdate_LockOrderNoDeadlock
+// ===========================================================================
+
 func TestVoiceUpdate_LockOrderNoDeadlock(t *testing.T) {
-	bridge := createTestBridgeState(nil)
-	listener := &DiscordListener{Bridge: bridge}
+	l, bs, _ := setupDiscordHandlerTest([]discord.VoiceState{
+		{UserID: "u1", ChannelID: "test-channel-id", GuildID: "test-guild-id"},
+	})
 
-	// Create a mock session with state
-	session := &discordgo.Session{
-		State: discordgo.NewState(),
-	}
-	session.State.User = &discordgo.User{
-		ID:       "bot-id",
-		Username: "TestBot",
-	}
-
-	// Add a guild to state
-	guild := &discordgo.Guild{
-		ID:          "test-guild-id",
-		VoiceStates: []*discordgo.VoiceState{},
-	}
-	_ = session.State.GuildAdd(guild) //nolint:errcheck // test setup
-
-	// Run concurrent voice updates without deadlock
 	assertNoDeadlock(t, 5*time.Second, func() {
 		var wg sync.WaitGroup
 
-		// Launch goroutines calling VoiceUpdate
+		// 50 concurrent VoiceStateUpdate calls
 		for i := 0; i < 50; i++ {
 			wg.Add(1)
 			go func(idx int) {
 				defer wg.Done()
-				event := &discordgo.VoiceStateUpdate{
-					VoiceState: &discordgo.VoiceState{
-						GuildID:   "test-guild-id",
-						ChannelID: "test-channel-id",
-						UserID:    "user-" + string(rune('0'+idx%10)),
-					},
-				}
-				listener.VoiceUpdate(session, event)
+				l.OnVoiceStateUpdate(&discord.VoiceState{
+					UserID:    fmt.Sprintf("user-%d", idx),
+					ChannelID: bs.BridgeConfig.CID,
+					GuildID:   bs.BridgeConfig.GID,
+				})
 			}(i)
 		}
 
-		// Launch goroutines accessing BridgeMutex path
+		// 50 concurrent BridgeMutex lock/unlock cycles
 		for i := 0; i < 50; i++ {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				bridge.BridgeMutex.Lock()
-				_ = bridge.Connected
-				bridge.BridgeMutex.Unlock()
+				bs.BridgeMutex.Lock()
+				_ = bs.Connected
+				bs.BridgeMutex.Unlock()
 			}()
 		}
 
@@ -66,87 +133,115 @@ func TestVoiceUpdate_LockOrderNoDeadlock(t *testing.T) {
 	})
 }
 
-// TestVoiceUpdate_ConcurrentUserJoinLeave tests concurrent user additions/removals
-func TestVoiceUpdate_ConcurrentUserJoinLeave(_ *testing.T) {
-	bridge := createTestBridgeState(nil)
+// ===========================================================================
+// 2. TestVoiceUpdate_ConcurrentUserJoinLeave
+// ===========================================================================
 
-	var wg sync.WaitGroup
+func TestVoiceUpdate_ConcurrentUserJoinLeave(t *testing.T) {
+	l, bs, mc := setupDiscordHandlerTest(nil)
 
-	// Concurrent user additions
+	// Build a guild that has 75 users (first 50 present, last 25 absent for removals)
+	states := make([]discord.VoiceState, 0, 50)
 	for i := 0; i < 50; i++ {
-		wg.Add(1)
-		go func(idx int) {
-			defer wg.Done()
-			bridge.DiscordUsersMutex.Lock()
-			bridge.DiscordUsers["user-"+string(rune('0'+idx))] = DiscordUser{
-				username: "User" + string(rune('0'+idx)),
-				seen:     true,
-			}
-			bridge.DiscordUsersMutex.Unlock()
-		}(i)
+		states = append(states, discord.VoiceState{
+			UserID:    fmt.Sprintf("user-%d", i),
+			ChannelID: bs.BridgeConfig.CID,
+			GuildID:   bs.BridgeConfig.GID,
+		})
 	}
 
-	// Concurrent user removals
-	for i := 0; i < 25; i++ {
-		wg.Add(1)
-		go func(idx int) {
-			defer wg.Done()
-			bridge.DiscordUsersMutex.Lock()
-			delete(bridge.DiscordUsers, "user-"+string(rune('0'+idx)))
-			bridge.DiscordUsersMutex.Unlock()
-		}(i)
-	}
+	mc.mu.Lock()
+	mc.guild.VoiceStates = states
+	mc.mu.Unlock()
 
-	wg.Wait()
+	// 50 goroutines trigger join events
+	runConcurrentlyWithTimeout(t, 10*time.Second, 50, func(i int) {
+		l.OnVoiceStateUpdate(&discord.VoiceState{
+			UserID:    fmt.Sprintf("user-%d", i),
+			ChannelID: bs.BridgeConfig.CID,
+			GuildID:   bs.BridgeConfig.GID,
+		})
+	})
+
+	// Now remove 25 users from the guild voice states and trigger updates
+	mc.mu.Lock()
+	mc.guild.VoiceStates = states[:25]
+	mc.mu.Unlock()
+
+	runConcurrentlyWithTimeout(t, 10*time.Second, 25, func(i int) {
+		l.OnVoiceStateUpdate(&discord.VoiceState{
+			UserID:    fmt.Sprintf("user-%d", i+25),
+			ChannelID: "", // user left
+			GuildID:   bs.BridgeConfig.GID,
+		})
+	})
+
+	// After removals, only the first 25 should remain
+	bs.DiscordUsersMutex.Lock()
+	count := len(bs.DiscordUsers)
+	bs.DiscordUsersMutex.Unlock()
+
+	assert.Equal(t, 25, count, "expected 25 users remaining after concurrent join/leave")
 }
 
-// TestVoiceUpdate_MapIteratorNotInvalidated tests safe map iteration during modification
-func TestVoiceUpdate_MapIteratorNotInvalidated(t *testing.T) {
-	bridge := createTestBridgeState(nil)
+// ===========================================================================
+// 3. TestVoiceUpdate_MapIteratorNotInvalidated
+// ===========================================================================
 
-	// Pre-populate some users
-	bridge.DiscordUsersMutex.Lock()
+func TestVoiceUpdate_MapIteratorNotInvalidated(t *testing.T) {
+	l, bs, mc := setupDiscordHandlerTest(nil)
+
+	// Seed 20 users
+	bs.DiscordUsersMutex.Lock()
 	for i := 0; i < 20; i++ {
-		bridge.DiscordUsers["user-"+string(rune('A'+i))] = DiscordUser{
-			username: "User" + string(rune('A'+i)),
+		bs.DiscordUsers[fmt.Sprintf("user-%d", i)] = DiscordUser{
+			username: fmt.Sprintf("user-user-%d", i),
 			seen:     true,
+			dmID:     fmt.Sprintf("dm-user-%d", i),
 		}
 	}
-	bridge.DiscordUsersMutex.Unlock()
+	bs.DiscordUsersMutex.Unlock()
 
-	// Safe iteration pattern (as used in VoiceUpdate)
-	assertNoDeadlock(t, 3*time.Second, func() {
+	// Guild still has the same 20 users
+	states := make([]discord.VoiceState, 20)
+	for i := 0; i < 20; i++ {
+		states[i] = discord.VoiceState{
+			UserID:    fmt.Sprintf("user-%d", i),
+			ChannelID: bs.BridgeConfig.CID,
+			GuildID:   bs.BridgeConfig.GID,
+		}
+	}
+	mc.mu.Lock()
+	mc.guild.VoiceStates = states
+	mc.mu.Unlock()
+
+	// Concurrent iteration (mark unseen) + modification (voice state updates)
+	assertNoDeadlock(t, 5*time.Second, func() {
 		var wg sync.WaitGroup
 
-		// Reader iterates over map
-		for i := 0; i < 20; i++ {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				bridge.DiscordUsersMutex.Lock()
-				for u := range bridge.DiscordUsers {
-					du := bridge.DiscordUsers[u]
-					du.seen = false
-					bridge.DiscordUsers[u] = du
-				}
-				bridge.DiscordUsersMutex.Unlock()
-			}()
-		}
+		// Goroutine 1: iterate and mark all unseen
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			bs.DiscordUsersMutex.Lock()
+			for u := range bs.DiscordUsers {
+				du := bs.DiscordUsers[u]
+				du.seen = false
+				bs.DiscordUsers[u] = du
+			}
+			bs.DiscordUsersMutex.Unlock()
+		}()
 
-		// Writer modifies map
+		// Goroutine 2+: concurrent voice state updates
 		for i := 0; i < 10; i++ {
 			wg.Add(1)
 			go func(idx int) {
 				defer wg.Done()
-				bridge.DiscordUsersMutex.Lock()
-				// Add new user
-				bridge.DiscordUsers["new-user-"+string(rune('0'+idx))] = DiscordUser{
-					username: "NewUser",
-					seen:     true,
-				}
-				// Delete old user
-				delete(bridge.DiscordUsers, "user-"+string(rune('A'+idx)))
-				bridge.DiscordUsersMutex.Unlock()
+				l.OnVoiceStateUpdate(&discord.VoiceState{
+					UserID:    fmt.Sprintf("user-%d", idx),
+					ChannelID: bs.BridgeConfig.CID,
+					GuildID:   bs.BridgeConfig.GID,
+				})
 			}(i)
 		}
 
@@ -154,406 +249,324 @@ func TestVoiceUpdate_MapIteratorNotInvalidated(t *testing.T) {
 	})
 }
 
-// TestVoiceUpdate_GuildIDMismatch tests that non-matching guild is ignored
+// ===========================================================================
+// 4. TestVoiceUpdate_GuildIDMismatch
+// ===========================================================================
+
 func TestVoiceUpdate_GuildIDMismatch(t *testing.T) {
-	bridge := createTestBridgeState(nil)
-	bridge.BridgeConfig.GID = "correct-guild-id"
-	listener := &DiscordListener{Bridge: bridge}
+	l, bs, _ := setupDiscordHandlerTest(nil)
 
-	session := &discordgo.Session{
-		State: discordgo.NewState(),
-	}
-	session.State.User = &discordgo.User{ID: "bot-id"}
-
-	// Event with wrong guild ID
-	event := &discordgo.VoiceStateUpdate{
-		VoiceState: &discordgo.VoiceState{
-			GuildID: "wrong-guild-id",
-		},
-	}
-
-	// Should return early without processing
-	assert.NotPanics(t, func() {
-		listener.VoiceUpdate(session, event)
+	// Trigger with a wrong guild ID
+	l.OnVoiceStateUpdate(&discord.VoiceState{
+		UserID:    "user-1",
+		ChannelID: bs.BridgeConfig.CID,
+		GuildID:   "wrong-guild-id",
 	})
 
 	// No users should have been added
-	bridge.DiscordUsersMutex.Lock()
-	assert.Empty(t, bridge.DiscordUsers)
-	bridge.DiscordUsersMutex.Unlock()
+	bs.DiscordUsersMutex.Lock()
+	count := len(bs.DiscordUsers)
+	bs.DiscordUsersMutex.Unlock()
+
+	assert.Equal(t, 0, count, "voice update with wrong guild ID should be ignored")
 }
 
-// TestVoiceUpdate_BotUserIgnored tests that bot's own voice state is ignored
+// ===========================================================================
+// 5. TestVoiceUpdate_BotUserIgnored
+// ===========================================================================
+
 func TestVoiceUpdate_BotUserIgnored(t *testing.T) {
-	bridge := createTestBridgeState(nil)
-	listener := &DiscordListener{Bridge: bridge}
+	l, bs, mc := setupDiscordHandlerTest(nil)
 
-	session := &discordgo.Session{
-		State: discordgo.NewState(),
+	// Put the bot itself in the guild voice states
+	mc.mu.Lock()
+	mc.guild.VoiceStates = []discord.VoiceState{
+		{UserID: mc.botUserID, ChannelID: bs.BridgeConfig.CID, GuildID: bs.BridgeConfig.GID},
 	}
-	session.State.User = &discordgo.User{
-		ID:       "bot-user-id",
-		Username: "TestBot",
-	}
+	mc.mu.Unlock()
 
-	// Add guild to state
-	guild := &discordgo.Guild{
-		ID: "test-guild-id",
-		VoiceStates: []*discordgo.VoiceState{
-			{
-				UserID:    "bot-user-id", // Bot's own ID
-				ChannelID: "test-channel-id",
-			},
-		},
-	}
-	_ = session.State.GuildAdd(guild) //nolint:errcheck // test setup
-
-	event := &discordgo.VoiceStateUpdate{
-		VoiceState: &discordgo.VoiceState{
-			GuildID:   "test-guild-id",
-			ChannelID: "test-channel-id",
-			UserID:    "bot-user-id",
-		},
-	}
-
-	listener.VoiceUpdate(session, event)
-
-	// Bot should not be added to users
-	bridge.DiscordUsersMutex.Lock()
-	_, exists := bridge.DiscordUsers["bot-user-id"]
-	bridge.DiscordUsersMutex.Unlock()
-
-	assert.False(t, exists, "Bot should not be added to Discord users")
-}
-
-// TestVoiceUpdate_UserSeenTracking tests user seen flag management
-func TestVoiceUpdate_UserSeenTracking(t *testing.T) {
-	bridge := createTestBridgeState(nil)
-
-	// Add user with seen=true
-	bridge.DiscordUsersMutex.Lock()
-	bridge.DiscordUsers["test-user"] = DiscordUser{
-		username: "TestUser",
-		seen:     true,
-	}
-	bridge.DiscordUsersMutex.Unlock()
-
-	// Mark all as unseen (as VoiceUpdate does)
-	bridge.DiscordUsersMutex.Lock()
-	for u := range bridge.DiscordUsers {
-		du := bridge.DiscordUsers[u]
-		du.seen = false
-		bridge.DiscordUsers[u] = du
-	}
-	bridge.DiscordUsersMutex.Unlock()
-
-	// Verify seen is false
-	bridge.DiscordUsersMutex.Lock()
-	assert.False(t, bridge.DiscordUsers["test-user"].seen)
-	bridge.DiscordUsersMutex.Unlock()
-}
-
-// TestVoiceUpdate_RapidEvents tests rapid event processing
-func TestVoiceUpdate_RapidEvents(_ *testing.T) {
-	bridge := createTestBridgeState(nil)
-	listener := &DiscordListener{Bridge: bridge}
-
-	session := &discordgo.Session{
-		State: discordgo.NewState(),
-	}
-	session.State.User = &discordgo.User{ID: "bot-id"}
-
-	// Add guild
-	guild := &discordgo.Guild{
-		ID:          "test-guild-id",
-		VoiceStates: []*discordgo.VoiceState{},
-	}
-	_ = session.State.GuildAdd(guild) //nolint:errcheck // test setup
-
-	var wg sync.WaitGroup
-	eventCount := 100
-
-	// Send rapid events
-	for i := 0; i < eventCount; i++ {
-		wg.Add(1)
-		go func(idx int) {
-			defer wg.Done()
-			event := &discordgo.VoiceStateUpdate{
-				VoiceState: &discordgo.VoiceState{
-					GuildID:   "test-guild-id",
-					ChannelID: "test-channel-id",
-					UserID:    "user-" + string(rune('0'+idx%50)),
-				},
-			}
-			listener.VoiceUpdate(session, event)
-		}(i)
-	}
-
-	wg.Wait()
-}
-
-// TestDiscordListener_GuildCreateIgnoresWrongGuild tests GuildCreate filtering
-func TestDiscordListener_GuildCreateIgnoresWrongGuild(t *testing.T) {
-	bridge := createTestBridgeState(nil)
-	bridge.BridgeConfig.GID = "correct-guild-id"
-	listener := &DiscordListener{Bridge: bridge}
-
-	session := &discordgo.Session{
-		State: discordgo.NewState(),
-	}
-	session.State.User = &discordgo.User{ID: "bot-id"}
-
-	// Event with wrong guild ID
-	event := &discordgo.GuildCreate{
-		Guild: &discordgo.Guild{
-			ID: "wrong-guild-id",
-		},
-	}
-
-	assert.NotPanics(t, func() {
-		listener.GuildCreate(session, event)
+	l.OnVoiceStateUpdate(&discord.VoiceState{
+		UserID:    mc.botUserID,
+		ChannelID: bs.BridgeConfig.CID,
+		GuildID:   bs.BridgeConfig.GID,
 	})
+
+	bs.DiscordUsersMutex.Lock()
+	_, exists := bs.DiscordUsers[mc.botUserID]
+	bs.DiscordUsersMutex.Unlock()
+
+	assert.False(t, exists, "bot user should not be tracked in DiscordUsers")
 }
 
-// TestVoiceUpdate_UserRemovalTracking tests that removed users are tracked
-func TestVoiceUpdate_UserRemovalTracking(t *testing.T) {
-	bridge := createTestBridgeState(nil)
+// ===========================================================================
+// 6. TestVoiceUpdate_UserSeenTracking
+// ===========================================================================
 
-	// Add some users
-	bridge.DiscordUsersMutex.Lock()
-	bridge.DiscordUsers["user1"] = DiscordUser{username: "User1", seen: true}
-	bridge.DiscordUsers["user2"] = DiscordUser{username: "User2", seen: true}
-	bridge.DiscordUsers["user3"] = DiscordUser{username: "User3", seen: true}
-	bridge.DiscordUsersMutex.Unlock()
+func TestVoiceUpdate_UserSeenTracking(t *testing.T) {
+	l, bs, mc := setupDiscordHandlerTest(nil)
 
-	// Simulate VoiceUpdate removing users not in voice channel
-	var usersToRemove []string
+	// Seed two users already marked seen
+	bs.DiscordUsersMutex.Lock()
+	bs.DiscordUsers["u1"] = DiscordUser{username: "user-u1", seen: true, dmID: "dm-u1"}
+	bs.DiscordUsers["u2"] = DiscordUser{username: "user-u2", seen: true, dmID: "dm-u2"}
+	bs.DiscordUsersMutex.Unlock()
 
-	bridge.DiscordUsersMutex.Lock()
-	// Mark all as unseen first
-	for u := range bridge.DiscordUsers {
-		du := bridge.DiscordUsers[u]
-		du.seen = false
-		bridge.DiscordUsers[u] = du
+	// Guild only reports u1 in the channel (u2 left)
+	mc.mu.Lock()
+	mc.guild.VoiceStates = []discord.VoiceState{
+		{UserID: "u1", ChannelID: bs.BridgeConfig.CID, GuildID: bs.BridgeConfig.GID},
 	}
+	mc.mu.Unlock()
 
-	// Mark user2 as still present
-	du := bridge.DiscordUsers["user2"]
-	du.seen = true
-	bridge.DiscordUsers["user2"] = du
+	l.OnVoiceStateUpdate(&discord.VoiceState{
+		UserID:    "u2",
+		ChannelID: "",
+		GuildID:   bs.BridgeConfig.GID,
+	})
 
-	// Identify removed users
-	for id := range bridge.DiscordUsers {
-		if !bridge.DiscordUsers[id].seen {
-			usersToRemove = append(usersToRemove, id)
+	// u1 should still be present, u2 should be removed
+	bs.DiscordUsersMutex.Lock()
+	_, u1Exists := bs.DiscordUsers["u1"]
+	_, u2Exists := bs.DiscordUsers["u2"]
+	bs.DiscordUsersMutex.Unlock()
+
+	assert.True(t, u1Exists, "u1 should remain after mark-all-unseen + re-seen cycle")
+	assert.False(t, u2Exists, "u2 should be removed because it was not in guild voice states")
+}
+
+// ===========================================================================
+// 7. TestVoiceUpdate_RapidEvents
+// ===========================================================================
+
+func TestVoiceUpdate_RapidEvents(t *testing.T) {
+	l, bs, mc := setupDiscordHandlerTest(nil)
+
+	// Guild has 100 users
+	states := make([]discord.VoiceState, 100)
+	for i := 0; i < 100; i++ {
+		states[i] = discord.VoiceState{
+			UserID:    fmt.Sprintf("rapid-%d", i),
+			ChannelID: bs.BridgeConfig.CID,
+			GuildID:   bs.BridgeConfig.GID,
 		}
 	}
+	mc.mu.Lock()
+	mc.guild.VoiceStates = states
+	mc.mu.Unlock()
 
-	// Remove them
-	for _, id := range usersToRemove {
-		delete(bridge.DiscordUsers, id)
-	}
-	bridge.DiscordUsersMutex.Unlock()
+	// Fire 100 rapid concurrent voice state events
+	runConcurrentlyWithTimeout(t, 10*time.Second, 100, func(i int) {
+		l.OnVoiceStateUpdate(&discord.VoiceState{
+			UserID:    fmt.Sprintf("rapid-%d", i),
+			ChannelID: bs.BridgeConfig.CID,
+			GuildID:   bs.BridgeConfig.GID,
+		})
+	})
 
-	// Verify only user2 remains
-	bridge.DiscordUsersMutex.Lock()
-	assert.Len(t, bridge.DiscordUsers, 1)
-	_, exists := bridge.DiscordUsers["user2"]
-	assert.True(t, exists)
-	bridge.DiscordUsersMutex.Unlock()
+	// All 100 users should be tracked
+	bs.DiscordUsersMutex.Lock()
+	count := len(bs.DiscordUsers)
+	bs.DiscordUsersMutex.Unlock()
+
+	assert.Equal(t, 100, count, "all 100 users should be tracked after rapid events")
 }
 
-// TestVoiceUpdate_ConcurrentWithBridgeOps tests VoiceUpdate concurrent with bridge operations
+// ===========================================================================
+// 8. TestDiscordListener_GuildCreateIgnoresWrongGuild
+// ===========================================================================
+
+func TestDiscordListener_GuildCreateIgnoresWrongGuild(t *testing.T) {
+	l, bs, _ := setupDiscordHandlerTest(nil)
+
+	// GuildCreate with a completely wrong guild -- should not panic
+	require.NotPanics(t, func() {
+		l.OnGuildCreate(&discord.Guild{
+			ID:   "some-other-guild",
+			Name: "Other",
+			VoiceStates: []discord.VoiceState{
+				{UserID: "u-other", ChannelID: bs.BridgeConfig.CID, GuildID: "some-other-guild"},
+			},
+		})
+	})
+
+	// No users should have been added
+	bs.DiscordUsersMutex.Lock()
+	count := len(bs.DiscordUsers)
+	bs.DiscordUsersMutex.Unlock()
+
+	assert.Equal(t, 0, count, "GuildCreate with wrong guild ID should be ignored")
+}
+
+// ===========================================================================
+// 9. TestVoiceUpdate_UserRemovalTracking
+// ===========================================================================
+
+func TestVoiceUpdate_UserRemovalTracking(t *testing.T) {
+	l, bs, mc := setupDiscordHandlerTest(nil)
+
+	// Step 1: add 5 users
+	states := make([]discord.VoiceState, 5)
+	for i := 0; i < 5; i++ {
+		states[i] = discord.VoiceState{
+			UserID:    fmt.Sprintf("rem-%d", i),
+			ChannelID: bs.BridgeConfig.CID,
+			GuildID:   bs.BridgeConfig.GID,
+		}
+	}
+	mc.mu.Lock()
+	mc.guild.VoiceStates = states
+	mc.mu.Unlock()
+
+	l.OnVoiceStateUpdate(&discord.VoiceState{
+		UserID:    "rem-0",
+		ChannelID: bs.BridgeConfig.CID,
+		GuildID:   bs.BridgeConfig.GID,
+	})
+
+	bs.DiscordUsersMutex.Lock()
+	count1 := len(bs.DiscordUsers)
+	bs.DiscordUsersMutex.Unlock()
+	assert.Equal(t, 5, count1, "all 5 users should be present after initial sync")
+
+	// Step 2: mark all seen=false by doing a second update with only 3 users
+	mc.mu.Lock()
+	mc.guild.VoiceStates = states[:3]
+	mc.mu.Unlock()
+
+	l.OnVoiceStateUpdate(&discord.VoiceState{
+		UserID:    "rem-3",
+		ChannelID: "",
+		GuildID:   bs.BridgeConfig.GID,
+	})
+
+	bs.DiscordUsersMutex.Lock()
+	count2 := len(bs.DiscordUsers)
+	bs.DiscordUsersMutex.Unlock()
+	assert.Equal(t, 3, count2, "only 3 users should remain after removal cycle")
+
+	// Step 3: re-mark with all 3 still present, no further removals
+	l.OnVoiceStateUpdate(&discord.VoiceState{
+		UserID:    "rem-0",
+		ChannelID: bs.BridgeConfig.CID,
+		GuildID:   bs.BridgeConfig.GID,
+	})
+
+	bs.DiscordUsersMutex.Lock()
+	count3 := len(bs.DiscordUsers)
+	bs.DiscordUsersMutex.Unlock()
+	assert.Equal(t, 3, count3, "count should stay at 3 after re-mark")
+}
+
+// ===========================================================================
+// 10. TestVoiceUpdate_ConcurrentWithBridgeOps
+// ===========================================================================
+
 func TestVoiceUpdate_ConcurrentWithBridgeOps(t *testing.T) {
-	bridge := createTestBridgeState(nil)
-	listener := &DiscordListener{Bridge: bridge}
+	l, bs, mc := setupDiscordHandlerTest(nil)
 
-	session := &discordgo.Session{
-		State: discordgo.NewState(),
-	}
-	session.State.User = &discordgo.User{ID: "bot-id"}
-
-	guild := &discordgo.Guild{
-		ID:          "test-guild-id",
-		VoiceStates: []*discordgo.VoiceState{},
-	}
-	_ = session.State.GuildAdd(guild) //nolint:errcheck // test setup
-
-	var wg sync.WaitGroup
-	var voiceUpdates, bridgeOps int32
-
-	// Concurrent VoiceUpdate calls
+	// Guild has 30 users
+	states := make([]discord.VoiceState, 30)
 	for i := 0; i < 30; i++ {
-		wg.Add(1)
-		go func(idx int) {
-			defer wg.Done()
-			event := &discordgo.VoiceStateUpdate{
-				VoiceState: &discordgo.VoiceState{
-					GuildID:   "test-guild-id",
-					ChannelID: "test-channel-id",
-					UserID:    "user-" + string(rune('0'+idx%10)),
-				},
-			}
-			listener.VoiceUpdate(session, event)
-			atomic.AddInt32(&voiceUpdates, 1)
-		}(i)
+		states[i] = discord.VoiceState{
+			UserID:    fmt.Sprintf("conc-%d", i),
+			ChannelID: bs.BridgeConfig.CID,
+			GuildID:   bs.BridgeConfig.GID,
+		}
 	}
+	mc.mu.Lock()
+	mc.guild.VoiceStates = states
+	mc.mu.Unlock()
 
-	// Concurrent bridge state operations
-	for i := 0; i < 30; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			bridge.BridgeMutex.Lock()
-			bridge.Connected = !bridge.Connected
-			bridge.BridgeMutex.Unlock()
-			atomic.AddInt32(&bridgeOps, 1)
-		}()
-	}
+	assertNoDeadlock(t, 10*time.Second, func() {
+		var wg sync.WaitGroup
 
-	// Concurrent user map reads
-	for i := 0; i < 30; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			bridge.DiscordUsersMutex.Lock()
-			_ = len(bridge.DiscordUsers)
-			bridge.DiscordUsersMutex.Unlock()
-		}()
-	}
+		// 30 VoiceStateUpdate calls
+		for i := 0; i < 30; i++ {
+			wg.Add(1)
+			go func(idx int) {
+				defer wg.Done()
+				l.OnVoiceStateUpdate(&discord.VoiceState{
+					UserID:    fmt.Sprintf("conc-%d", idx),
+					ChannelID: bs.BridgeConfig.CID,
+					GuildID:   bs.BridgeConfig.GID,
+				})
+			}(i)
+		}
 
-	done := make(chan struct{})
-	go func() {
+		// 30 bridge state toggles
+		for i := 0; i < 30; i++ {
+			wg.Add(1)
+			go func(idx int) {
+				defer wg.Done()
+				bs.BridgeMutex.Lock()
+				bs.Connected = idx%2 == 0
+				bs.BridgeMutex.Unlock()
+			}(i)
+		}
+
+		// 30 map reads
+		for i := 0; i < 30; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				bs.DiscordUsersMutex.Lock()
+				for k := range bs.DiscordUsers {
+					_ = bs.DiscordUsers[k].username
+				}
+				bs.DiscordUsersMutex.Unlock()
+			}()
+		}
+
 		wg.Wait()
-		close(done)
-	}()
-
-	select {
-	case <-done:
-		t.Logf("Completed %d voice updates and %d bridge ops",
-			atomic.LoadInt32(&voiceUpdates), atomic.LoadInt32(&bridgeOps))
-	case <-time.After(5 * time.Second):
-		t.Fatal("Deadlock detected in concurrent operations")
-	}
+	})
 }
 
-// TestDiscordListener_NilBridgeState tests handling of nil bridge state components
-func TestDiscordListener_NilBridgeState(_ *testing.T) {
-	bridge := createTestBridgeState(nil)
-	bridge.BridgeConfig = nil // Set config to nil
+// ===========================================================================
+// 11. TestMessageCreate_CommandFromWrongChannel
+// ===========================================================================
 
-	listener := &DiscordListener{Bridge: bridge}
-
-	session := &discordgo.Session{
-		State: discordgo.NewState(),
-	}
-	session.State.User = &discordgo.User{ID: "bot-id"}
-
-	// Should not panic with nil config
-	event := &discordgo.VoiceStateUpdate{
-		VoiceState: &discordgo.VoiceState{
-			GuildID:   "any-guild",
-			ChannelID: "any-channel",
-			UserID:    "any-user",
-		},
-	}
-
-	// This might panic due to nil config, but we're testing that it's handled
-	// In the actual code, this would be a bug, but we want to ensure no data races
-	defer func() {
-		_ = recover() //nolint:errcheck // intentionally catching panic
-	}()
-
-	listener.VoiceUpdate(session, event)
-}
-
-// TestMessageCreate_CommandFromWrongChannel tests that commands from wrong channel are ignored
 func TestMessageCreate_CommandFromWrongChannel(t *testing.T) {
-	bridge := createTestBridgeState(nil)
-	bridge.BridgeConfig.GID = "test-guild"
-	bridge.BridgeConfig.CID = "configured-channel"
-	bridge.BridgeConfig.DiscordCommand = true
+	l, bs, mc := setupDiscordHandlerTest(nil)
 
-	listener := &DiscordListener{Bridge: bridge}
+	// Enable discord commands
+	bs.BridgeConfig.DiscordCommand = true
 
-	// Create a mock session
-	session := &discordgo.Session{
-		State: discordgo.NewState(),
-	}
-	session.State.User = &discordgo.User{
-		ID:       "bot-id",
-		Username: "TestBot",
-	}
-
-	// Add guild to state
-	guild := &discordgo.Guild{
-		ID:          "test-guild",
-		VoiceStates: []*discordgo.VoiceState{},
-		Channels: []*discordgo.Channel{
-			{ID: "wrong-channel", GuildID: "test-guild"},
-			{ID: "configured-channel", GuildID: "test-guild"},
-		},
-	}
-	_ = session.State.GuildAdd(guild) //nolint:errcheck // test setup
-
-	// Message from WRONG channel - should be ignored
-	m := &discordgo.MessageCreate{
-		Message: &discordgo.Message{
-			GuildID:   "test-guild",
-			ChannelID: "wrong-channel", // Different from CID
-			Content:   "!bridge link",
-			Author:    &discordgo.User{ID: "user-1", Username: "TestUser"},
-		},
-	}
-
-	// Should not panic and should return early (command ignored)
-	assert.NotPanics(t, func() {
-		listener.MessageCreate(session, m)
+	l.OnMessageCreate(&discord.Message{
+		ID:        "msg-1",
+		ChannelID: "wrong-channel-id",
+		GuildID:   bs.BridgeConfig.GID,
+		Content:   "!" + bs.BridgeConfig.Command + " help",
+		Author:    discord.User{ID: "some-user", Username: "TestUser"},
 	})
+
+	// No messages should have been sent (command ignored from wrong channel)
+	msgs := mc.getSentMessages()
+	assert.Empty(t, msgs, "command from wrong channel should be silently ignored")
 }
 
-// TestMessageCreate_CommandFromCorrectChannel tests that commands from correct channel are processed
+// ===========================================================================
+// 12. TestMessageCreate_CommandFromCorrectChannel
+// ===========================================================================
+
 func TestMessageCreate_CommandFromCorrectChannel(t *testing.T) {
-	bridge := createTestBridgeState(nil)
-	bridge.BridgeConfig.GID = "test-guild"
-	bridge.BridgeConfig.CID = "configured-channel"
-	bridge.BridgeConfig.DiscordCommand = true
-	bridge.BridgeConfig.Command = "bridge"
+	l, bs, mc := setupDiscordHandlerTest(nil)
 
-	listener := &DiscordListener{Bridge: bridge}
+	// Enable discord commands
+	bs.BridgeConfig.DiscordCommand = true
 
-	// Create a mock session
-	session := &discordgo.Session{
-		State: discordgo.NewState(),
-	}
-	session.State.User = &discordgo.User{
-		ID:       "bot-id",
-		Username: "TestBot",
-	}
-
-	// Add guild to state with channels
-	guild := &discordgo.Guild{
-		ID:          "test-guild",
-		VoiceStates: []*discordgo.VoiceState{},
-		Channels: []*discordgo.Channel{
-			{ID: "configured-channel", GuildID: "test-guild"},
-		},
-	}
-	_ = session.State.GuildAdd(guild) //nolint:errcheck // test setup
-
-	// Message from CORRECT channel - should be processed
-	m := &discordgo.MessageCreate{
-		Message: &discordgo.Message{
-			GuildID:   "test-guild",
-			ChannelID: "configured-channel", // Same as CID
-			Content:   "!bridge link",
-			Author:    &discordgo.User{ID: "user-1", Username: "TestUser"},
-		},
-	}
-
-	// Should not panic - command should be processed
-	// Note: actual bridge action won't happen since user isn't in voice
-	assert.NotPanics(t, func() {
-		listener.MessageCreate(session, m)
+	require.NotPanics(t, func() {
+		l.OnMessageCreate(&discord.Message{
+			ID:        "msg-2",
+			ChannelID: bs.BridgeConfig.CID,
+			GuildID:   bs.BridgeConfig.GID,
+			Content:   "!" + bs.BridgeConfig.Command + " help",
+			Author:    discord.User{ID: "some-user", Username: "TestUser"},
+		})
 	})
+
+	// The help command should have triggered a SendMessage response
+	msgs := mc.getSentMessages()
+	require.NotEmpty(t, msgs, "help command from correct channel should produce a response")
+	assert.Contains(t, msgs[0].content, "Commands:", "response should contain the help text")
+	assert.Equal(t, bs.BridgeConfig.CID, msgs[0].channelID, "response should be sent to the configured channel")
 }

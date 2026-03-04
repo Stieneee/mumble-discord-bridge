@@ -6,97 +6,50 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bwmarrin/discordgo"
+	"github.com/stieneee/mumble-discord-bridge/internal/discord"
 	"github.com/stieneee/mumble-discord-bridge/pkg/logger"
 )
 
 // DiscordVoiceConnectionManager manages Discord voice connections.
-// Initial connection is handled by MDB. Voice reconnection is driven by discordgo
-// internally: when the voice WebSocket closes, discordgo calls v.reconnect().
-// ShouldReconnectVoiceOnSessionError is explicitly disabled to avoid a double-reconnect
-// race. The manager monitors health and reports status; a safety timeout forces a full
-// reconnect if voice stays unhealthy for too long.
+// Voice reconnection is handled by disgo internally. The manager monitors
+// health and reports status; a safety timeout forces a full reconnect if voice
+// stays unhealthy for too long.
 type DiscordVoiceConnectionManager struct {
 	*BaseConnectionManager
-	session    *discordgo.Session
-	connection *discordgo.VoiceConnection
-	guildID    string
-	channelID  string
-	connMutex  sync.RWMutex
-
-	// Stored opus channel references — set once after initial connection.
-	// discordgo reuses the same OpusSend/OpusRecv channels across reconnections
-	// (only created if nil in onEvent case 2), so these references stay valid.
-	opusSend chan<- []byte
-	opusRecv <-chan *discordgo.Packet
+	discordClient discord.Client
+	voiceConn     discord.VoiceConnection
+	guildID       string
+	channelID     string
+	connMutex     sync.RWMutex
 
 	// Simple configuration
-	baseReconnectDelay time.Duration // Fixed delay between initial connection retries
-
-	// Event handler cleanup
-	eventHandlerRemovers []func()
+	baseReconnectDelay time.Duration
 }
 
 // NewDiscordVoiceConnectionManager creates a new Discord connection manager
-func NewDiscordVoiceConnectionManager(session *discordgo.Session, guildID, channelID string, logger logger.Logger, eventEmitter BridgeEventEmitter) *DiscordVoiceConnectionManager {
+func NewDiscordVoiceConnectionManager(client discord.Client, guildID, channelID string, logger logger.Logger, eventEmitter BridgeEventEmitter) *DiscordVoiceConnectionManager {
 	base := NewBaseConnectionManager(logger, "discord", eventEmitter)
 
 	return &DiscordVoiceConnectionManager{
 		BaseConnectionManager: base,
-		session:               session,
+		discordClient:         client,
 		guildID:               guildID,
 		channelID:             channelID,
 		baseReconnectDelay:    2 * time.Second,
 	}
 }
 
-// Start runs the main connection loop that handles connection establishment and monitoring
+// Start runs the main connection loop
 func (d *DiscordVoiceConnectionManager) Start(ctx context.Context) error {
-	d.logger.Info("DISCORD_CONN", "Starting Discord connection manager (discordgo handles voice reconnection)")
+	d.logger.Info("DISCORD_CONN", "Starting Discord connection manager (disgo+godave with DAVE E2EE)")
 
-	// Initialize context for proper cancellation chain
 	d.InitContext(ctx)
-
-	// Register voice event handlers for debug logging
-	d.registerVoiceEventHandlers()
-
-	// Start main connection loop in a goroutine
 	go d.mainConnectionLoop(d.ctx)
 
 	return nil
 }
 
-// registerVoiceEventHandlers registers handlers to log VoiceServerUpdate and VoiceStateUpdate events
-func (d *DiscordVoiceConnectionManager) registerVoiceEventHandlers() {
-	voiceStateHandler := d.session.AddHandler(func(s *discordgo.Session, v *discordgo.VoiceStateUpdate) {
-		if v.GuildID != d.guildID {
-			return
-		}
-		if s.State == nil || s.State.User == nil || v.UserID != s.State.User.ID {
-			return
-		}
-		d.logger.Debug("DISCORD_CONN", fmt.Sprintf("VoiceStateUpdate received: ChannelID=%s, SessionID=%s", v.ChannelID, v.SessionID))
-	})
-
-	voiceServerHandler := d.session.AddHandler(func(_ *discordgo.Session, v *discordgo.VoiceServerUpdate) {
-		if v.GuildID != d.guildID {
-			return
-		}
-		d.logger.Debug("DISCORD_CONN", fmt.Sprintf("VoiceServerUpdate received: Endpoint=%s", v.Endpoint))
-	})
-
-	d.eventHandlerRemovers = append(d.eventHandlerRemovers, voiceStateHandler, voiceServerHandler)
-}
-
-// removeVoiceEventHandlers removes the registered voice event handlers
-func (d *DiscordVoiceConnectionManager) removeVoiceEventHandlers() {
-	for _, remover := range d.eventHandlerRemovers {
-		remover()
-	}
-	d.eventHandlerRemovers = nil
-}
-
-// UpdateChannel updates the target channel ID for the next connection attempt
+// UpdateChannel updates the target channel ID
 func (d *DiscordVoiceConnectionManager) UpdateChannel(channelID string) {
 	d.connMutex.Lock()
 	defer d.connMutex.Unlock()
@@ -105,7 +58,7 @@ func (d *DiscordVoiceConnectionManager) UpdateChannel(channelID string) {
 	d.logger.Info("DISCORD_CONN", fmt.Sprintf("Updated target channel to: %s", channelID))
 }
 
-// mainConnectionLoop handles initial connection and delegates reconnection to discordgo.
+// mainConnectionLoop handles initial connection and monitoring.
 // Only loops back to connectOnce if the safety timeout fires (voice unhealthy >2min).
 func (d *DiscordVoiceConnectionManager) mainConnectionLoop(ctx context.Context) {
 	defer d.logger.Info("DISCORD_CONN", "Main connection loop exiting")
@@ -133,7 +86,7 @@ func (d *DiscordVoiceConnectionManager) mainConnectionLoop(ctx context.Context) 
 				}
 			}
 
-			// Connection successful — monitor status while discordgo handles reconnection
+			// Connection successful — monitor status
 			d.logger.Info("DISCORD_CONN", "Voice connection established, entering monitoring loop")
 			d.monitorConnection(ctx)
 
@@ -145,10 +98,9 @@ func (d *DiscordVoiceConnectionManager) mainConnectionLoop(ctx context.Context) 
 }
 
 // monitorConnection monitors voice connection health and reports status changes.
-// discordgo handles reconnection internally; this loop just tracks Ready state.
 // Exits only on context cancellation or safety timeout (>2 min unhealthy).
 func (d *DiscordVoiceConnectionManager) monitorConnection(ctx context.Context) {
-	d.logger.Debug("DISCORD_CONN", "Starting connection health monitoring (discordgo handles reconnection)")
+	d.logger.Debug("DISCORD_CONN", "Starting connection health monitoring")
 
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
@@ -168,14 +120,14 @@ func (d *DiscordVoiceConnectionManager) monitorConnection(ctx context.Context) {
 
 			if healthy {
 				if !wasHealthy {
-					d.logger.Info("DISCORD_CONN", "Voice connection recovered (discordgo reconnected)")
+					d.logger.Info("DISCORD_CONN", "Voice connection recovered")
 					unhealthySince = time.Time{}
 				}
 				wasHealthy = true
 				d.SetStatus(ConnectionConnected, nil)
 			} else {
 				if wasHealthy {
-					d.logger.Warn("DISCORD_CONN", "Voice connection unhealthy, waiting for discordgo to reconnect")
+					d.logger.Warn("DISCORD_CONN", "Voice connection unhealthy")
 					unhealthySince = time.Now()
 					d.SetStatus(ConnectionReconnecting, nil)
 				}
@@ -192,36 +144,32 @@ func (d *DiscordVoiceConnectionManager) monitorConnection(ctx context.Context) {
 	}
 }
 
-// connectOnce establishes a Discord voice connection with timeout control
+// connectOnce establishes a Discord voice connection
 func (d *DiscordVoiceConnectionManager) connectOnce() error {
 	d.SetStatus(ConnectionConnecting, nil)
 	d.logger.Debug("DISCORD_CONN", fmt.Sprintf("Connecting to Discord voice: Guild=%s, Channel=%s", d.guildID, d.channelID))
 
-	// Validate session state
-	if d.session == nil || d.session.State == nil || d.session.State.User == nil {
-		return fmt.Errorf("discord session not ready")
-	}
-
-	// Wait for session to be fully ready
-	d.logger.Debug("DISCORD_CONN", "Waiting for Discord session to be ready")
-	if err := d.waitForSessionReady(10 * time.Second); err != nil {
-		d.logger.Error("DISCORD_CONN", fmt.Sprintf("Session not ready within timeout: %v", err))
+	// Wait for client to be ready
+	if err := d.waitForClientReady(10 * time.Second); err != nil {
 		d.SetStatus(ConnectionFailed, err)
 
-		return fmt.Errorf("session not ready: %w", err)
+		return fmt.Errorf("client not ready: %w", err)
 	}
 
-	// Run ChannelVoiceJoin in a goroutine with our own timeout
+	// Create voice connection
+	voiceConn := d.discordClient.CreateVoiceConnection(d.guildID)
+
+	// Open with timeout
 	type connResult struct {
-		conn *discordgo.VoiceConnection
-		err  error
+		err error
 	}
 	resultChan := make(chan connResult, 1)
 
 	go func() {
-		d.logger.Debug("DISCORD_CONN", fmt.Sprintf("Attempting voice connection to Guild=%s, Channel=%s", d.guildID, d.channelID))
-		conn, err := d.session.ChannelVoiceJoin(d.guildID, d.channelID, false, false)
-		resultChan <- connResult{conn: conn, err: err}
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		err := voiceConn.Open(ctx, d.guildID, d.channelID)
+		resultChan <- connResult{err: err}
 	}()
 
 	connectionTimeout := 30 * time.Second
@@ -245,79 +193,40 @@ func (d *DiscordVoiceConnectionManager) connectOnce() error {
 			return fmt.Errorf("failed to join voice channel: %w", result.err)
 		}
 
-		connection := result.conn
-		d.logger.Debug("DISCORD_CONN", "ChannelVoiceJoin returned successfully, extracting opus channels")
-
-		// Wait for opus channels to be initialized
-		if err := d.waitForOpusChannels(connection, 5*time.Second); err != nil {
-			d.logger.Error("DISCORD_CONN", fmt.Sprintf("Failed to get opus channels: %v", err))
-			d.SetStatus(ConnectionFailed, err)
-
-			return err
-		}
+		d.connMutex.Lock()
+		d.voiceConn = voiceConn
+		d.connMutex.Unlock()
 
 		d.SetStatus(ConnectionConnected, nil)
-		d.logger.Info("DISCORD_CONN", "Discord voice connection established and ready")
+		d.logger.Info("DISCORD_CONN", "Discord voice connection established with DAVE E2EE")
 
 		return nil
 	}
 }
 
-// waitForOpusChannels waits for opus channels to be initialized and stores them.
-func (d *DiscordVoiceConnectionManager) waitForOpusChannels(connection *discordgo.VoiceConnection, timeout time.Duration) error {
-	startTime := time.Now()
-	pollInterval := 50 * time.Millisecond
-
-	d.logger.Debug("DISCORD_CONN", "Waiting for voice connection to become ready")
-
-	var opusSend chan []byte
-	var opusRecv chan *discordgo.Packet
+// waitForClientReady waits for the Discord client to be ready
+func (d *DiscordVoiceConnectionManager) waitForClientReady(timeout time.Duration) error {
+	start := time.Now()
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
 
 	for {
-		connection.RLock()
-		ready := connection.Ready
-		if ready {
-			opusSend = connection.OpusSend
-			opusRecv = connection.OpusRecv
-		}
-		connection.RUnlock()
+		if d.discordClient.IsReady() {
+			d.logger.Debug("DISCORD_CONN", "Discord client is ready")
 
-		if ready && opusSend != nil && opusRecv != nil {
-			d.logger.Debug("DISCORD_CONN", "Voice connection ready with opus channels")
-
-			break
+			return nil
 		}
 
-		if time.Since(startTime) > timeout {
-			if !ready {
-				d.logger.Error("DISCORD_CONN", "Timeout waiting for voice connection to become ready")
-
-				return fmt.Errorf("voice connection readiness timeout")
-			}
-
-			d.logger.Error("DISCORD_CONN", "Timeout waiting for opus channels after Ready=true")
-
-			return fmt.Errorf("opus channels not initialized within timeout")
+		if time.Since(start) > timeout {
+			return fmt.Errorf("timeout waiting for client to be ready")
 		}
 
 		select {
+		case <-ticker.C:
 		case <-d.ctx.Done():
-			return fmt.Errorf("context canceled while waiting for voice connection")
-		default:
+			return fmt.Errorf("context canceled while waiting for client")
 		}
-
-		time.Sleep(pollInterval)
 	}
-
-	// Store channels once. discordgo reuses the same channels across reconnections.
-	d.connMutex.Lock()
-	d.connection = connection
-	d.opusSend = opusSend
-	d.opusRecv = opusRecv
-	d.connMutex.Unlock()
-	d.logger.Debug("DISCORD_CONN", "Opus channels successfully extracted")
-
-	return nil
 }
 
 // disconnectInternal disconnects from Discord voice
@@ -325,14 +234,11 @@ func (d *DiscordVoiceConnectionManager) disconnectInternal() {
 	d.connMutex.Lock()
 	defer d.connMutex.Unlock()
 
-	conn := d.connection
-	d.connection = nil
+	conn := d.voiceConn
+	d.voiceConn = nil
 
 	if conn != nil {
 		d.logger.Debug("DISCORD_CONN", "Disconnecting from Discord voice")
-
-		d.opusSend = nil
-		d.opusRecv = nil
 
 		func() {
 			defer func() {
@@ -341,42 +247,12 @@ func (d *DiscordVoiceConnectionManager) disconnectInternal() {
 				}
 			}()
 
-			if err := conn.Disconnect(); err != nil {
-				d.logger.Error("DISCORD_CONN", fmt.Sprintf("Error disconnecting from Discord voice: %v", err))
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := conn.Close(ctx); err != nil {
+				d.logger.Error("DISCORD_CONN", fmt.Sprintf("Error disconnecting: %v", err))
 			}
 		}()
-	}
-}
-
-// waitForSessionReady waits for the Discord session to be ready
-func (d *DiscordVoiceConnectionManager) waitForSessionReady(timeout time.Duration) error {
-	start := time.Now()
-	ticker := time.NewTicker(100 * time.Millisecond)
-	defer ticker.Stop()
-
-	for {
-		// Use TryRLock to avoid blocking if the session mutex is deadlocked.
-		var dataReady bool
-		if d.session.TryRLock() {
-			dataReady = d.session.DataReady
-			d.session.RUnlock()
-		}
-
-		if dataReady {
-			d.logger.Debug("DISCORD_CONN", "Session DataReady is true")
-
-			return nil
-		}
-
-		if time.Since(start) > timeout {
-			return fmt.Errorf("timeout waiting for session to be ready")
-		}
-
-		select {
-		case <-ticker.C:
-		case <-d.ctx.Done():
-			return fmt.Errorf("context canceled while waiting for session")
-		}
 	}
 }
 
@@ -385,22 +261,16 @@ func (d *DiscordVoiceConnectionManager) isConnectionHealthy() bool {
 	d.connMutex.RLock()
 	defer d.connMutex.RUnlock()
 
-	if d.opusSend == nil || d.opusRecv == nil || d.connection == nil {
+	if d.voiceConn == nil {
 		return false
 	}
 
-	d.connection.RLock()
-	ready := d.connection.Ready
-	d.connection.RUnlock()
-
-	return ready
+	return d.voiceConn.IsReady()
 }
 
 // Stop gracefully stops the Discord connection manager
 func (d *DiscordVoiceConnectionManager) Stop() error {
 	d.logger.Info("DISCORD_CONN", "Stopping Discord connection manager")
-
-	d.removeVoiceEventHandlers()
 
 	if err := d.BaseConnectionManager.Stop(); err != nil {
 		d.logger.Error("DISCORD_CONN", fmt.Sprintf("Error stopping base connection manager: %v", err))
@@ -413,46 +283,14 @@ func (d *DiscordVoiceConnectionManager) Stop() error {
 	return nil
 }
 
-// GetReadyConnection returns the connection only if voice is ready, nil otherwise
-func (d *DiscordVoiceConnectionManager) GetReadyConnection() *discordgo.VoiceConnection {
+// GetVoiceConnection returns the voice connection if ready, nil otherwise
+func (d *DiscordVoiceConnectionManager) GetVoiceConnection() discord.VoiceConnection {
 	d.connMutex.RLock()
 	defer d.connMutex.RUnlock()
 
-	if d.connection == nil || d.opusSend == nil || d.opusRecv == nil {
+	if d.voiceConn == nil || !d.voiceConn.IsReady() {
 		return nil
 	}
 
-	d.connection.RLock()
-	ready := d.connection.Ready
-	d.connection.RUnlock()
-
-	if !ready {
-		return nil
-	}
-
-	return d.connection
-}
-
-// GetOpusChannels safely returns the stored opus send/receive channels.
-// Returns not-ready when the voice connection is down (Ready=false), so callers
-// sink packets instead of writing to channels whose goroutines are stopped.
-func (d *DiscordVoiceConnectionManager) GetOpusChannels() (send chan<- []byte, recv <-chan *discordgo.Packet, ready bool) {
-	d.connMutex.RLock()
-	defer d.connMutex.RUnlock()
-
-	if d.opusSend == nil || d.opusRecv == nil || d.connection == nil {
-		return nil, nil, false
-	}
-
-	// Check VoiceConnection.Ready — during discordgo reconnection, Ready is false
-	// and opus goroutines are stopped, so sending/receiving would fail
-	d.connection.RLock()
-	isReady := d.connection.Ready
-	d.connection.RUnlock()
-
-	if !isReady {
-		return nil, nil, false
-	}
-
-	return d.opusSend, d.opusRecv, true
+	return d.voiceConn
 }
