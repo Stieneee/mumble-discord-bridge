@@ -10,7 +10,15 @@ ARG DATE=unknown
 WORKDIR /go/src/app
 COPY . .
 
-RUN apt update && apt install -y libopus-dev
+RUN apt update && apt install -y libopus-dev cmake g++
+
+# Install libdave C++ library (required for DAVE E2EE)
+RUN git clone https://github.com/disgoorg/godave /tmp/godave && \
+    cd /tmp/godave && \
+    chmod +x scripts/libdave_install.sh && \
+    SHELL=/bin/bash ./scripts/libdave_install.sh v1.1.1
+
+ENV PKG_CONFIG_PATH=/root/.local/lib/pkgconfig
 
 # Build the binary with version info
 RUN CGO_ENABLED=1 go build -tags=netgo \

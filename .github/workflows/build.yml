@@ -13,17 +13,31 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      CGO_ENABLED: "1"
+      PKG_CONFIG_PATH: /home/runner/.local/lib/pkgconfig
+      LD_LIBRARY_PATH: /home/runner/.local/lib
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Install libopus-dev
-        run: sudo apt update && sudo apt-get -y install libopus-dev
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get -y install libopus-dev cmake g++
+
+      - name: Install libdave
+        run: |
+          git clone https://github.com/disgoorg/godave /tmp/godave
+          cd /tmp/godave
+          chmod +x scripts/libdave_install.sh
+          SHELL=/bin/bash ./scripts/libdave_install.sh v1.1.1
 
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
           go-version-file: "go.mod"
+
+      - name: Tidy modules
+        run: go mod tidy
 
       - name: Build
         run: make mumble-discord-bridge
