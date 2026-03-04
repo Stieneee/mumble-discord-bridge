@@ -105,6 +105,7 @@ func (b *BridgeState) HandleCommand(msg string, userResponse func(string)) {
 		for user := range b.MumbleUsers {
 			mumbleUsers = append(mumbleUsers, user)
 		}
+		b.MumbleUsersMutex.Unlock()
 
 		userResponse("Discord users: " + strings.Join(discordUsers, ", ") + `
 Mumble users: ` + strings.Join(mumbleUsers, ", "))
