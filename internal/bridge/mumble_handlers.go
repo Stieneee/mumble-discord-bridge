@@ -65,6 +65,15 @@ func (l *MumbleListener) updateUsers() {
 
 	// Notify metrics change for user count change
 	l.Bridge.notifyMetricsChange()
+
+	// Signal MumblePresenceBridge immediately if the channel exists
+	if l.Bridge.MumbleUserChange != nil {
+		select {
+		case l.Bridge.MumbleUserChange <- struct{}{}:
+		default:
+			// Already signaled, don't block
+		}
+	}
 }
 
 // MumbleConnect handles Mumble connection events.

@@ -184,6 +184,10 @@ type BridgeState struct { //nolint:revive // API consistency: keeping Bridge pre
 	connectionCancel context.CancelFunc
 	connectionWg     sync.WaitGroup
 
+	// Signal channel for mumble mode: updateUsers() notifies MumblePresenceBridge
+	// immediately when user count changes, instead of waiting for the next ticker.
+	MumbleUserChange chan struct{}
+
 	// Reference to BridgeInstance for event forwarding (if available)
 	BridgeInstance interface {
 		EmitConnectionEvent(service string, eventType int, connected bool, err error)
@@ -1278,33 +1282,40 @@ func (b *BridgeState) MumblePresenceBridge() {
 		}
 	}()
 
+	// Create signal channel for immediate user change notifications
+	b.MumbleUserChange = make(chan struct{}, 1)
+
 	b.Logger.Info("BRIDGE", "Persistent Mumble connection started, monitoring user presence")
 
 	ticker := time.NewTicker(3 * time.Second)
 	defer ticker.Stop()
 
+	checkUsers := func() {
+		b.BridgeMutex.Lock()
+		b.MumbleUsersMutex.Lock()
+		mumbleUserCount := len(b.MumbleUsers)
+		bridgeActive := b.BridgeActive
+		b.MumbleUsersMutex.Unlock()
+		b.BridgeMutex.Unlock()
+
+		if mumbleUserCount > 0 && !bridgeActive {
+			b.Logger.Info("BRIDGE", fmt.Sprintf("Mumble users detected (%d), starting Discord bridge", mumbleUserCount))
+			go b.StartBridgeDiscordOnly()
+		}
+
+		if mumbleUserCount == 0 && bridgeActive {
+			b.Logger.Info("BRIDGE", "No Mumble users, stopping Discord bridge")
+			b.StopBridge()
+		}
+	}
+
 	for {
 		select {
 		case <-ticker.C:
-			b.BridgeMutex.Lock()
-			b.MumbleUsersMutex.Lock()
-			mumbleUserCount := len(b.MumbleUsers)
-			bridgeActive := b.BridgeActive
-			b.MumbleUsersMutex.Unlock()
-			b.BridgeMutex.Unlock()
+			checkUsers()
 
-			if mumbleUserCount > 0 && !bridgeActive {
-				b.Logger.Info("BRIDGE", fmt.Sprintf("Mumble users detected (%d), starting Discord bridge", mumbleUserCount))
-				go b.StartBridgeDiscordOnly()
-			}
-
-			if mumbleUserCount == 0 && bridgeActive {
-				b.Logger.Info("BRIDGE", "No Mumble users, stopping Discord bridge")
-				// Synchronous call to prevent duplicate StopBridge races.
-				// StopBridge sends on BridgeDie and waits for StartBridgeDiscordOnly
-				// to return, which sets BridgeActive=false before we tick again.
-				b.StopBridge()
-			}
+		case <-b.MumbleUserChange:
+			checkUsers()
 
 		case <-b.AutoChanDie:
 			b.Logger.Info("BRIDGE", "Ending mumble presence mode")
