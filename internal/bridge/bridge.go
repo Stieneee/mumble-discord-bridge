@@ -1300,7 +1300,10 @@ func (b *BridgeState) MumblePresenceBridge() {
 
 			if mumbleUserCount == 0 && bridgeActive {
 				b.Logger.Info("BRIDGE", "No Mumble users, stopping Discord bridge")
-				go b.StopBridge()
+				// Synchronous call to prevent duplicate StopBridge races.
+				// StopBridge sends on BridgeDie and waits for StartBridgeDiscordOnly
+				// to return, which sets BridgeActive=false before we tick again.
+				b.StopBridge()
 			}
 
 		case <-b.AutoChanDie:
