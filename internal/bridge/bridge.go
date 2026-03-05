@@ -1547,9 +1547,6 @@ func (b *BridgeState) StartDiscordPresence() {
 func (b *BridgeState) StopDiscordPresence() {
 	b.Logger.Info("BRIDGE", "StopDiscordPresence called")
 
-	// Send disconnect announcement while connections are still active
-	b.sendDisconnectAnnouncement()
-
 	// Stop audio pipeline if running
 	b.BridgeMutex.Lock()
 	audioActive := b.AudioActive
@@ -1655,6 +1652,9 @@ func (b *BridgeState) stopAudioPipeline() {
 	}
 	b.AudioActive = false
 	b.BridgeMutex.Unlock()
+
+	// Send disconnect announcement while connections are still active
+	b.sendDisconnectAnnouncement()
 
 	b.Logger.Info("BRIDGE", "Stopping audio pipeline")
 
