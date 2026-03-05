@@ -240,16 +240,14 @@ func (m *MumbleDuplex) toMumbleSender(ctx context.Context, internalChan <-chan g
 		select {
 		case <-ctx.Done():
 			sendTimer.Stop()
-			closeOldChannel(mumbleOutgoing)
-
+			// Do NOT close mumbleOutgoing here — it belongs to the persistent
+			// Mumble connection and will be reused by future audio pipelines.
 			return
 
 		case packet, ok := <-internalChan:
 			if !ok {
 				sendTimer.Stop()
-				closeOldChannel(mumbleOutgoing)
 				m.logger.Info("MUMBLE_FORWARDER", "Internal audio channel closed, stopping toMumbleSender")
-
 				return
 			}
 			promMumbleBufferedPackets.Set(float64(len(internalChan)))
