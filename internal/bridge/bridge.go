@@ -425,22 +425,23 @@ func (b *BridgeState) handleDiscordConnectionEvent(event ConnectionEvent) {
 
 	if oldState != newState {
 		b.Logger.Info("BRIDGE", fmt.Sprintf("Discord connection state changed: %v -> %v", oldState, newState))
-
-		// When Discord connects, populate existing users in the voice channel
-		if newState && !oldState {
-			go b.populateExistingDiscordUsers()
-
-			// Force immediate Discord user count metric update
-			go func() {
-				b.DiscordUsersMutex.Lock()
-				userCount := len(b.DiscordUsers)
-				b.DiscordUsersMutex.Unlock()
-				promDiscordUsers.Set(float64(userCount))
-				b.Logger.Debug("BRIDGE", fmt.Sprintf("Forced Discord user count metric update: %d users", userCount))
-			}()
-		}
-
 		b.notifyMetricsChange()
+	}
+
+	// When Discord connects, populate existing users in the voice channel.
+	// Use event status directly — oldState may already be true due to the
+	// parallel EmitConnectionEvent path in SetStatus racing with this handler.
+	if event.Status == ConnectionConnected {
+		go b.populateExistingDiscordUsers()
+
+		// Force immediate Discord user count metric update
+		go func() {
+			b.DiscordUsersMutex.Lock()
+			userCount := len(b.DiscordUsers)
+			b.DiscordUsersMutex.Unlock()
+			promDiscordUsers.Set(float64(userCount))
+			b.Logger.Debug("BRIDGE", fmt.Sprintf("Forced Discord user count metric update: %d users", userCount))
+		}()
 	}
 
 	if event.Error != nil {
