@@ -71,7 +71,7 @@ func (l *DiscordListener) OnGuildCreate(guild *discord.Guild) {
 				username := u.Username
 				mumbleClient.Do(func() {
 					if mumbleClient.Self != nil && mumbleClient.Self.Channel != nil {
-						mumbleClient.Self.Channel.Send(fmt.Sprintf("%v has joined Discord\n", username), false)
+						mumbleClient.Self.Channel.Send(fmt.Sprintf("%v has joined\n", username), false)
 					}
 				})
 			}
@@ -495,7 +495,7 @@ func (l *DiscordListener) OnVoiceStateUpdate(state *discord.VoiceState) {
 			username := u.username
 			mumbleClient.Do(func() {
 				if mumbleClient.Self != nil && mumbleClient.Self.Channel != nil {
-					mumbleClient.Self.Channel.Send(fmt.Sprintf("%v has joined Discord\n", username), false)
+					mumbleClient.Self.Channel.Send(fmt.Sprintf("%v has joined\n", username), false)
 				}
 			})
 		}
@@ -504,7 +504,7 @@ func (l *DiscordListener) OnVoiceStateUpdate(state *discord.VoiceState) {
 			username := u.username
 			mumbleClient.Do(func() {
 				if mumbleClient.Self != nil && mumbleClient.Self.Channel != nil {
-					mumbleClient.Self.Channel.Send(fmt.Sprintf("%v has left Discord channel\n", username), false)
+					mumbleClient.Self.Channel.Send(fmt.Sprintf("%v has left\n", username), false)
 				}
 			})
 		}
