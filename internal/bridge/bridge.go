@@ -1354,6 +1354,11 @@ func (b *BridgeState) MumblePresenceBridge() {
 	var disconnectTimer *time.Timer
 	var disconnectCh <-chan time.Time // nil when no timer is pending
 
+	// Delayed audio stop: when Discord empties, wait before stopping audio pipeline
+	const discordEmptyDelay = 2 * time.Minute
+	var audioStopTimer *time.Timer
+	var audioStopCh <-chan time.Time // nil when no timer is pending
+
 	checkMumbleUsers := func() {
 		b.BridgeMutex.Lock()
 		b.MumbleUsersMutex.Lock()
@@ -1406,13 +1411,31 @@ func (b *BridgeState) MumblePresenceBridge() {
 		b.DiscordUsersMutex.Unlock()
 
 		if discordUserCount > 0 && !audioActive {
+			// Cancel pending audio stop if someone rejoined
+			if audioStopTimer != nil {
+				audioStopTimer.Stop()
+				audioStopTimer = nil
+				audioStopCh = nil
+				b.Logger.Info("BRIDGE", "Discord user rejoined, cancelled pending audio pipeline stop")
+			}
 			b.Logger.Info("BRIDGE", fmt.Sprintf("Discord users detected (%d), starting audio pipeline", discordUserCount))
 			b.startAudioPipeline()
 		}
 
-		if discordUserCount == 0 && audioActive {
-			b.Logger.Info("BRIDGE", "No Discord users, stopping audio pipeline")
-			b.stopAudioPipeline()
+		if discordUserCount > 0 && audioActive {
+			// Cancel pending audio stop if someone rejoined while still active
+			if audioStopTimer != nil {
+				audioStopTimer.Stop()
+				audioStopTimer = nil
+				audioStopCh = nil
+				b.Logger.Info("BRIDGE", "Discord user rejoined, cancelled pending audio pipeline stop")
+			}
+		}
+
+		if discordUserCount == 0 && audioActive && audioStopTimer == nil {
+			b.Logger.Info("BRIDGE", fmt.Sprintf("No Discord users, stopping audio pipeline in %v", discordEmptyDelay))
+			audioStopTimer = time.NewTimer(discordEmptyDelay)
+			audioStopCh = audioStopTimer.C
 		}
 	}
 
@@ -1428,6 +1451,12 @@ func (b *BridgeState) MumblePresenceBridge() {
 		case <-b.DiscordUserChange:
 			checkDiscordUsers()
 
+		case <-audioStopCh:
+			audioStopTimer = nil
+			audioStopCh = nil
+			b.Logger.Info("BRIDGE", "Discord empty timeout reached, stopping audio pipeline")
+			b.stopAudioPipeline()
+
 		case <-disconnectCh:
 			disconnectTimer = nil
 			disconnectCh = nil
@@ -1437,6 +1466,9 @@ func (b *BridgeState) MumblePresenceBridge() {
 		case <-b.AutoChanDie:
 			b.Logger.Info("BRIDGE", "Ending mumble presence mode")
 
+			if audioStopTimer != nil {
+				audioStopTimer.Stop()
+			}
 			if disconnectTimer != nil {
 				disconnectTimer.Stop()
 			}
