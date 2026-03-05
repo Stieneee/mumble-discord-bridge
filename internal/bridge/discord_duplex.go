@@ -300,29 +300,37 @@ func (dd *DiscordDuplex) discordReceivePCM(ctx context.Context) {
 			lastReady = true
 		}
 
-		// Check context before blocking on receive
+		// ReceiveOpus blocks until a packet arrives, so run it in a
+		// goroutine and select against ctx so we can exit promptly.
+		type recvResult struct {
+			p   *discord.AudioPacket
+			err error
+		}
+		ch := make(chan recvResult, 1)
+		go func() {
+			p, err := voiceConn.ReceiveOpus()
+			ch <- recvResult{p, err}
+		}()
+
 		select {
 		case <-ctx.Done():
 			dd.Bridge.Logger.Info("DISCORD_RECEIVE", "Stopping Discord receive PCM")
 
 			return
-		default:
+		case res := <-ch:
+			if res.err != nil {
+				dd.Bridge.Logger.Debug("DISCORD_RECEIVE", fmt.Sprintf("Receive error: %v", res.err))
+
+				continue
+			}
+
+			if res.p == nil {
+				// Connection closing
+				continue
+			}
+
+			dd.processReceivedPacket(res.p)
 		}
-
-		// ReceiveOpus blocks until a packet arrives
-		p, recvErr := voiceConn.ReceiveOpus()
-		if recvErr != nil {
-			dd.Bridge.Logger.Debug("DISCORD_RECEIVE", fmt.Sprintf("Receive error: %v", recvErr))
-
-			continue
-		}
-
-		if p == nil {
-			// Connection closing
-			continue
-		}
-
-		dd.processReceivedPacket(p)
 	}
 }
 
