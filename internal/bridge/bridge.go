@@ -1353,9 +1353,15 @@ func (b *BridgeState) MumblePresenceBridge() {
 		b.BridgeMutex.Lock()
 		bridgeActive := b.BridgeActive
 		audioActive := b.AudioActive
+		discordConnected := b.DiscordConnected
 		b.BridgeMutex.Unlock()
 
 		if !bridgeActive {
+			return
+		}
+
+		// Don't start audio until Discord voice is actually connected
+		if !discordConnected {
 			return
 		}
 
@@ -1547,6 +1553,9 @@ func (b *BridgeState) startAudioPipeline() {
 	// Create audio context for pipeline lifecycle
 	b.audioCtx, b.audioCancel = context.WithCancel(context.Background())
 
+	// Fresh WaitGroup for this pipeline session
+	b.audioWg = sync.WaitGroup{}
+
 	// Set up audio streams
 	b.MumbleStream = NewMumbleDuplex(b.Logger, b)
 	b.DiscordStream = NewDiscordDuplex(b)
@@ -1584,9 +1593,11 @@ func (b *BridgeState) startAudioPipeline() {
 		b.DiscordStream.toDiscordSender(b.audioCtx)
 	}()
 
-	// Close toMumbleInternal when audio goroutines finish
+	// Close toMumbleInternal after pipeline stops — use a local ref
+	// to avoid racing with a future startAudioPipeline call.
+	wg := &b.audioWg
 	go func() {
-		b.audioWg.Wait()
+		wg.Wait()
 		close(toMumbleInternal)
 	}()
 
