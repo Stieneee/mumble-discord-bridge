@@ -603,6 +603,43 @@ func (b *BridgeState) sendPresenceAnnouncement() {
 	}
 }
 
+// sendDisconnectAnnouncement sends "Bridge disconnected." to both Discord and Mumble.
+// Called before teardown while connections are still active.
+func (b *BridgeState) sendDisconnectAnnouncement() {
+	b.discordSendMessage("Bridge disconnected.")
+
+	if !b.BridgeConfig.MumbleDisableText {
+		var client *gumble.Client
+		if b.MumbleConnectionManager != nil {
+			client = b.MumbleConnectionManager.GetClient()
+		}
+		if client != nil {
+			done := make(chan bool, 1)
+			go func() {
+				defer func() {
+					if r := recover(); r != nil {
+						b.Logger.Error("BRIDGE", fmt.Sprintf("Panic in disconnect announcement to Mumble: %v", r))
+					}
+					select {
+					case done <- true:
+					default:
+					}
+				}()
+				client.Do(func() {
+					client.Self.Channel.Send("Bridge disconnected.", false)
+				})
+			}()
+
+			select {
+			case <-done:
+				b.Logger.Debug("BRIDGE", "Sent disconnect announcement to Mumble")
+			case <-time.After(2 * time.Second):
+				b.Logger.Warn("BRIDGE", "Timeout sending disconnect announcement to Mumble")
+			}
+		}
+	}
+}
+
 // stopConnectionManagers stops both connection managers
 func (b *BridgeState) stopConnectionManagers() {
 	b.Logger.Info("BRIDGE", "Stopping connection managers")
@@ -1006,6 +1043,9 @@ func (b *BridgeState) StartBridge() {
 		b.Logger.Debug("BRIDGE", "Bridge die request received")
 		cancel()
 	}
+
+	// Send disconnect announcement while connections are still active
+	b.sendDisconnectAnnouncement()
 
 	b.BridgeMutex.Lock()
 	b.Connected = false
@@ -1506,6 +1546,9 @@ func (b *BridgeState) StartDiscordPresence() {
 // StopDiscordPresence stops the Discord voice presence, stopping audio if running.
 func (b *BridgeState) StopDiscordPresence() {
 	b.Logger.Info("BRIDGE", "StopDiscordPresence called")
+
+	// Send disconnect announcement while connections are still active
+	b.sendDisconnectAnnouncement()
 
 	// Stop audio pipeline if running
 	b.BridgeMutex.Lock()
