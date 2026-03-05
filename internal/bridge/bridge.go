@@ -1351,26 +1351,27 @@ func (b *BridgeState) MumblePresenceBridge() {
 		}
 	}
 
-	checkDiscordConnection := func() {
+	checkDiscordUsers := func() {
 		b.BridgeMutex.Lock()
 		bridgeActive := b.BridgeActive
 		audioActive := b.AudioActive
-		discordConnected := b.DiscordConnected
 		b.BridgeMutex.Unlock()
 
 		if !bridgeActive {
 			return
 		}
 
-		// Start audio when Discord voice is connected
-		if discordConnected && !audioActive {
-			b.Logger.Info("BRIDGE", "Discord voice connected, starting audio pipeline")
+		b.DiscordUsersMutex.Lock()
+		discordUserCount := len(b.DiscordUsers)
+		b.DiscordUsersMutex.Unlock()
+
+		if discordUserCount > 0 && !audioActive {
+			b.Logger.Info("BRIDGE", fmt.Sprintf("Discord users detected (%d), starting audio pipeline", discordUserCount))
 			b.startAudioPipeline()
 		}
 
-		// Stop audio if Discord voice disconnected
-		if !discordConnected && audioActive {
-			b.Logger.Info("BRIDGE", "Discord voice disconnected, stopping audio pipeline")
+		if discordUserCount == 0 && audioActive {
+			b.Logger.Info("BRIDGE", "No Discord users, stopping audio pipeline")
 			b.stopAudioPipeline()
 		}
 	}
@@ -1379,13 +1380,13 @@ func (b *BridgeState) MumblePresenceBridge() {
 		select {
 		case <-ticker.C:
 			checkMumbleUsers()
-			checkDiscordConnection()
+			checkDiscordUsers()
 
 		case <-b.MumbleUserChange:
 			checkMumbleUsers()
 
 		case <-b.DiscordUserChange:
-			checkDiscordConnection()
+			checkDiscordUsers()
 
 		case <-disconnectCh:
 			disconnectTimer = nil
