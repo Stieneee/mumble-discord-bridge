@@ -518,7 +518,8 @@ func (b *BridgeState) UpdateOverallConnectionState() {
 // to handle the case where Discord users are populated asynchronously after DiscordConnected.
 func (b *BridgeState) tryPresenceAnnouncement() {
 	b.BridgeMutex.Lock()
-	if !b.DiscordConnected || !b.MumbleConnected || b.presenceAnnounced {
+	// In mumble mode, defer announcement until audio pipeline starts (startAudioPipeline calls this)
+	if !b.DiscordConnected || !b.MumbleConnected || b.presenceAnnounced || (b.Mode == BridgeModeMumble && !b.AudioActive) {
 		b.BridgeMutex.Unlock()
 
 		return
