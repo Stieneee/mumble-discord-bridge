@@ -483,6 +483,14 @@ func (l *DiscordListener) OnVoiceStateUpdate(state *discord.VoiceState) {
 		}
 	}
 
+	// Notify mumble mode about Discord user changes
+	if l.Bridge.DiscordUserChange != nil {
+		select {
+		case l.Bridge.DiscordUserChange <- struct{}{}:
+		default:
+		}
+	}
+
 	// Update metrics
 	promDiscordUsers.Set(float64(userCount))
 }
