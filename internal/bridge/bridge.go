@@ -1378,6 +1378,7 @@ func (b *BridgeState) MumblePresenceBridge() {
 		select {
 		case <-ticker.C:
 			checkMumbleUsers()
+			checkDiscordUsers()
 
 		case <-b.MumbleUserChange:
 			checkMumbleUsers()
