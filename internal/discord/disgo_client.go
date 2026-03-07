@@ -8,6 +8,7 @@ import (
 
 	"github.com/disgoorg/disgo"
 	"github.com/disgoorg/disgo/bot"
+	"github.com/disgoorg/disgo/cache"
 	discordmodel "github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/events"
 	"github.com/disgoorg/disgo/gateway"
@@ -41,6 +42,9 @@ func NewDisgoClient(token string) (*DisgoClient, error) {
 				gateway.IntentMessageContent,
 				gateway.IntentDirectMessages,
 			),
+		),
+		bot.WithCacheConfigOpts(
+			cache.WithCaches(cache.FlagGuilds, cache.FlagVoiceStates),
 		),
 		bot.WithVoiceManagerConfigOpts(
 			voice.WithDaveSessionCreateFunc(golibdave.NewSession),
