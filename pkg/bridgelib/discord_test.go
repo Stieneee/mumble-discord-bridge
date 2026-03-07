@@ -41,9 +41,11 @@ func (m *mockBridgeLibClient) IsReady() bool {
 	return m.ready
 }
 
-func (m *mockBridgeLibClient) CreateVoiceConnection(_ string) discord.VoiceConnection { return nil }
+func (m *mockBridgeLibClient) CreateVoiceConnection(_ string) (discord.VoiceConnection, error) {
+	return nil, nil
+}
 
-func (m *mockBridgeLibClient) SetEventHandler(_ discord.EventHandler) {}
+func (m *mockBridgeLibClient) AddEventHandler(_ discord.EventHandler) func() { return func() {} }
 
 // TestSharedDiscordClient_IsSessionHealthy verifies that IsSessionHealthy
 // correctly reflects the readiness state of the underlying discord.Client.

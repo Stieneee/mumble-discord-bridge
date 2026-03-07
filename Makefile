@@ -4,6 +4,22 @@ COMMIT=$(shell git rev-parse --short HEAD)
 DATE=$(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 LDFLAGS=-s -w -X main.version=$(VERSION) -X main.commit=$(COMMIT) -X main.date=$(DATE)
 
+# Install libdave C++ library (required for DAVE E2EE)
+# Clones godave and runs the install script, which downloads prebuilt binaries
+# or builds from source. Installs to ~/.local/lib and ~/.local/include.
+install-libdave:
+	@if pkg-config --exists dave 2>/dev/null; then \
+		echo "libdave already installed"; \
+	else \
+		echo "Installing libdave..."; \
+		GODAVE_DIR=$$(mktemp -d) && \
+		git clone https://github.com/disgoorg/godave "$$GODAVE_DIR" && \
+		cd "$$GODAVE_DIR" && \
+		chmod +x scripts/libdave_install.sh && \
+		NON_INTERACTIVE=1 SHELL=/bin/bash ./scripts/libdave_install.sh v1.1.1 && \
+		rm -rf "$$GODAVE_DIR"; \
+	fi
+
 # Build binary
 mumble-discord-bridge: $(GOFILES)
 	CGO_ENABLED=1 go build -tags=netgo -ldflags="$(LDFLAGS)" -o mumble-discord-bridge ./cmd/mumble-discord-bridge
@@ -58,4 +74,4 @@ test-packet-loss-status:
 	@echo "Current tc qdisc status:"
 	tc qdisc show dev $(IFACE)
 
-.PHONY: mumble-discord-bridge dev dev-profile dev-race licenses clean lint format test-packet-loss-start test-packet-loss-stop test-packet-loss-status
+.PHONY: mumble-discord-bridge dev dev-profile dev-race licenses clean lint format install-libdave test-packet-loss-start test-packet-loss-stop test-packet-loss-status

@@ -5,7 +5,7 @@ import "context"
 // VoiceConnection defines the interface for a Discord voice connection.
 type VoiceConnection interface {
 	// Open connects to the specified voice channel.
-	Open(ctx context.Context, guildID, channelID string) error
+	Open(ctx context.Context, channelID string) error
 	// Close disconnects from the voice channel.
 	Close(ctx context.Context) error
 	// SendOpus sends an opus-encoded audio frame.

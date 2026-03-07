@@ -41,7 +41,7 @@ func (m *mockDiscordClientForConn) GetGuild(_ string) (*discord.Guild, error) {
 
 func (m *mockDiscordClientForConn) GetBotUserID() string { return "bot-user-id" }
 
-func (m *mockDiscordClientForConn) SetEventHandler(_ discord.EventHandler) {}
+func (m *mockDiscordClientForConn) AddEventHandler(_ discord.EventHandler) func() { return func() {} }
 
 func (m *mockDiscordClientForConn) IsReady() bool {
 	m.mu.Lock()
@@ -49,10 +49,10 @@ func (m *mockDiscordClientForConn) IsReady() bool {
 	return m.ready
 }
 
-func (m *mockDiscordClientForConn) CreateVoiceConnection(_ string) discord.VoiceConnection {
+func (m *mockDiscordClientForConn) CreateVoiceConnection(_ string) (discord.VoiceConnection, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.voiceConn
+	return m.voiceConn, nil
 }
 
 // mockVoiceConn implements discord.VoiceConnection for connection manager tests.
@@ -64,7 +64,7 @@ type mockVoiceConn struct {
 	openErr error
 }
 
-func (m *mockVoiceConn) Open(_ context.Context, _, _ string) error {
+func (m *mockVoiceConn) Open(_ context.Context, _ string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.opened = true

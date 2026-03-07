@@ -13,6 +13,7 @@ Key features of the new architecture:
 - Shared Discord client (bot) for multiple bridge instances
 - Proper message routing between Discord and bridge instances
 - Consistent behavior between single and multi-bridge deployments
+- DAVE E2EE support (Discord Audio & Video End-to-End Encryption)
 - Used by the patchcord.io multi-bridge service 😄
 
 ## PatchCord.io
@@ -124,11 +125,21 @@ openssl req -x509 -nodes -days 3650 -newkey rsa:2048 -keyout cert.pem -out cert.
 ### Binary
 
 Prebuilt binaries are available.
-The binaries require the opus code runtime library to be installed.
+The binaries require the opus and libdave runtime libraries to be installed.
 
 ```bash
-# Ubuntu
+# Ubuntu — install runtime dependencies
 sudo apt install libopus0
+
+# Install libdave runtime library
+# Option A: use the Makefile target (requires cmake, g++)
+make install-libdave
+
+# Option B: manually copy libdave.so to /usr/lib
+# See the godave repository for details: https://github.com/disgoorg/godave
+
+# Ensure the linker can find libdave
+export LD_LIBRARY_PATH="$HOME/.local/lib:$LD_LIBRARY_PATH"
 ```
 
 ```bash
@@ -204,13 +215,25 @@ Finally the CHAT_BRIDGE variable must be set to true.
 
 ## Building From Source
 
-This project requires Golang to build from source.
-A simple go build command is all that is needed.
-Ensure the opus library is installed.
+This project requires Go and CGO to build from source.
+Two system libraries are required:
+
+- **libopus** — Opus audio codec
+- **libdave** — Discord Audio & Video End-to-End Encryption (DAVE) protocol
 
 ```bash
-go install github.com/goreleaser/goreleaser@latest
-goreleaser build --skip=validate --rm-dist --single-target
+# Ubuntu/Debian
+sudo apt install libopus-dev cmake g++ pkg-config
+
+# Install libdave (downloads prebuilt binary or builds from source)
+make install-libdave
+
+# Ensure pkg-config can find libdave (add to your shell profile)
+export PKG_CONFIG_PATH="$HOME/.local/lib/pkgconfig:$PKG_CONFIG_PATH"
+export LD_LIBRARY_PATH="$HOME/.local/lib:$LD_LIBRARY_PATH"
+
+# Build
+make
 ```
 
 ### OpenBSD Users
@@ -289,4 +312,6 @@ Please consider opening an issue to discuss features and ideas.
 The project would not have been possible without:
 
 - [gumble](https://github.com/layeh/gumble)
-- [discordgo](https://github.com/bwmarrin/discordgo)
+- [disgo](https://github.com/disgoorg/disgo)
+- [godave](https://github.com/disgoorg/godave) — Go bindings for Discord's DAVE E2EE protocol
+- [discordgo](https://github.com/bwmarrin/discordgo) (used in earlier versions)

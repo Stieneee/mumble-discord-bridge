@@ -32,10 +32,12 @@ graph TB
     subgraph "Discord Column"
         subgraph "Discord Components"
             DCM[Discord Connection Manager]
-            DL[Discord Library - discordgo]
+            DL[Discord Library - disgo+godave]
             DM[fromDiscord Mixer]
+            DOM[toDiscordOpusMixer]
             DSP[toDiscordSender]
         end
+        JB[Opus Jitter Buffer 3 frames]
         PS1[PacketsSunk discord,outbound]
     end
 
@@ -55,9 +57,11 @@ graph TB
         end
     end
 
-    %% Audio Flow - Mumble to Discord (inline mixing)
+    %% Audio Flow - Mumble to Discord (mixer → jitter buffer → sender)
     ML -->|Audio Input| MDS
-    MDS -->|MixOneChunk called by| DSP
+    MDS -->|MixOneChunk called by| DOM
+    DOM -->|Opus Frames| JB
+    JB -->|20ms SleepCT| DSP
     DSP -->|If Connected| DL
 
     %% Audio Flow - Discord to Mumble
@@ -80,12 +84,14 @@ graph TB
     classDef sinking fill:#ffebee
     classDef external fill:#e8f5e8
     classDef channels fill:#fff3e0
+    classDef buffer fill:#e0f7fa
 
-    class MDS,DM,FTM,DSP audioFlow
+    class MDS,DM,FTM,DSP,DOM audioFlow
     class MCM,DCM connectionMgr
     class PS1,PS2 sinking
     class ML,DL external
     class TM channels
+    class JB buffer
 ```
 
 ## Connection Management
@@ -113,7 +119,7 @@ Each connection type has its own manager that handles:
 │                     │              │                     │
 │ ┌─────────────────┐ │              │ ┌─────────────────┐ │
 │ │ State: Connected│ │              │ │ State: Connected│ │
-│ │ Library: gumble │ │              │ │ Library:discordgo│ │
+│ │ Library: gumble │ │              │ │ Library: disgo   │ │
 │ └─────────────────┘ │              │ └─────────────────┘ │
 └─────────────────────┘              └─────────────────────┘
 ```
@@ -122,11 +128,11 @@ Each connection type has its own manager that handles:
 
 We rely on the underlying libraries for connection health:
 - **gumble**: Handles Mumble connection health internally
-- **discordgo**: Handles Discord connection health internally
+- **disgo**: Handles Discord gateway reconnection internally; godave provides DAVE E2EE
 
 Our connection managers only monitor basic state:
 - **Mumble**: `client.State() == 1 || client.State() == 2` (Connected or Synced)
-- **Discord**: `connection.Ready == true`
+- **Discord**: `voiceConn.IsReady() == true` (via `discord.VoiceConnection` interface)
 
 ## Packet Sinking Architecture
 
@@ -194,9 +200,10 @@ Discord Audio Input
 
 The bridge handles rate conversion between Mumble's 10ms native frames and Discord's 20ms Opus frames:
 
-**Mumble -> Discord (inline mixing, 2 goroutines: per-user stream + sender):**
+**Mumble -> Discord (3 goroutines: per-user stream + mixer + sender):**
 - gumble `OnAudioStream` callback splits incoming Mumble audio into 10ms (480-sample) chunks and writes them to per-user buffered channels
-- `toDiscordSender` (in `discord_duplex.go`) - Paces at **10ms intervals** using SleepCT, calls `MixOneChunk()` to read and mix one chunk from all active streams. Accumulates two 10ms chunks via `pendingChunk`, then encodes a single 20ms Opus frame (960 samples) and sends to Discord. Sends occur at consistent **20ms intervals**.
+- `toDiscordOpusMixer` (in `discord_duplex.go`) — Paces at **10ms intervals** using SleepCT, calls `MixOneChunk()` to read and mix one chunk from all active streams. Accumulates two 10ms chunks via `pendingChunk`, then encodes a single 20ms Opus frame (960 samples) and pushes it to the send-side jitter buffer.
+- `toDiscordSender` (in `discord_duplex.go`) — Paces at **20ms intervals** using SleepCT, reads from the jitter buffer, and sends to Discord. Manages `SetSpeaking` transitions. The jitter buffer decouples mixing timing from send timing, ensuring consistent 20ms send intervals.
 
 **Discord -> Mumble (3 goroutines):**
 - `discordReceivePCM` (in `discord_duplex.go`) - Receives 20ms Opus frames (960 samples), decodes, chunks into **two 10ms PCM chunks** (480 samples each)
@@ -210,10 +217,11 @@ All buffers store **10ms packets** (480 samples @ 48kHz):
 | Buffer | Packet Count | Time Buffered | Direction | Purpose |
 |--------|--------------|---------------|-----------|---------|
 | Per-user Mumble stream | 24 packets | 240ms | Mumble -> Discord | Per-speaker buffer absorbing TCP jitter |
+| `toDiscordOpusBuffer` | 3 Opus frames | 60ms | Mumble -> Discord | Send-side jitter buffer decoupling mixer from sender |
 | `toMumbleInternal` | 50 packets | 500ms | Discord -> Mumble | Buffers 10ms packets before sending to gumble's unbuffered channel |
 
-**Why there is no intermediate channel for Mumble -> Discord:**
-- `toDiscordSender` calls `MixOneChunk()` directly on the per-user stream buffers, eliminating the old `toDiscord` channel and `fromMumbleMixer` goroutine. This reduces pipeline latency by removing one buffering stage.
+**Send-side jitter buffer for Mumble -> Discord:**
+- `toDiscordOpusMixer` encodes Opus frames and pushes to a buffered channel (3 frames / 60ms). `toDiscordSender` reads from this channel at precise 20ms intervals using its own SleepCT. This decouples mixing/encoding timing from send timing, ensuring consistent 20ms send intervals regardless of mixer jitter.
 
 ### Buffer Depth Cap (Clock Drift Protection)
 
@@ -221,13 +229,19 @@ All buffers store **10ms packets** (480 samples @ 48kHz):
 
 ### Send Behavior
 
-**toDiscordSender** (in `discord_duplex.go`):
+**toDiscordOpusMixer** (in `discord_duplex.go`):
 - Paces at **10ms intervals** using SleepCT
 - Calls `MixOneChunk()` each tick to read one 10ms chunk from all active Mumble streams
 - Accumulates two chunks via `pendingChunk` before encoding a 20ms Opus frame
-- Sends at consistent **20ms intervals** (every other tick) to avoid triggering Discord's adaptive jitter buffer
-- When streaming stops, sends 3 silence frames at 10ms intervals, then sets Speaking to false
-- Checks Discord connection via `GetOpusChannels()` on each send (non-blocking, drops if channel full)
+- Pushes encoded Opus frames to the send-side jitter buffer (`toDiscordOpusBuffer`)
+
+**toDiscordSender** (in `discord_duplex.go`):
+- Paces at **20ms intervals** using SleepCT (its own independent timer)
+- Reads from the jitter buffer each tick
+- **Continuous silence sending**: When not streaming (no active speech), sends opus silence frames (`0xf8, 0xff, 0xfe`) every 20ms tick to keep disgo's monotonic RTP timestamp advancing in sync with wall-clock time. This prevents Discord's jitter buffer from accumulating latency across talk-spurt boundaries.
+- Sends `SetSpeaking(true)` when the buffer transitions from empty to non-empty. The jitter buffer gives the TCP speaking intent time to arrive before the UDP audio, so Discord clients reset their jitter buffer timing before audio begins.
+- When buffer is empty for 2 consecutive ticks (40ms), sends 3 silence frames at 20ms intervals, then sets Speaking to false
+- Checks Discord voice connection via `GetVoiceConnection().IsReady()` on each send
 
 **toMumbleSender** (in `mumble_duplex.go`):
 - **Blocking read** from `toMumbleInternal` - receives 10ms packets already paced by `fromDiscordMixer`
@@ -241,7 +255,7 @@ All buffers store **10ms packets** (480 samples @ 48kHz):
 - **Mumble**: Native 10ms frames (480 samples @ 48kHz)
 - **Discord**: Native 20ms Opus frames (960 samples @ 48kHz)
 - The bridge converts between these rates to match each platform's native format
-- `toDiscordSender` accumulates two 10ms chunks into one 20ms Opus frame
+- `toDiscordOpusMixer` accumulates two 10ms chunks into one 20ms Opus frame; `toDiscordSender` sends them at precise 20ms intervals
 - `toMumbleSender` passes 10ms chunks directly (gumble handles framing)
 
 ## Connection States
@@ -253,12 +267,35 @@ StateConnected = 1     --> Consider connected (syncing)
 StateSynced = 2        --> Consider connected (ready)
 ```
 
-### Discord States (discordgo library)
+### Discord States (disgo library via discord.VoiceConnection)
 ```
-connection == nil      --> Consider disconnected
-connection.Ready == false --> Consider disconnected
-connection.Ready == true  --> Consider connected
+voiceConn == nil              --> Consider disconnected
+voiceConn.IsReady() == false  --> Consider disconnected
+voiceConn.IsReady() == true   --> Consider connected
 ```
+
+### RTP Timestamp Handling
+
+RTP framing is handled entirely by disgo's `UDPConn.Write()`. Each call increments
+the sequence number by 1 and the timestamp by 960 (one 20ms Opus frame). The
+timestamp is a monotonic counter — it does NOT track wall-clock time on its own.
+
+To keep the RTP timestamp aligned with wall-clock time, `toDiscordSender` sends
+opus silence frames at 20ms intervals even during non-speaking periods. This
+ensures the timestamp advances continuously at 48kHz regardless of speech
+activity. Without this, the timestamp would freeze during silence gaps and
+Discord's jitter buffer would accumulate growing latency across talk-spurt
+boundaries.
+
+**Important**: Do NOT attempt to catch up the RTP timestamp by burst-sending
+silence frames when speech resumes. Burst-sending floods Discord's jitter buffer
+with sequential-timestamp packets that arrive simultaneously but are scheduled
+for playout at 20ms intervals, causing seconds of queued delay before real audio
+plays. The correct approach is continuous paced silence.
+
+The bridge uses `SetSpeaking(true/false)` transitions to signal talk-spurt
+boundaries, which Discord clients use to reset their adaptive jitter buffer
+timing (functionally equivalent to the RTP marker bit in RFC 3551).
 
 ## Metrics and Monitoring
 
@@ -276,6 +313,7 @@ connection.Ready == true  --> Consider connected
 - `promMumbleArraySize`: Number of active per-user Mumble stream channels
 - `promMumbleStreaming`: Number of streams currently producing audio
 - `promMumbleMaxStreamDepth`: Maximum buffer depth across all active Mumble audio streams
+- `promToDiscordJitterBuffer`: Number of Opus frames in the Mumble-to-Discord send-side jitter buffer
 - `promDiscordArraySize`: Number of active Discord receiver entries
 - `promDiscordStreaming`: Number of Discord streams currently producing audio
 - `promDiscordPLCPackets`: PLC frames generated for lost Discord packets
@@ -287,7 +325,7 @@ connection.Ready == true  --> Consider connected
 - `promRtpTimestampDrift`: Cumulative silence time between wall clock and packets sent (seconds)
 
 ### Timer Performance Metrics
-- `promTimerDiscordSend`: SleepCT drift for Mumble->Discord sender (10ms target)
+- `promTimerDiscordSend`: SleepCT drift for Mumble->Discord opus mixer (10ms target)
 - `promTimerDiscordMixer`: SleepCT drift for Discord->Mumble mixer (10ms target)
 
 ### Connection Metrics
@@ -304,8 +342,11 @@ connection.Ready == true  --> Consider connected
 - **No Bridge Restart**: Individual connection failures don't crash the bridge
 
 ### Audio Quality
+- **Continuous RTP Timeline**: Silence frames sent during gaps keep RTP timestamp advancing at 48kHz, preventing jitter buffer latency accumulation
 - **Clock Drift Protection**: Buffer depth cap skips stale audio to prevent growing delay
-- **Consistent Send Timing**: 20ms Opus frame intervals prevent Discord jitter buffer growth
+- **Send-Side Jitter Buffer**: Decouples mixer timing from sender timing for consistent 20ms intervals
+- **Consistent Send Timing**: 20ms SleepCT pacing prevents Discord jitter buffer growth
+- **Speaking State Transitions**: SetSpeaking(true/false) signals talk-spurt boundaries to Discord clients
 - **Immediate Response**: Components respond instantly when connections restore
 - **Buffer Management**: Proper channel buffering prevents audio dropouts
 
@@ -322,7 +363,8 @@ connection.Ready == true  --> Consider connected
 ### Audio Flow Functions
 - `MixOneChunk()`: Reads one 10ms chunk from all active Mumble streams and mixes them (in `mumble_duplex.go`)
 - `OnAudioStream()`: Handles incoming Mumble audio streams, splits into 10ms chunks (in `mumble_duplex.go`)
-- `toDiscordSender()`: Mixes Mumble audio inline, encodes Opus, sends to Discord (in `discord_duplex.go`)
+- `toDiscordOpusMixer()`: Mixes Mumble audio, encodes Opus, pushes to jitter buffer (in `discord_duplex.go`)
+- `toDiscordSender()`: Reads from jitter buffer, sends to Discord at 20ms intervals (in `discord_duplex.go`)
 - `fromDiscordMixer()`: Processes Discord audio -> Mumble (in `discord_duplex.go`)
 - `toMumbleSender()`: Sends audio to Mumble with local sinking (in `mumble_duplex.go`)
 
@@ -331,7 +373,8 @@ connection.Ready == true  --> Consider connected
 | Goroutine | File | Pacing | Purpose |
 |-----------|------|--------|---------|
 | `OnAudioStream` (N per speaker) | `mumble_duplex.go` | Event-driven | Splits gumble audio into 10ms chunks |
-| `toDiscordSender` | `discord_duplex.go` | 10ms SleepCT | Mixes Mumble streams, encodes Opus, sends to Discord |
+| `toDiscordOpusMixer` | `discord_duplex.go` | 10ms SleepCT | Mixes Mumble streams, encodes Opus, pushes to jitter buffer |
+| `toDiscordSender` | `discord_duplex.go` | 20ms SleepCT | Reads from jitter buffer, sends to Discord, manages speaking state; sends silence during gaps to maintain RTP timeline |
 | `discordReceivePCM` | `discord_duplex.go` | Event-driven | Decodes Discord Opus into PCM chunks |
 | `fromDiscordMixer` | `discord_duplex.go` | 10ms SleepCT | Mixes Discord streams, sends to toMumble channel |
 | `toMumbleSender` | `mumble_duplex.go` | Blocking read | Forwards packets from toMumble channel to gumble |

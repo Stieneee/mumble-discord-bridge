@@ -9,6 +9,9 @@ import (
 	"github.com/stieneee/mumble-discord-bridge/internal/discord"
 )
 
+// Compile-time check that DiscordListener implements discord.EventHandler.
+var _ discord.EventHandler = (*DiscordListener)(nil)
+
 // DiscordListener holds references to the current BridgeConf
 // and BridgeState for use by the event handlers.
 // It implements discord.EventHandler.
@@ -375,6 +378,9 @@ func (l *DiscordListener) OnVoiceStateUpdate(state *discord.VoiceState) {
 	var usersToRemove []userToRemove
 	var userCount int
 
+	// Pass 1: under lock, mark all unseen, identify new/existing/removed users.
+	var newUserIDs []string
+
 	l.Bridge.DiscordUsersMutex.Lock()
 
 	// Mark all users as unseen
@@ -388,37 +394,11 @@ func (l *DiscordListener) OnVoiceStateUpdate(state *discord.VoiceState) {
 	for _, vs := range guild.VoiceStates {
 		if vs.ChannelID == l.Bridge.DiscordChannelID {
 			if botID == vs.UserID {
-				// Ignore bot
 				continue
 			}
 
 			if _, ok := l.Bridge.DiscordUsers[vs.UserID]; !ok {
-				u, err := l.Bridge.DiscordClient.GetUser(vs.UserID)
-				if err != nil {
-					l.Bridge.Logger.Error("DISCORD_HANDLER", "Error looking up username")
-
-					continue
-				}
-
-				l.Bridge.Logger.Info("DISCORD_HANDLER", fmt.Sprintf("User joined Discord: %s", u.Username))
-
-				// Emit user joined event
-				l.Bridge.EmitUserEvent("discord", 0, u.Username, nil)
-
-				dmID, err := l.Bridge.DiscordClient.CreateDM(u.ID)
-				if err != nil {
-					l.Bridge.Logger.Error("DISCORD_HANDLER", fmt.Sprintf("Error creating private channel for %s", u.Username))
-				}
-				l.Bridge.DiscordUsers[vs.UserID] = DiscordUser{
-					username: u.Username,
-					seen:     true,
-					dmID:     dmID,
-				}
-				usersToAdd = append(usersToAdd, userToAdd{
-					userID:   vs.UserID,
-					username: u.Username,
-					dmID:     dmID,
-				})
+				newUserIDs = append(newUserIDs, vs.UserID)
 			} else {
 				du := l.Bridge.DiscordUsers[vs.UserID]
 				du.seen = true
@@ -433,7 +413,6 @@ func (l *DiscordListener) OnVoiceStateUpdate(state *discord.VoiceState) {
 			username := l.Bridge.DiscordUsers[id].username
 			l.Bridge.Logger.Info("DISCORD_HANDLER", fmt.Sprintf("User left Discord channel: %s", username))
 
-			// Emit user left event
 			l.Bridge.EmitUserEvent("discord", 1, username, nil)
 			usersToRemove = append(usersToRemove, userToRemove{
 				userID:   id,
@@ -442,11 +421,46 @@ func (l *DiscordListener) OnVoiceStateUpdate(state *discord.VoiceState) {
 		}
 	}
 
-	// Remove users from the map while still holding the lock
+	// Remove departed users while still holding the lock
 	for _, u := range usersToRemove {
 		delete(l.Bridge.DiscordUsers, u.userID)
 	}
 
+	l.Bridge.DiscordUsersMutex.Unlock()
+
+	// Pass 2: perform REST API calls without holding the mutex.
+	for _, uid := range newUserIDs {
+		u, err := l.Bridge.DiscordClient.GetUser(uid)
+		if err != nil {
+			l.Bridge.Logger.Error("DISCORD_HANDLER", "Error looking up username")
+			continue
+		}
+
+		l.Bridge.Logger.Info("DISCORD_HANDLER", fmt.Sprintf("User joined Discord: %s", u.Username))
+		l.Bridge.EmitUserEvent("discord", 0, u.Username, nil)
+
+		dmID, err := l.Bridge.DiscordClient.CreateDM(u.ID)
+		if err != nil {
+			l.Bridge.Logger.Error("DISCORD_HANDLER", fmt.Sprintf("Error creating private channel for %s", u.Username))
+		}
+		usersToAdd = append(usersToAdd, userToAdd{
+			userID:   uid,
+			username: u.Username,
+			dmID:     dmID,
+		})
+	}
+
+	// Pass 3: re-acquire lock to insert new users.
+	l.Bridge.DiscordUsersMutex.Lock()
+	for _, u := range usersToAdd {
+		if _, exists := l.Bridge.DiscordUsers[u.userID]; !exists {
+			l.Bridge.DiscordUsers[u.userID] = DiscordUser{
+				username: u.username,
+				seen:     true,
+				dmID:     u.dmID,
+			}
+		}
+	}
 	userCount = len(l.Bridge.DiscordUsers)
 	l.Bridge.DiscordUsersMutex.Unlock()
 

@@ -21,7 +21,9 @@ type Client interface {
 	// IsReady returns true if the gateway is connected and ready.
 	IsReady() bool
 	// CreateVoiceConnection creates a new VoiceConnection for the given guild.
-	CreateVoiceConnection(guildID string) VoiceConnection
-	// SetEventHandler sets the handler for Discord events.
-	SetEventHandler(handler EventHandler)
+	CreateVoiceConnection(guildID string) (VoiceConnection, error)
+	// AddEventHandler registers a handler for Discord events and returns a
+	// function that removes it. Multiple handlers may be registered; each
+	// receives every event.
+	AddEventHandler(handler EventHandler) func()
 }

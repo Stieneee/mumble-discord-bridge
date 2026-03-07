@@ -9,8 +9,9 @@ Mumble Discord Bridge is a Go application that bridges audio and text chat betwe
 ## Build & Development Commands
 
 ```bash
-# Build (requires libopus-dev installed)
-make                    # Full build with goreleaser
+# Build (requires libopus-dev and libdave installed)
+make                    # Build binary
+make install-libdave    # Install libdave C++ library (DAVE E2EE)
 make dev                # Build and run for development
 
 # Testing
@@ -29,7 +30,7 @@ make dev-race           # go run -race ./cmd/mumble-discord-bridge
 make clean
 ```
 
-**System dependency**: Install `libopus-dev` (Ubuntu) or equivalent before building.
+**System dependencies**: Install `libopus-dev`, `cmake`, `g++`, and `pkg-config` (Ubuntu) before building. Run `make install-libdave` to install the libdave C++ library. Ensure `PKG_CONFIG_PATH` includes `~/.local/lib/pkgconfig` and `LD_LIBRARY_PATH` includes `~/.local/lib`.
 
 ## Architecture
 
@@ -37,6 +38,7 @@ make clean
 
 - **cmd/mumble-discord-bridge**: CLI entry point, configuration parsing, signal handling
 - **internal/bridge**: Core bridge logic
+- **internal/discord**: Discord client abstraction layer (disgo + DAVE E2EE)
 - **pkg/bridgelib**: High-level API for multi-bridge deployments (used by patchcord.io)
 - **pkg/logger**: Logger abstraction (supports bridge-specific logging)
 - **pkg/sleepct**: Precision sleep utility for audio timing
@@ -71,7 +73,7 @@ Always acquire in this order to prevent deadlocks.
 
 ### BridgeLib (pkg/bridgelib)
 
-**SharedDiscordClient** (`discord.go`): Allows multiple bridge instances to share a single Discord session with message routing per guild/channel.
+**SharedDiscordClient** (`discord.go`): Wraps `discord.Client` (disgo+godave) to allow multiple bridge instances to share a single Discord session with health monitoring.
 
 **BridgeInstance** (`bridge.go`): High-level wrapper that:
 - Creates and manages internal BridgeState
@@ -86,18 +88,16 @@ Always acquire in this order to prevent deadlocks.
 - **auto**: Connects when users present on both sides, disconnects when empty
 - **manual**: Controlled via chat commands (`!mumble-discord link/unlink`)
 
-### discordgo Fork
+### Discord Client Abstraction (internal/discord)
 
-The project uses a fork of `bwmarrin/discordgo` at `github.com/Stieneee/discordgo`. The fork lives at `../discordgo` relative to this repo (for local development, use `replace github.com/bwmarrin/discordgo => ../discordgo` in go.mod).
+The project uses [disgo](https://github.com/disgoorg/disgo) with [godave](https://github.com/disgoorg/godave) for Discord connectivity and DAVE E2EE support. The `internal/discord` package provides an abstraction layer:
 
-Key branches:
+- **`Client` interface** (`client.go`): Discord bot operations (connect, send messages, get users/guilds, create voice connections)
+- **`VoiceConnection` interface** (`voice.go`): Voice channel operations (open, close, send/receive opus, speaking state)
+- **`DisgoClient`** (`disgo_client.go`): Implementation using disgo with DAVE E2EE via `golibdave.NewSession`
+- **`DisgoVoiceConnection`** (`disgo_voice.go`): Voice connection implementation using disgo's voice system
 
-- **`mumble-discord-bridge`**: Stacked branch combining all MDB-related fixes (use this for go.mod replace in CI)
-- **`fix/voice-aead-data-race`**: RLock snapshot for v.aead in opusSender/opusReceiver
-- **`fix/session-open-deadlock-v2`**: Guard Open() inline onEvent against Op 7/9 deadlock
-- **`fix/voice-rtp-silence-gap`**: Advance RTP timestamp across silence gaps + set marker bit
-
-When adding a new discordgo fix: create an independent branch from `upstream/master`, cherry-pick it onto `mumble-discord-bridge`, push both, update go.mod replace.
+The abstraction ensures bridge code (`internal/bridge`) does not depend directly on any specific Discord library. The `godave` library requires `libdave` (a C++ shared library) installed on the system.
 
 ### Audio Architecture
 
@@ -105,8 +105,9 @@ See `docs/AUDIO-PACKET-FLOW.md` for detailed audio pipeline documentation includ
 
 Key audio concepts:
 
-- **RTP timestamp must track wall clock** across silence gaps, otherwise Discord's adaptive jitter buffer grows monotonically
-- **RTP marker bit (RFC 3551)** signals start of new talk-spurt after silence, allowing receivers to reset jitter buffer timing
+- **RTP framing is handled by disgo's UDPConn.Write**: each call increments sequence by 1 and timestamp by 960 (20ms). The timestamp is a monotonic counter, not wall-clock aligned.
+- **Continuous silence sending**: During non-speaking periods, `toDiscordSender` sends opus silence frames at 20ms intervals to keep disgo's RTP timestamp advancing in sync with wall-clock time. Without this, the timestamp freezes during silence and Discord's jitter buffer accumulates latency across talk-spurt boundaries. Do NOT try to catch up the RTP timestamp in bursts — burst-sending silence frames clogs the jitter buffer.
+- **Speaking state transitions** (`SetSpeaking true/false`) signal talk-spurt boundaries to Discord clients, which reset their adaptive jitter buffer timing (functionally equivalent to the RTP marker bit in RFC 3551).
 - **Buffer depth cap** (`mumbleMaxBufferDepth`) prevents Mumble clock drift from accumulating latency
 - Mumble uses 10ms frames, Discord uses 20ms Opus frames; the bridge converts between them
 

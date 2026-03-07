@@ -1,11 +1,14 @@
 FROM ubuntu:24.04 AS builder
 
+# Go version — keep in sync with go.mod
+ARG GO_VERSION=1.25.7
+
 RUN apt-get update && apt-get install -y \
     cmake g++ pkg-config git unzip curl \
     libopus-dev ca-certificates
 
-# Install Go 1.24 (Ubuntu 24.04 ships older Go)
-RUN curl -fsSL https://go.dev/dl/go1.24.0.linux-amd64.tar.gz | tar -C /usr/local -xzf -
+# Install Go (Ubuntu 24.04 ships older Go)
+RUN curl -fsSL https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz | tar -C /usr/local -xzf -
 ENV PATH="/usr/local/go/bin:/root/go/bin:$PATH"
 
 # Install libdave C++ library (required for DAVE E2EE)

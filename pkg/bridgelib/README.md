@@ -138,13 +138,12 @@ The `SharedDiscordClient` implements the `DiscordProvider` interface to provide 
 
 ```go
 type SharedDiscordClient struct {
-    // The Discord session
-    session *discordgo.Session
+    // The underlying Discord client (disgo + DAVE E2EE)
+    client discord.Client
 
-    // Mapping of guild:channel to message handlers
-    messageHandlers     map[string][]interface{}
-    messageHandlerMutex sync.RWMutex
-
+    // Health monitoring and reconnection
+    mu     sync.RWMutex
+    logger logger.Logger
 }
 ```
 
@@ -299,14 +298,11 @@ BridgeLib uses a provider pattern to abstract Discord connectivity:
 ```go
 // DiscordProvider interface
 type DiscordProvider interface {
-    // RegisterHandler registers a handler for Discord events
-    RegisterHandler(handlerFunc interface{})
+    // GetClient returns the underlying discord.Client
+    GetClient() discord.Client
 
     // SendMessage sends a message to a channel
-    SendMessage(channelID, content string) (*discordgo.Message, error)
-
-    // GetSession returns the underlying Discord session
-    GetSession() *discordgo.Session
+    SendMessage(channelID, content string) error
 }
 ```
 

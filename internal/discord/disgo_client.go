@@ -18,12 +18,14 @@ import (
 
 // DisgoClient implements Client using the disgo library with DAVE E2EE support.
 type DisgoClient struct {
-	token   string
-	client  *bot.Client
-	handler EventHandler
-	mu      sync.RWMutex
-	ready   bool
-	botID   string
+	token string
+	// client is set once in NewDisgoClient and never reassigned. All methods
+	// may read it without holding mu. Do NOT reassign after construction.
+	client   *bot.Client
+	handlers []EventHandler
+	mu       sync.RWMutex
+	ready    bool
+	botID    string
 }
 
 // NewDisgoClient creates a new DisgoClient with the given bot token.
@@ -67,9 +69,16 @@ func (dc *DisgoClient) Connect(ctx context.Context) error {
 	return dc.client.OpenGateway(ctx)
 }
 
-// Disconnect closes the client.
+// Disconnect closes the client and resets ready state so that IsReady()
+// returns false until the next successful Connect+onReady cycle.
+// botID is preserved so that concurrent callers (e.g. event handlers
+// processing final events) still filter the bot correctly.
 func (dc *DisgoClient) Disconnect(ctx context.Context) error {
 	dc.client.Close(ctx)
+
+	dc.mu.Lock()
+	dc.ready = false
+	dc.mu.Unlock()
 
 	return nil
 }
@@ -185,32 +194,48 @@ func (dc *DisgoClient) IsReady() bool {
 }
 
 // CreateVoiceConnection creates a new VoiceConnection for the given guild.
-func (dc *DisgoClient) CreateVoiceConnection(guildID string) VoiceConnection {
+func (dc *DisgoClient) CreateVoiceConnection(guildID string) (VoiceConnection, error) {
 	gid, err := snowflake.Parse(guildID)
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("invalid guild ID %s: %w", guildID, err)
 	}
 
 	return &DisgoVoiceConnection{
 		client:  dc.client,
 		guildID: gid,
-	}
+	}, nil
 }
 
-// SetEventHandler sets the handler for Discord events.
-func (dc *DisgoClient) SetEventHandler(handler EventHandler) {
+// AddEventHandler registers a handler for Discord events and returns a
+// function that removes it. Safe for concurrent use; multiple handlers
+// are supported for multi-bridge deployments.
+func (dc *DisgoClient) AddEventHandler(handler EventHandler) func() {
 	dc.mu.Lock()
 	defer dc.mu.Unlock()
 
-	dc.handler = handler
+	dc.handlers = append(dc.handlers, handler)
+
+	return func() {
+		dc.mu.Lock()
+		defer dc.mu.Unlock()
+		for i, h := range dc.handlers {
+			if h == handler {
+				dc.handlers = append(dc.handlers[:i], dc.handlers[i+1:]...)
+				return
+			}
+		}
+	}
 }
 
-// getHandler safely gets the current event handler.
-func (dc *DisgoClient) getHandler() EventHandler {
+// getHandlers safely returns a snapshot of current event handlers.
+func (dc *DisgoClient) getHandlers() []EventHandler {
 	dc.mu.RLock()
 	defer dc.mu.RUnlock()
 
-	return dc.handler
+	// Return a copy to avoid holding the lock during dispatch.
+	out := make([]EventHandler, len(dc.handlers))
+	copy(out, dc.handlers)
+	return out
 }
 
 // Event handler callbacks
@@ -221,14 +246,14 @@ func (dc *DisgoClient) onReady(e *events.Ready) {
 	dc.botID = e.User.ID.String()
 	dc.mu.Unlock()
 
-	if h := dc.getHandler(); h != nil {
+	for _, h := range dc.getHandlers() {
 		h.OnReady()
 	}
 }
 
 func (dc *DisgoClient) onGuildAvailable(e *events.GuildAvailable) {
-	h := dc.getHandler()
-	if h == nil {
+	handlers := dc.getHandlers()
+	if len(handlers) == 0 {
 		return
 	}
 
@@ -249,12 +274,14 @@ func (dc *DisgoClient) onGuildAvailable(e *events.GuildAvailable) {
 		})
 	}
 
-	h.OnGuildCreate(guild)
+	for _, h := range handlers {
+		h.OnGuildCreate(guild)
+	}
 }
 
 func (dc *DisgoClient) onMessageCreate(e *events.MessageCreate) {
-	h := dc.getHandler()
-	if h == nil {
+	handlers := dc.getHandlers()
+	if len(handlers) == 0 {
 		return
 	}
 
@@ -275,7 +302,9 @@ func (dc *DisgoClient) onMessageCreate(e *events.MessageCreate) {
 		},
 	}
 
-	h.OnMessageCreate(msg)
+	for _, h := range handlers {
+		h.OnMessageCreate(msg)
+	}
 }
 
 // Voice state events — disgo splits these into Join/Move/Leave
@@ -289,21 +318,23 @@ func (dc *DisgoClient) onGuildVoiceMove(e *events.GuildVoiceMove) {
 }
 
 func (dc *DisgoClient) onGuildVoiceLeave(e *events.GuildVoiceLeave) {
-	h := dc.getHandler()
-	if h == nil {
+	handlers := dc.getHandlers()
+	if len(handlers) == 0 {
 		return
 	}
-	// On leave, emit with empty channel ID to signal departure
-	h.OnVoiceStateUpdate(&VoiceState{
+	vs := &VoiceState{
 		UserID:    e.VoiceState.UserID.String(),
 		ChannelID: "",
 		GuildID:   e.VoiceState.GuildID.String(),
-	})
+	}
+	for _, h := range handlers {
+		h.OnVoiceStateUpdate(vs)
+	}
 }
 
 func (dc *DisgoClient) emitVoiceState(vs discordmodel.VoiceState) {
-	h := dc.getHandler()
-	if h == nil {
+	handlers := dc.getHandlers()
+	if len(handlers) == 0 {
 		return
 	}
 
@@ -312,9 +343,12 @@ func (dc *DisgoClient) emitVoiceState(vs discordmodel.VoiceState) {
 		channelID = vs.ChannelID.String()
 	}
 
-	h.OnVoiceStateUpdate(&VoiceState{
+	state := &VoiceState{
 		UserID:    vs.UserID.String(),
 		ChannelID: channelID,
 		GuildID:   vs.GuildID.String(),
-	})
+	}
+	for _, h := range handlers {
+		h.OnVoiceStateUpdate(state)
+	}
 }

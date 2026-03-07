@@ -92,6 +92,9 @@ type BridgeInstance struct {
 	// Event handling
 	eventDispatcher *EventDispatcher
 
+	// Removal function for the Discord event handler
+	removeEventHandler func()
+
 	// The lock for protecting access to the bridge
 	mu sync.Mutex
 
@@ -215,8 +218,9 @@ func NewBridgeInstanceWithContext(ctx context.Context, id string, config *Bridge
 	}
 	bridgeLogger.Debug("BRIDGE_INIT", "Discord listener created successfully")
 
-	// Register event handler on the Discord client
-	discordClient.SetEventHandler(inst.State.DiscordListener)
+	// Register event handler on the Discord client (supports multiple bridges
+	// sharing one client; AddEventHandler returns a removal function).
+	inst.removeEventHandler = discordClient.AddEventHandler(inst.State.DiscordListener)
 
 	bridgeLogger.Info("BRIDGE_SETUP", "Discord event handler registered")
 
@@ -412,20 +416,33 @@ func (b *BridgeInstance) Stop() error {
 		b.logger.Debug("BRIDGE_STOP", "Auto bridge stop signal sent")
 	}
 
-	// Stop the bridge if it's active
+	// Stop the bridge if it's active.
+	// Read state under lock, then unlock before blocking send/wait to avoid
+	// deadlock if cleanup code needs BridgeMutex.
 	b.logger.Debug("BRIDGE_STOP", "Checking bridge connection status")
 	b.State.BridgeMutex.Lock()
 	connected := b.State.Connected || b.State.BridgeActive
+	b.State.BridgeMutex.Unlock()
+
 	if connected {
 		b.logger.Debug("BRIDGE_STOP", "Bridge is connected, sending die signal")
-		b.State.BridgeDie <- true
+		select {
+		case b.State.BridgeDie <- true:
+		default:
+		}
 		b.logger.Debug("BRIDGE_STOP", "Waiting for bridge exit")
 		b.State.WaitExit.Wait()
 		b.logger.Debug("BRIDGE_STOP", "Bridge exit completed")
 	} else {
 		b.logger.Debug("BRIDGE_STOP", "Bridge is not connected, skipping die signal")
 	}
-	b.State.BridgeMutex.Unlock()
+
+	// Remove the Discord event handler so a stopped bridge no longer
+	// receives events from the shared client.
+	if b.removeEventHandler != nil {
+		b.removeEventHandler()
+		b.removeEventHandler = nil
+	}
 
 	// Emit bridge stopped event and stop event dispatcher
 	if b.eventDispatcher != nil {

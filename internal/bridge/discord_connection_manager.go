@@ -157,51 +157,34 @@ func (d *DiscordVoiceConnectionManager) connectOnce() error {
 	}
 
 	// Create voice connection
-	voiceConn := d.discordClient.CreateVoiceConnection(d.guildID)
+	voiceConn, err := d.discordClient.CreateVoiceConnection(d.guildID)
+	if err != nil {
+		d.SetStatus(ConnectionFailed, err)
 
-	// Open with timeout
-	type connResult struct {
-		err error
+		return fmt.Errorf("failed to create voice connection: %w", err)
 	}
-	resultChan := make(chan connResult, 1)
 
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		err := voiceConn.Open(ctx, d.guildID, d.channelID)
-		resultChan <- connResult{err: err}
-	}()
+	// Open with timeout — derive from parent context so cancellation also
+	// terminates the Open call, preventing goroutine leaks.
+	const connectionTimeout = 30 * time.Second
+	openCtx, openCancel := context.WithTimeout(d.ctx, connectionTimeout)
+	defer openCancel()
 
-	connectionTimeout := 30 * time.Second
-	select {
-	case <-d.ctx.Done():
-		d.logger.Info("DISCORD_CONN", "Connection attempt canceled by context")
+	if err := voiceConn.Open(openCtx, d.channelID); err != nil {
+		d.logger.Error("DISCORD_CONN", fmt.Sprintf("Voice connection failed: %v", err))
+		d.SetStatus(ConnectionFailed, err)
 
-		return fmt.Errorf("connection canceled")
-
-	case <-time.After(connectionTimeout):
-		d.logger.Error("DISCORD_CONN", fmt.Sprintf("Voice connection timeout after %v", connectionTimeout))
-		d.SetStatus(ConnectionFailed, fmt.Errorf("connection timeout"))
-
-		return fmt.Errorf("voice connection timeout")
-
-	case result := <-resultChan:
-		if result.err != nil {
-			d.logger.Error("DISCORD_CONN", fmt.Sprintf("Voice connection failed: %v", result.err))
-			d.SetStatus(ConnectionFailed, result.err)
-
-			return fmt.Errorf("failed to join voice channel: %w", result.err)
-		}
-
-		d.connMutex.Lock()
-		d.voiceConn = voiceConn
-		d.connMutex.Unlock()
-
-		d.SetStatus(ConnectionConnected, nil)
-		d.logger.Info("DISCORD_CONN", "Discord voice connection established with DAVE E2EE")
-
-		return nil
+		return fmt.Errorf("failed to join voice channel: %w", err)
 	}
+
+	d.connMutex.Lock()
+	d.voiceConn = voiceConn
+	d.connMutex.Unlock()
+
+	d.SetStatus(ConnectionConnected, nil)
+	d.logger.Info("DISCORD_CONN", "Discord voice connection established with DAVE E2EE")
+
+	return nil
 }
 
 // waitForClientReady waits for the Discord client to be ready

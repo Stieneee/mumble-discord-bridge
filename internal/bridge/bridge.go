@@ -96,7 +96,7 @@ type BridgeConfig struct { //nolint:revive // API consistency: keeping Bridge pr
 //
 // CONCURRENCY NOTES:
 //   - BridgeMutex protects: Connected, DiscordConnected, MumbleConnected, Mode,
-//     MumbleClient, DiscordVoice, StartTime
+//     DiscordClient, StartTime
 //   - DiscordUsersMutex protects: DiscordUsers map
 //   - MumbleUsersMutex protects: MumbleUsers map, MumbleUserCount
 //   - Lock order: BridgeMutex -> MumbleUsersMutex -> DiscordUsersMutex
@@ -933,11 +933,19 @@ func (b *BridgeState) StartBridge() {
 		b.MumbleStream.toMumbleSender(ctx, toMumbleInternal)
 	}()
 
-	// Mumble to Discord: mixes Mumble streams inline, encodes Opus, sends to Discord
+	// Mumble to Discord: mixer encodes Opus into jitter buffer, sender paces at 20ms
+	toDiscordOpusBuffer := make(chan []byte, toDiscordJitterBufferSize)
+
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		b.DiscordStream.toDiscordSender(ctx)
+		b.DiscordStream.toDiscordOpusMixer(ctx, toDiscordOpusBuffer)
+	}()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		b.DiscordStream.toDiscordSender(ctx, toDiscordOpusBuffer)
 	}()
 
 	// Bridge health monitor - checks overall bridge state but doesn't kill on individual connection failures
@@ -1100,7 +1108,8 @@ func (b *BridgeState) PopulateExistingDiscordUsers() {
 		return
 	}
 
-	count := 0
+	// Pass 1: collect user IDs that need lookup (under lock)
+	var newUserIDs []string
 	b.DiscordUsersMutex.Lock()
 	for _, vs := range guild.VoiceStates {
 		if vs.ChannelID == b.DiscordChannelID {
@@ -1109,28 +1118,40 @@ func (b *BridgeState) PopulateExistingDiscordUsers() {
 			}
 
 			if _, exists := b.DiscordUsers[vs.UserID]; !exists {
-				u, err := b.DiscordClient.GetUser(vs.UserID)
-				if err != nil {
-					b.Logger.Error("BRIDGE", fmt.Sprintf("Error looking up user %s: %v", vs.UserID, err))
-
-					continue
-				}
-
-				b.Logger.Info("BRIDGE", fmt.Sprintf("Found existing Discord user: %s", u.Username))
-				dmID, err := b.DiscordClient.CreateDM(u.ID)
-				if err != nil {
-					b.Logger.Error("BRIDGE", fmt.Sprintf("Error creating DM channel for %s: %v", u.Username, err))
-				}
-				b.DiscordUsers[vs.UserID] = DiscordUser{
-					username: u.Username,
-					seen:     true,
-					dmID:     dmID,
-				}
-				count++
+				newUserIDs = append(newUserIDs, vs.UserID)
 			}
 		}
 	}
 	b.DiscordUsersMutex.Unlock()
+
+	// Pass 2: look up users via API (without lock)
+	count := 0
+	for _, userID := range newUserIDs {
+		u, err := b.DiscordClient.GetUser(userID)
+		if err != nil {
+			b.Logger.Error("BRIDGE", fmt.Sprintf("Error looking up user %s: %v", userID, err))
+
+			continue
+		}
+
+		b.Logger.Info("BRIDGE", fmt.Sprintf("Found existing Discord user: %s", u.Username))
+		dmID, err := b.DiscordClient.CreateDM(u.ID)
+		if err != nil {
+			b.Logger.Error("BRIDGE", fmt.Sprintf("Error creating DM channel for %s: %v", u.Username, err))
+		}
+
+		// Pass 3: insert under lock (re-check to avoid race)
+		b.DiscordUsersMutex.Lock()
+		if _, exists := b.DiscordUsers[userID]; !exists {
+			b.DiscordUsers[userID] = DiscordUser{
+				username: u.Username,
+				seen:     true,
+				dmID:     dmID,
+			}
+			count++
+		}
+		b.DiscordUsersMutex.Unlock()
+	}
 
 	b.Logger.Info("BRIDGE", fmt.Sprintf("Populated %d existing Discord users", count))
 }
@@ -1150,33 +1171,53 @@ func (b *BridgeState) refreshDiscordVoiceUsers() {
 		return
 	}
 
+	// Pass 1: collect new user IDs under lock.
+	var newUserIDs []string
 	b.DiscordUsersMutex.Lock()
 	for _, vs := range guild.VoiceStates {
 		if vs.ChannelID == b.DiscordChannelID {
 			if botID == vs.UserID {
 				continue
 			}
-
 			if _, exists := b.DiscordUsers[vs.UserID]; !exists {
-				u, err := b.DiscordClient.GetUser(vs.UserID)
-				if err != nil {
-					continue
-				}
-
-				b.Logger.Info("BRIDGE", fmt.Sprintf("Auto mode detected Discord user: %s", u.Username))
-				dmID, err := b.DiscordClient.CreateDM(u.ID)
-				if err != nil {
-					b.Logger.Error("BRIDGE", fmt.Sprintf("Error creating DM channel for user %s: %v", u.Username, err))
-				}
-				b.DiscordUsers[vs.UserID] = DiscordUser{
-					username: u.Username,
-					seen:     true,
-					dmID:     dmID,
-				}
+				newUserIDs = append(newUserIDs, vs.UserID)
 			}
 		}
 	}
 	b.DiscordUsersMutex.Unlock()
+
+	// Pass 2: REST API calls without holding the mutex.
+	type newUser struct {
+		userID, username, dmID string
+	}
+	var newUsers []newUser
+	for _, uid := range newUserIDs {
+		u, err := b.DiscordClient.GetUser(uid)
+		if err != nil {
+			continue
+		}
+		b.Logger.Info("BRIDGE", fmt.Sprintf("Auto mode detected Discord user: %s", u.Username))
+		dmID, err := b.DiscordClient.CreateDM(u.ID)
+		if err != nil {
+			b.Logger.Error("BRIDGE", fmt.Sprintf("Error creating DM channel for user %s: %v", u.Username, err))
+		}
+		newUsers = append(newUsers, newUser{userID: uid, username: u.Username, dmID: dmID})
+	}
+
+	// Pass 3: re-acquire lock to insert.
+	if len(newUsers) > 0 {
+		b.DiscordUsersMutex.Lock()
+		for _, nu := range newUsers {
+			if _, exists := b.DiscordUsers[nu.userID]; !exists {
+				b.DiscordUsers[nu.userID] = DiscordUser{
+					username: nu.username,
+					seen:     true,
+					dmID:     nu.dmID,
+				}
+			}
+		}
+		b.DiscordUsersMutex.Unlock()
+	}
 }
 
 // AutoBridge starts a goroutine to check the number of users in discord and mumble

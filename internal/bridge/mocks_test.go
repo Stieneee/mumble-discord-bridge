@@ -2,6 +2,7 @@ package bridge
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -100,7 +101,7 @@ func (m *MockLogger) ContainsMessage(substr string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, e := range m.entries {
-		if containsSubstring(e.Message, substr) {
+		if strings.Contains(e.Message, substr) {
 			return true
 		}
 	}
@@ -319,18 +320,3 @@ func (m *MockConnectionManager) statusToEventType(status ConnectionStatus) Conne
 	}
 }
 
-// Helper function for string contains check
-func containsSubstring(s, substr string) bool {
-	if substr == "" {
-		return true
-	}
-	if len(s) < len(substr) {
-		return false
-	}
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
-}

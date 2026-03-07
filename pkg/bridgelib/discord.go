@@ -125,7 +125,9 @@ func (c *SharedDiscordClient) IsSessionHealthy() bool {
 	return c.client.IsReady()
 }
 
-// startSessionMonitoring starts the session health monitoring goroutine
+// startSessionMonitoring starts the session health monitoring goroutine.
+// A fresh context is created each time so that monitoring can be restarted
+// after a stop (e.g. during lastResortSessionReset).
 func (c *SharedDiscordClient) startSessionMonitoring() {
 	c.monitoringMutex.Lock()
 	defer c.monitoringMutex.Unlock()
@@ -136,6 +138,7 @@ func (c *SharedDiscordClient) startSessionMonitoring() {
 		return
 	}
 
+	c.ctx, c.cancel = context.WithCancel(context.Background())
 	c.monitoringEnabled = true
 	c.logger.Info("DISCORD_CLIENT", "Starting Discord session health monitoring")
 
@@ -186,8 +189,34 @@ func (c *SharedDiscordClient) sessionMonitorLoop() {
 				}
 
 				unhealthyDuration := time.Since(unhealthySince)
-				c.logger.Warn("DISCORD_CLIENT", fmt.Sprintf("Discord session unhealthy for %v", unhealthyDuration))
+				if unhealthyDuration > 10*time.Minute {
+					c.logger.Error("DISCORD_CLIENT", fmt.Sprintf("Discord session unhealthy for %v — attempting last-resort session reset", unhealthyDuration))
+					c.lastResortSessionReset()
+					unhealthySince = time.Time{}
+				} else {
+					c.logger.Warn("DISCORD_CLIENT", fmt.Sprintf("Discord session unhealthy for %v", unhealthyDuration))
+				}
 			}
 		}
+	}
+}
+
+// lastResortSessionReset attempts to recover by disconnecting and reconnecting
+// the Discord session. Called after 10+ minutes of unhealthy state when the
+// library's own reconnection has failed persistently.
+func (c *SharedDiscordClient) lastResortSessionReset() {
+	c.logger.Warn("DISCORD_CLIENT", "Performing last-resort session reset: disconnect + reconnect")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if err := c.client.Disconnect(ctx); err != nil {
+		c.logger.Error("DISCORD_CLIENT", fmt.Sprintf("Error during last-resort disconnect: %v", err))
+	}
+
+	if err := c.client.Connect(context.Background()); err != nil {
+		c.logger.Error("DISCORD_CLIENT", fmt.Sprintf("Error during last-resort reconnect: %v", err))
+	} else {
+		c.logger.Info("DISCORD_CLIENT", "Last-resort session reset completed successfully")
 	}
 }

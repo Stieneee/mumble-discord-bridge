@@ -56,9 +56,11 @@ func (m *mockDiscordClient) GetBotUserID() string { return m.botUserID }
 
 func (m *mockDiscordClient) IsReady() bool { return m.ready }
 
-func (m *mockDiscordClient) CreateVoiceConnection(_ string) discord.VoiceConnection { return nil }
+func (m *mockDiscordClient) CreateVoiceConnection(_ string) (discord.VoiceConnection, error) {
+	return nil, nil
+}
 
-func (m *mockDiscordClient) SetEventHandler(_ discord.EventHandler) {}
+func (m *mockDiscordClient) AddEventHandler(_ discord.EventHandler) func() { return func() {} }
 
 // getSentMessages returns a snapshot of sent messages.
 func (m *mockDiscordClient) getSentMessages() []struct{ channelID, content string } {
