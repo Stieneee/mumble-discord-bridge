@@ -1298,6 +1298,7 @@ func (b *BridgeState) MumblePresenceBridge() {
 		certificate, err := tls.LoadX509KeyPair(keyFile, keyFile)
 		if err != nil {
 			b.Logger.Error("BRIDGE", fmt.Sprintf("Failed to load Mumble client certificate %s: %v", keyFile, err))
+
 			return
 		}
 		tlsConfig.Certificates = append(tlsConfig.Certificates, certificate)
@@ -1317,6 +1318,7 @@ func (b *BridgeState) MumblePresenceBridge() {
 
 	if err := b.MumbleConnectionManager.Start(mumbleCtx); err != nil {
 		b.Logger.Error("BRIDGE", fmt.Sprintf("Failed to start persistent Mumble connection: %v", err))
+
 		return
 	}
 
@@ -1370,7 +1372,7 @@ func (b *BridgeState) MumblePresenceBridge() {
 				disconnectTimer.Stop()
 				disconnectTimer = nil
 				disconnectCh = nil
-				b.Logger.Info("BRIDGE", "Mumble user rejoined, cancelled pending Discord disconnect")
+				b.Logger.Info("BRIDGE", "Mumble user rejoined, canceled pending Discord disconnect")
 			}
 			b.Logger.Info("BRIDGE", fmt.Sprintf("Mumble users detected (%d), starting Discord presence", mumbleUserCount))
 			b.StartDiscordPresence()
@@ -1382,7 +1384,7 @@ func (b *BridgeState) MumblePresenceBridge() {
 				disconnectTimer.Stop()
 				disconnectTimer = nil
 				disconnectCh = nil
-				b.Logger.Info("BRIDGE", "Mumble user rejoined, cancelled pending Discord disconnect")
+				b.Logger.Info("BRIDGE", "Mumble user rejoined, canceled pending Discord disconnect")
 			}
 		}
 
@@ -1413,7 +1415,7 @@ func (b *BridgeState) MumblePresenceBridge() {
 				audioStopTimer.Stop()
 				audioStopTimer = nil
 				audioStopCh = nil
-				b.Logger.Info("BRIDGE", "Discord user rejoined, cancelled pending audio pipeline stop")
+				b.Logger.Info("BRIDGE", "Discord user rejoined, canceled pending audio pipeline stop")
 			}
 			b.Logger.Info("BRIDGE", fmt.Sprintf("Discord users detected (%d), starting audio pipeline", discordUserCount))
 			b.startAudioPipeline()
@@ -1425,7 +1427,7 @@ func (b *BridgeState) MumblePresenceBridge() {
 				audioStopTimer.Stop()
 				audioStopTimer = nil
 				audioStopCh = nil
-				b.Logger.Info("BRIDGE", "Discord user rejoined, cancelled pending audio pipeline stop")
+				b.Logger.Info("BRIDGE", "Discord user rejoined, canceled pending audio pipeline stop")
 			}
 		}
 
@@ -1504,6 +1506,7 @@ func (b *BridgeState) StartDiscordPresence() {
 	if b.BridgeActive {
 		b.Logger.Info("BRIDGE", "Discord presence already active, aborting")
 		b.BridgeMutex.Unlock()
+
 		return
 	}
 	b.BridgeActive = true
@@ -1521,6 +1524,7 @@ func (b *BridgeState) StartDiscordPresence() {
 		b.BridgeMutex.Lock()
 		b.BridgeActive = false
 		b.BridgeMutex.Unlock()
+
 		return
 	}
 
@@ -1539,6 +1543,7 @@ func (b *BridgeState) StartDiscordPresence() {
 		b.BridgeMutex.Lock()
 		b.BridgeActive = false
 		b.BridgeMutex.Unlock()
+
 		return
 	}
 
@@ -1607,6 +1612,7 @@ func (b *BridgeState) startAudioPipeline() {
 	b.BridgeMutex.Lock()
 	if b.AudioActive {
 		b.BridgeMutex.Unlock()
+
 		return
 	}
 	b.AudioActive = true
@@ -1677,6 +1683,7 @@ func (b *BridgeState) stopAudioPipeline() {
 	b.BridgeMutex.Lock()
 	if !b.AudioActive {
 		b.BridgeMutex.Unlock()
+
 		return
 	}
 	b.AudioActive = false

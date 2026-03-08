@@ -248,6 +248,7 @@ func (m *MumbleDuplex) toMumbleSender(ctx context.Context, internalChan <-chan g
 			if !ok {
 				sendTimer.Stop()
 				m.logger.Info("MUMBLE_FORWARDER", "Internal audio channel closed, stopping toMumbleSender")
+
 				return
 			}
 			promMumbleBufferedPackets.Set(float64(len(internalChan)))
