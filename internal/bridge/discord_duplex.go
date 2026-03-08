@@ -276,9 +276,21 @@ func (dd *DiscordDuplex) discordReceivePCM(ctx context.Context) {
 	lastReady := true
 
 	for {
+		select {
+		case <-ctx.Done():
+			dd.Bridge.Logger.Info("DISCORD_RECEIVE", "Stopping Discord receive PCM")
+
+			return
+		default:
+		}
+
 		connManager := dd.Bridge.DiscordVoiceConnectionManager
 		if connManager == nil {
-			time.Sleep(connectionCheckInterval * time.Millisecond)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(connectionCheckInterval * time.Millisecond):
+			}
 
 			continue
 		}
@@ -289,7 +301,12 @@ func (dd *DiscordDuplex) discordReceivePCM(ctx context.Context) {
 				dd.Bridge.Logger.Debug("DISCORD_RECEIVE", "Discord connection not ready for receiving")
 				lastReady = false
 			}
-			time.Sleep(connectionCheckInterval * time.Millisecond)
+
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(connectionCheckInterval * time.Millisecond):
+			}
 
 			continue
 		}
@@ -298,15 +315,6 @@ func (dd *DiscordDuplex) discordReceivePCM(ctx context.Context) {
 		if !lastReady {
 			dd.Bridge.Logger.Info("DISCORD_RECEIVE", "Discord ready to receive packets")
 			lastReady = true
-		}
-
-		// Check context before blocking on receive
-		select {
-		case <-ctx.Done():
-			dd.Bridge.Logger.Info("DISCORD_RECEIVE", "Stopping Discord receive PCM")
-
-			return
-		default:
 		}
 
 		// ReceiveOpus blocks until a packet arrives
