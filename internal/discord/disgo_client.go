@@ -48,6 +48,11 @@ func NewDisgoClient(token string) (*DisgoClient, error) {
 		),
 		bot.WithVoiceManagerConfigOpts(
 			voice.WithDaveSessionCreateFunc(golibdave.NewSession),
+			voice.WithConnConfigOpts(
+				voice.WithConnGatewayConfigOpts(
+					voice.WithGatewayAutoReconnect(false),
+				),
+			),
 		),
 		bot.WithEventListenerFunc(dc.onReady),
 		bot.WithEventListenerFunc(dc.onGuildAvailable),
