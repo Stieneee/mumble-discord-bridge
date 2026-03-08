@@ -941,29 +941,20 @@ func (b *BridgeState) StartBridge() {
 		det = b.BridgeConfig.MumbleConfig.AudioListeners.Attach(b.MumbleStream)
 	}
 
-	// Ensure proper cleanup order: detach audio listener before stopping connection managers
-	defer func() {
-		// First detach audio listener to prevent race with ongoing audio processing
+	// cleanupAudio detaches listeners and cleans up streams
+	cleanupAudio := func() {
 		if det != nil {
 			b.Logger.Debug("BRIDGE", "Detaching Mumble audio listener")
 			det.Detach()
-			// Small delay to allow any in-flight audio processing to complete
 			time.Sleep(50 * time.Millisecond)
 		}
-
-		// Stop Discord stream cleanup goroutine
 		if b.DiscordStream != nil {
 			b.DiscordStream.StopCleanup()
 		}
-
-		// Clean up any active audio streams
 		if b.MumbleStream != nil {
 			b.MumbleStream.CleanupStreams()
 		}
-
-		// Then stop connection managers
-		b.stopConnectionManagers()
-	}()
+	}
 
 	// Set up audio channels with proper lifecycle management
 	toMumbleInternal := make(chan gumble.AudioBuffer, 50)
@@ -1053,6 +1044,12 @@ func (b *BridgeState) StartBridge() {
 	b.BridgeMutex.Unlock()
 
 	b.notifyMetricsChange()
+
+	// Clean up audio, then stop connection managers to close the Discord UDP
+	// socket. This unblocks discordReceivePCM's blocking ReceiveOpus() call
+	// so wg.Wait() can complete.
+	cleanupAudio()
+	b.stopConnectionManagers()
 
 	wg.Wait()
 	b.Logger.Info("BRIDGE", "Terminating Bridge")
