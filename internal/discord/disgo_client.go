@@ -44,7 +44,7 @@ func NewDisgoClient(token string) (*DisgoClient, error) {
 			),
 		),
 		bot.WithCacheConfigOpts(
-			cache.WithCaches(cache.FlagGuilds, cache.FlagVoiceStates),
+			cache.WithCaches(cache.FlagGuilds, cache.FlagVoiceStates, cache.FlagChannels),
 		),
 		bot.WithVoiceManagerConfigOpts(
 			voice.WithDaveSessionCreateFunc(golibdave.NewSession),

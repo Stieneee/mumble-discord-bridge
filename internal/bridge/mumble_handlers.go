@@ -3,6 +3,7 @@ package bridge
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/stieneee/gumble/gumble"
 )
@@ -64,6 +65,15 @@ func (l *MumbleListener) updateUsers() {
 
 	// Notify metrics change for user count change
 	l.Bridge.notifyMetricsChange()
+
+	// Signal MumblePresenceBridge immediately if the channel exists
+	if l.Bridge.MumbleUserChange != nil {
+		select {
+		case l.Bridge.MumbleUserChange <- struct{}{}:
+		default:
+			// Already signaled, don't block
+		}
+	}
 }
 
 // MumbleConnect handles Mumble connection events.
@@ -97,8 +107,18 @@ func (l *MumbleListener) MumbleConnect(e *gumble.ConnectEvent) {
 		l.Bridge.Logger.Debug("MUMBLE_HANDLER", "No specific Mumble channel specified, staying in root channel")
 	}
 
-	// Update users immediately
+	// Update users immediately (may miss existing channel members if Move()
+	// hasn't propagated yet)
 	l.updateUsers()
+
+	// Re-check after a short delay to catch users already in the channel.
+	// After Move(), the server sends the full channel user list asynchronously;
+	// the immediate updateUsers() above often runs before that arrives.
+	go func() {
+		time.Sleep(2 * time.Second)
+		l.Bridge.Logger.Debug("MUMBLE_HANDLER", "Delayed user re-check after connect")
+		l.updateUsers()
+	}()
 }
 
 // MumbleUserChange handles Mumble user change events.

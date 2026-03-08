@@ -71,7 +71,7 @@ func (l *DiscordListener) OnGuildCreate(guild *discord.Guild) {
 				username := u.Username
 				mumbleClient.Do(func() {
 					if mumbleClient.Self != nil && mumbleClient.Self.Channel != nil {
-						mumbleClient.Self.Channel.Send(fmt.Sprintf("%v has joined Discord\n", username), false)
+						mumbleClient.Self.Channel.Send(fmt.Sprintf("%v has joined\n", username), false)
 					}
 				})
 			}
@@ -356,11 +356,13 @@ func (l *DiscordListener) OnVoiceStateUpdate(state *discord.VoiceState) {
 
 	botID := l.Bridge.DiscordClient.GetBotUserID()
 
-	// Get full guild voice state to reconcile
-	guild, err := l.Bridge.DiscordClient.GetGuild(l.Bridge.BridgeConfig.GID)
-	if err != nil {
-		return
+	if botID == state.UserID {
+		return // Ignore bot's own voice state changes
 	}
+
+	// Try full guild reconciliation first
+	guild, err := l.Bridge.DiscordClient.GetGuild(l.Bridge.BridgeConfig.GID)
+	useGuildReconciliation := err == nil && len(guild.VoiceStates) > 0
 
 	type userToAdd struct {
 		userID   string
@@ -377,81 +379,109 @@ func (l *DiscordListener) OnVoiceStateUpdate(state *discord.VoiceState) {
 
 	l.Bridge.DiscordUsersMutex.Lock()
 
-	// Mark all users as unseen
-	for u := range l.Bridge.DiscordUsers {
-		du := l.Bridge.DiscordUsers[u]
-		du.seen = false
-		l.Bridge.DiscordUsers[u] = du
-	}
+	if useGuildReconciliation {
+		// Full reconciliation against guild voice state cache
+		// Mark all users as unseen
+		for u := range l.Bridge.DiscordUsers {
+			du := l.Bridge.DiscordUsers[u]
+			du.seen = false
+			l.Bridge.DiscordUsers[u] = du
+		}
 
-	// Sync the channel voice states to the local discordUsersMap
-	for _, vs := range guild.VoiceStates {
-		if vs.ChannelID == l.Bridge.DiscordChannelID {
-			if botID == vs.UserID {
-				// Ignore bot
-				continue
-			}
-
-			if _, ok := l.Bridge.DiscordUsers[vs.UserID]; !ok {
-				u, err := l.Bridge.DiscordClient.GetUser(vs.UserID)
-				if err != nil {
-					l.Bridge.Logger.Error("DISCORD_HANDLER", "Error looking up username")
-
+		for _, vs := range guild.VoiceStates {
+			if vs.ChannelID == l.Bridge.DiscordChannelID {
+				if botID == vs.UserID {
 					continue
 				}
 
-				l.Bridge.Logger.Info("DISCORD_HANDLER", fmt.Sprintf("User joined Discord: %s", u.Username))
+				if _, ok := l.Bridge.DiscordUsers[vs.UserID]; !ok {
+					u, err := l.Bridge.DiscordClient.GetUser(vs.UserID)
+					if err != nil {
+						l.Bridge.Logger.Error("DISCORD_HANDLER", "Error looking up username")
 
-				// Emit user joined event
-				l.Bridge.EmitUserEvent("discord", 0, u.Username, nil)
+						continue
+					}
 
-				dmID, err := l.Bridge.DiscordClient.CreateDM(u.ID)
-				if err != nil {
-					l.Bridge.Logger.Error("DISCORD_HANDLER", fmt.Sprintf("Error creating private channel for %s", u.Username))
+					l.Bridge.Logger.Info("DISCORD_HANDLER", fmt.Sprintf("User joined Discord: %s", u.Username))
+					l.Bridge.EmitUserEvent("discord", 0, u.Username, nil)
+
+					dmID, err := l.Bridge.DiscordClient.CreateDM(u.ID)
+					if err != nil {
+						l.Bridge.Logger.Error("DISCORD_HANDLER", fmt.Sprintf("Error creating private channel for %s", u.Username))
+					}
+					l.Bridge.DiscordUsers[vs.UserID] = DiscordUser{
+						username: u.Username,
+						seen:     true,
+						dmID:     dmID,
+					}
+					usersToAdd = append(usersToAdd, userToAdd{
+						userID:   vs.UserID,
+						username: u.Username,
+						dmID:     dmID,
+					})
+				} else {
+					du := l.Bridge.DiscordUsers[vs.UserID]
+					du.seen = true
+					l.Bridge.DiscordUsers[vs.UserID] = du
 				}
-				l.Bridge.DiscordUsers[vs.UserID] = DiscordUser{
-					username: u.Username,
-					seen:     true,
-					dmID:     dmID,
-				}
-				usersToAdd = append(usersToAdd, userToAdd{
-					userID:   vs.UserID,
-					username: u.Username,
-					dmID:     dmID,
-				})
-			} else {
-				du := l.Bridge.DiscordUsers[vs.UserID]
-				du.seen = true
-				l.Bridge.DiscordUsers[vs.UserID] = du
 			}
 		}
-	}
 
-	// Identify users that are no longer connected
-	for id := range l.Bridge.DiscordUsers {
-		if !l.Bridge.DiscordUsers[id].seen {
-			username := l.Bridge.DiscordUsers[id].username
-			l.Bridge.Logger.Info("DISCORD_HANDLER", fmt.Sprintf("User left Discord channel: %s", username))
-
-			// Emit user left event
-			l.Bridge.EmitUserEvent("discord", 1, username, nil)
-			usersToRemove = append(usersToRemove, userToRemove{
-				userID:   id,
-				username: username,
-			})
+		// Remove users no longer in channel
+		for id := range l.Bridge.DiscordUsers {
+			if !l.Bridge.DiscordUsers[id].seen {
+				username := l.Bridge.DiscordUsers[id].username
+				l.Bridge.Logger.Info("DISCORD_HANDLER", fmt.Sprintf("User left Discord channel: %s", username))
+				l.Bridge.EmitUserEvent("discord", 1, username, nil)
+				usersToRemove = append(usersToRemove, userToRemove{userID: id, username: username})
+			}
 		}
-	}
+		for _, u := range usersToRemove {
+			delete(l.Bridge.DiscordUsers, u.userID)
+		}
+	} else {
+		// Fallback: guild cache has no voice states, process event directly
+		if state.ChannelID == l.Bridge.DiscordChannelID {
+			// User joined or is in our channel
+			if _, ok := l.Bridge.DiscordUsers[state.UserID]; !ok {
+				u, err := l.Bridge.DiscordClient.GetUser(state.UserID)
+				if err != nil {
+					l.Bridge.Logger.Error("DISCORD_HANDLER", "Error looking up username")
+				} else {
+					l.Bridge.Logger.Info("DISCORD_HANDLER", fmt.Sprintf("User joined Discord: %s", u.Username))
+					l.Bridge.EmitUserEvent("discord", 0, u.Username, nil)
 
-	// Remove users from the map while still holding the lock
-	for _, u := range usersToRemove {
-		delete(l.Bridge.DiscordUsers, u.userID)
+					dmID, err := l.Bridge.DiscordClient.CreateDM(u.ID)
+					if err != nil {
+						l.Bridge.Logger.Error("DISCORD_HANDLER", fmt.Sprintf("Error creating private channel for %s", u.Username))
+					}
+					l.Bridge.DiscordUsers[state.UserID] = DiscordUser{
+						username: u.Username,
+						seen:     true,
+						dmID:     dmID,
+					}
+					usersToAdd = append(usersToAdd, userToAdd{
+						userID:   state.UserID,
+						username: u.Username,
+						dmID:     dmID,
+					})
+				}
+			}
+		} else {
+			// User left our channel (moved elsewhere or disconnected)
+			if du, ok := l.Bridge.DiscordUsers[state.UserID]; ok {
+				l.Bridge.Logger.Info("DISCORD_HANDLER", fmt.Sprintf("User left Discord channel: %s", du.username))
+				l.Bridge.EmitUserEvent("discord", 1, du.username, nil)
+				usersToRemove = append(usersToRemove, userToRemove{userID: state.UserID, username: du.username})
+				delete(l.Bridge.DiscordUsers, state.UserID)
+			}
+		}
 	}
 
 	userCount = len(l.Bridge.DiscordUsers)
 	l.Bridge.DiscordUsersMutex.Unlock()
 
 	// Now acquire BridgeMutex to read bridge state and send Mumble messages
-	// This avoids nested lock acquisition (DiscordUsersMutex is released above)
 	l.Bridge.BridgeMutex.Lock()
 	connected := l.Bridge.Connected
 	disableText := l.Bridge.BridgeConfig.MumbleDisableText
@@ -461,25 +491,31 @@ func (l *DiscordListener) OnVoiceStateUpdate(state *discord.VoiceState) {
 	}
 	l.Bridge.BridgeMutex.Unlock()
 
-	// Send Mumble messages for users that joined
 	if connected && !disableText && mumbleClient != nil {
 		for _, u := range usersToAdd {
-			username := u.username // Capture for closure
+			username := u.username
 			mumbleClient.Do(func() {
 				if mumbleClient.Self != nil && mumbleClient.Self.Channel != nil {
-					mumbleClient.Self.Channel.Send(fmt.Sprintf("%v has joined Discord\n", username), false)
+					mumbleClient.Self.Channel.Send(fmt.Sprintf("%v has joined\n", username), false)
 				}
 			})
 		}
 
-		// Send Mumble messages for users that left
 		for _, u := range usersToRemove {
-			username := u.username // Capture for closure
+			username := u.username
 			mumbleClient.Do(func() {
 				if mumbleClient.Self != nil && mumbleClient.Self.Channel != nil {
-					mumbleClient.Self.Channel.Send(fmt.Sprintf("%v has left Discord channel\n", username), false)
+					mumbleClient.Self.Channel.Send(fmt.Sprintf("%v has left\n", username), false)
 				}
 			})
+		}
+	}
+
+	// Notify mumble mode about Discord user changes
+	if l.Bridge.DiscordUserChange != nil {
+		select {
+		case l.Bridge.DiscordUserChange <- struct{}{}:
+		default:
 		}
 	}
 
