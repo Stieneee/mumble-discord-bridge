@@ -45,7 +45,7 @@ jobs:
           echo "date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> $GITHUB_OUTPUT
 
       - name: Build amd64 binary in Docker
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: Dockerfile.build
@@ -59,7 +59,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=build-amd64
 
       - name: Build arm64 binary in Docker
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: Dockerfile.build
@@ -93,7 +93,7 @@ jobs:
           cat checksums.txt
 
       - name: Build and push Docker images
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: Dockerfile
