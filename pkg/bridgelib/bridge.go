@@ -340,6 +340,11 @@ func (b *BridgeInstance) Start() error {
 				}
 			}
 		}()
+	case bridge.BridgeModeMumble:
+		b.logger.Info("BRIDGE_MODE", "Using Mumble presence mode")
+		b.State.DiscordChannelID = b.config.DiscordCID
+		b.State.AutoChanDie = make(chan bool)
+		go b.State.MumblePresenceBridge()
 	case bridge.BridgeModeManual:
 		b.logger.Info("BRIDGE_MODE", "Using Manual mode")
 		b.logger.Debug("BRIDGE_MODE", "Starting manual mode goroutine")
@@ -409,11 +414,11 @@ func (b *BridgeInstance) Stop() error {
 	b.stopped = true
 	b.logger.Debug("BRIDGE_STOP", "Bridge marked as stopped")
 
-	// Stop the auto bridge if it's running
-	if b.State.Mode == bridge.BridgeModeAuto && b.State.AutoChanDie != nil {
-		b.logger.Debug("BRIDGE_STOP", "Sending stop signal to auto bridge")
+	// Stop the auto/mumble bridge if it's running
+	if (b.State.Mode == bridge.BridgeModeAuto || b.State.Mode == bridge.BridgeModeMumble) && b.State.AutoChanDie != nil {
+		b.logger.Debug("BRIDGE_STOP", "Sending stop signal to auto/mumble bridge")
 		b.State.AutoChanDie <- true
-		b.logger.Debug("BRIDGE_STOP", "Auto bridge stop signal sent")
+		b.logger.Debug("BRIDGE_STOP", "Auto/mumble bridge stop signal sent")
 	}
 
 	// Stop the bridge if it's active.
@@ -573,6 +578,8 @@ func (b *BridgeInstance) setBridgeMode(mode string) {
 		b.State.Mode = bridge.BridgeModeAuto
 	case "manual":
 		b.State.Mode = bridge.BridgeModeManual
+	case "mumble":
+		b.State.Mode = bridge.BridgeModeMumble
 	case "constant", "":
 		// Default to constant mode if not specified
 		b.State.Mode = bridge.BridgeModeConstant

@@ -500,8 +500,8 @@ func TestDiscordDuplex_SleepTickInitialization(t *testing.T) {
 
 	// SleepCT fields are zero-value structs; they are non-nil because they are
 	// value types embedded in DiscordDuplex (not pointers).
-	assert.NotNil(t, &dd.discordMixerSleepTick, "discordMixerSleepTick must be addressable")
-	assert.NotNil(t, &dd.discordSenderSleepTick, "discordSenderSleepTick must be addressable")
+	assert.NotNil(t, &dd.discordSendSleepTick, "discordSendSleepTick must be addressable")
+	assert.NotNil(t, &dd.discordReceiveSleepTick, "discordReceiveSleepTick must be addressable")
 	assert.NotNil(t, &dd.discordReceiveSleepTick, "discordReceiveSleepTick must be addressable")
 }
 

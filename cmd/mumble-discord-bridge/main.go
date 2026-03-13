@@ -58,7 +58,7 @@ func main() {
 	chatBridge := flag.Bool("chat-bridge", lookupEnvOrBool("CHAT_BRIDGE", false), "CHAT_BRIDGE, enable chat bridge")
 	command := flag.String("command", lookupEnvOrString("COMMAND", "mumble-discord"), "COMMAND, command phrase '!mumble-discord help' to control the bridge via text channels")
 	commandMode := flag.String("command-mode", lookupEnvOrString("COMMAND_MODE", "both"), "COMMAND_MODE, [both, mumble, discord, none] determine which side of the bridge will respond to commands")
-	mode := flag.String("mode", lookupEnvOrString("MODE", "constant"), "MODE, [constant, manual, auto] determine which mode the bridge starts in")
+	mode := flag.String("mode", lookupEnvOrString("MODE", "constant"), "MODE, [constant, manual, auto, mumble] determine which mode the bridge starts in")
 	nice := flag.Bool("nice", lookupEnvOrBool("NICE", false), "NICE, whether the bridge should automatically try to 'nice' itself")
 	promEnable := flag.Bool("prometheus-enable", lookupEnvOrBool("PROMETHEUS_ENABLE", false), "PROMETHEUS_ENABLE, Enable prometheus metrics")
 	promPort := flag.Int("prometheus-port", lookupEnvOrInt("PROMETHEUS_PORT", 9559), "PROMETHEUS_PORT, Prometheus metrics port, optional")
@@ -95,7 +95,7 @@ func main() {
 			log.Fatalln("missing command")
 		}
 	}
-	if *mode != "constant" && *mode != "manual" && *mode != "auto" {
+	if *mode != "constant" && *mode != "manual" && *mode != "auto" && *mode != "mumble" {
 		log.Fatalln("invalid bridge mode set")
 	}
 

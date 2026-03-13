@@ -135,11 +135,6 @@ var (
 		Help: "Number of PLC (packet loss concealment) frames generated for lost Discord packets",
 	})
 
-	promToDiscordJitterBuffer = promauto.NewGauge(prometheus.GaugeOpts{
-		Name: "mdb_to_discord_jitter_buffer_gauge",
-		Help: "Number of Opus frames in the Mumble-to-Discord send-side jitter buffer",
-	})
-
 	// Sleep Timer Performance
 
 	promTimerDiscordSend = promauto.NewHistogram(prometheus.HistogramOpts{

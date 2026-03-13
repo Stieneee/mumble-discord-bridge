@@ -15,14 +15,13 @@ import (
 
 // Constants for Discord audio handling
 const (
-	silenceFrameCount         = 3   // Number of silence frames to send after speaking
-	shortSpeakingThreshold    = 50  // Milliseconds - threshold for short speaking cycle warning
-	noDataGraceTicks          = 2   // Sender ticks (40ms at 20ms/tick) to wait before declaring end-of-speech
-	connectionCheckInterval   = 100 // Milliseconds - sleep time when connection not ready
-	maxPLCPackets             = 10  // Maximum PLC frames to generate (prevents runaway on major discontinuity)
-	opusFrameSize             = 960 // Standard opus frame size (20ms at 48kHz)
-	pcmChunkSize              = 480 // PCM chunk size for 10ms at 48kHz sample rate
-	toDiscordJitterBufferSize = 3   // Opus frames (60ms) - send-side jitter buffer between mixer and sender
+	silenceFrameCount       = 3   // Number of silence frames to send after speaking
+	shortSpeakingThreshold  = 50  // Milliseconds - threshold for short speaking cycle warning
+	noDataGraceTicks        = 3   // Ticks (30ms) to wait for more audio before declaring end-of-speech
+	connectionCheckInterval = 100 // Milliseconds - sleep time when connection not ready
+	maxPLCPackets           = 10  // Maximum PLC frames to generate (prevents runaway on major discontinuity)
+	opusFrameSize           = 960 // Standard opus frame size (20ms at 48kHz)
+	pcmChunkSize            = 480 // PCM chunk size for 10ms at 48kHz sample rate
 )
 
 // sequenceGap calculates the number of lost packets between two sequence numbers,
@@ -52,8 +51,7 @@ type DiscordDuplex struct {
 
 	discordMutex            sync.Mutex
 	fromDiscordMap          map[uint32]fromDiscord
-	discordMixerSleepTick   sleepct.SleepCT // 10ms pacing for Mumble→Discord mixer
-	discordSenderSleepTick  sleepct.SleepCT // 20ms pacing for Discord send
+	discordSendSleepTick    sleepct.SleepCT
 	discordReceiveSleepTick sleepct.SleepCT
 	cleanupCancel           context.CancelFunc // Cancel function for cleanup goroutine
 }
@@ -63,8 +61,7 @@ func NewDiscordDuplex(b *BridgeState) *DiscordDuplex {
 	return &DiscordDuplex{
 		Bridge:                  b,
 		fromDiscordMap:          make(map[uint32]fromDiscord),
-		discordMixerSleepTick:   sleepct.SleepCT{},
-		discordSenderSleepTick:  sleepct.SleepCT{},
+		discordSendSleepTick:    sleepct.SleepCT{},
 		discordReceiveSleepTick: sleepct.SleepCT{},
 	}
 }
@@ -83,14 +80,16 @@ var OnError = func(str string, err error) {
 	}
 }
 
-// toDiscordOpusMixer mixes Mumble audio streams, encodes Opus frames, and pushes them
-// into the send-side jitter buffer. Runs at 10ms intervals (matching Mumble's chunk size),
-// accumulates 2 chunks (20ms) before encoding an Opus frame.
-func (dd *DiscordDuplex) toDiscordOpusMixer(ctx context.Context, opusBuffer chan<- []byte) {
+// toDiscordSender mixes Mumble audio inline, encodes with Opus, and sends to Discord.
+// Runs at 10ms intervals (matching Mumble's chunk size), accumulates 2 chunks (20ms)
+// before encoding an Opus frame.
+func (dd *DiscordDuplex) toDiscordSender(ctx context.Context) {
 	const channels int = 1
 	const frameRate int = 48000              // audio sampling rate
 	const frameSize int = 960                // uint16 size of each audio frame
 	const maxBytes int = (frameSize * 2) * 2 // max size of opus data
+
+	streaming := false
 
 	opusEncoder, err := gopus.NewEncoder(frameRate, channels, gopus.Audio)
 	if err != nil {
@@ -98,87 +97,15 @@ func (dd *DiscordDuplex) toDiscordOpusMixer(ctx context.Context, opusBuffer chan
 		panic(err)
 	}
 
-	dd.discordMixerSleepTick.Start(10 * time.Millisecond)
-
-	var pendingChunk []int16 // First of 2 chunks waiting for second
-	var noDataTicks int      // Consecutive ticks with no audio data
-
-	defer dd.Bridge.Logger.Info("DISCORD_MIXER_OPUS", "Stopping Discord opus mixer")
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		default:
-		}
-
-		promTimerDiscordSend.Observe(float64(dd.discordMixerSleepTick.SleepNextTarget(ctx, false)))
-
-		// Mix one 10ms chunk directly from Mumble streams
-		chunk, streamingCount := dd.Bridge.MumbleStream.MixOneChunk()
-		promMumbleStreaming.Set(float64(streamingCount))
-
-		if chunk != nil {
-			noDataTicks = 0
-
-			if pendingChunk == nil {
-				pendingChunk = chunk
-
-				continue
-			}
-
-			// Have pending + new chunk (20ms) — encode and send
-			opus, err := opusEncoder.Encode(append(pendingChunk, chunk...), frameSize, maxBytes)
-			pendingChunk = nil
-
-			if err != nil {
-				OnError("Encoding Error", err)
-
-				continue
-			}
-
-			select {
-			case opusBuffer <- opus:
-			default:
-				dd.Bridge.Logger.Debug("DISCORD_MIXER_OPUS", "Send jitter buffer full, dropping frame")
-			}
-		} else {
-			if pendingChunk != nil {
-				// Don't discard the pending chunk — pad with silence to complete
-				// a 20ms frame. Preserves audio at speech boundaries.
-				silencePad := make([]int16, len(pendingChunk))
-				opus, err := opusEncoder.Encode(append(pendingChunk, silencePad...), frameSize, maxBytes)
-				pendingChunk = nil
-
-				if err != nil {
-					OnError("Encoding Error", err)
-				} else {
-					select {
-					case opusBuffer <- opus:
-					default:
-					}
-				}
-
-				continue
-			}
-
-			noDataTicks++
-		}
-	}
-}
-
-// toDiscordSender reads encoded Opus frames from the jitter buffer and sends them to
-// Discord at precise 20ms intervals using SleepCT. Manages speaking state transitions.
-func (dd *DiscordDuplex) toDiscordSender(ctx context.Context, opusBuffer <-chan []byte) {
-	// Opus silence frame (defined by RFC 6716)
+	// Generate Opus Silence Frame
 	opusSilence := []byte{0xf8, 0xff, 0xfe}
 
-	dd.discordSenderSleepTick.Start(20 * time.Millisecond)
+	dd.discordSendSleepTick.Start(10 * time.Millisecond)
 
-	streaming := false
 	lastReady := true
 	var speakingStart time.Time
-	var noDataTicks int // Consecutive sender ticks with no data from buffer
+	var pendingChunk []int16 // First of 2 chunks waiting for second
+	var noDataTicks int      // Consecutive ticks with no audio data
 
 	// Diagnostic: track speaking/silence cycles and RTP timestamp drift
 	var lastSilenceStart time.Time
@@ -201,6 +128,7 @@ func (dd *DiscordDuplex) toDiscordSender(ctx context.Context, opusBuffer <-chan 
 			return
 		}
 
+		// Connection is ready, update lastReady state if needed
 		if !lastReady {
 			dd.Bridge.Logger.Info("DISCORD_SEND", "Discord ready to send opus packets")
 			lastReady = true
@@ -243,7 +171,7 @@ func (dd *DiscordDuplex) toDiscordSender(ctx context.Context, opusBuffer <-chan 
 		}()
 	}
 
-	defer dd.Bridge.Logger.Info("DISCORD_SEND", "Stopping Discord sender")
+	defer dd.Bridge.Logger.Info("DISCORD_SEND", "Stopping Discord send PCM")
 
 	for {
 		select {
@@ -252,19 +180,35 @@ func (dd *DiscordDuplex) toDiscordSender(ctx context.Context, opusBuffer <-chan 
 		default:
 		}
 
-		dd.discordSenderSleepTick.SleepNextTarget(ctx, false)
+		promTimerDiscordSend.Observe(float64(dd.discordSendSleepTick.SleepNextTarget(ctx, false)))
 
-		promToDiscordJitterBuffer.Set(float64(len(opusBuffer)))
+		// Mix one 10ms chunk directly from Mumble streams
+		chunk, streamingCount := dd.Bridge.MumbleStream.MixOneChunk()
+		promMumbleStreaming.Set(float64(streamingCount))
 
-		// Non-blocking read from jitter buffer
-		select {
-		case opus := <-opusBuffer:
+		if chunk != nil {
 			noDataTicks = 0
 
+			if pendingChunk == nil {
+				// Save first chunk, wait for second on next 10ms tick.
+				// This ensures consistent 20ms send intervals which keeps
+				// Discord's adaptive jitter buffer from growing.
+				pendingChunk = chunk
+
+				continue
+			}
+
+			// Have pending + new chunk (20ms) — encode and send
+			opus, err := opusEncoder.Encode(append(pendingChunk, chunk...), frameSize, maxBytes)
+			pendingChunk = nil
+
+			if err != nil {
+				OnError("Encoding Error", err)
+
+				continue
+			}
+
 			if !streaming {
-				// Transition to speaking. Send SetSpeaking before the first
-				// audio packet. The jitter buffer gives the TCP speaking intent
-				// time to arrive before the UDP audio.
 				if !lastSilenceStart.IsZero() {
 					promSilenceGapMs.Observe(float64(time.Since(lastSilenceStart).Milliseconds()))
 				}
@@ -275,31 +219,47 @@ func (dd *DiscordDuplex) toDiscordSender(ctx context.Context, opusBuffer <-chan 
 			}
 
 			internalSend(opus)
+		} else {
+			if pendingChunk != nil {
+				// Don't discard the pending chunk — pad with silence to complete
+				// a 20ms frame. Preserves audio at speech boundaries.
+				silencePad := make([]int16, len(pendingChunk))
+				opus, err := opusEncoder.Encode(append(pendingChunk, silencePad...), frameSize, maxBytes)
+				pendingChunk = nil
 
-		default:
-			// No data available this tick.
-			if !streaming {
-				// Keep sending silence frames during gaps to advance disgo's
-				// monotonic RTP timestamp in sync with wall-clock time.
-				// Without this, the timestamp freezes during silence and
-				// Discord's jitter buffer accumulates latency across
-				// talk-spurt boundaries.
-				internalSend(opusSilence)
+				if err != nil {
+					OnError("Encoding Error", err)
+				} else {
+					if !streaming {
+						if !lastSilenceStart.IsZero() {
+							promSilenceGapMs.Observe(float64(time.Since(lastSilenceStart).Milliseconds()))
+						}
+						promSpeakingTransitions.Inc()
+						speakingStart = time.Now()
+						setSpeaking(true)
+						streaming = true
+					}
+
+					internalSend(opus)
+				}
 
 				continue
 			}
 
 			noDataTicks++
 
-			if noDataTicks >= noDataGraceTicks {
+			if streaming && noDataTicks >= noDataGraceTicks {
 				if time.Since(speakingStart).Milliseconds() < shortSpeakingThreshold {
 					dd.Bridge.Logger.Warn("DISCORD_SEND", "Short Mumble to Discord speaking cycle.")
 				}
 
-				// Send silence frames at 20ms intervals as required by Discord
+				// Send silence frames as required by Discord documentation.
+				// Each frame is 20ms of Opus silence but SleepCT ticks at 10ms,
+				// so sleep twice per frame to maintain correct 20ms send cadence.
 				for range silenceFrameCount {
 					internalSend(opusSilence)
-					dd.discordSenderSleepTick.SleepNextTarget(ctx, false)
+					promTimerDiscordSend.Observe(float64(dd.discordSendSleepTick.SleepNextTarget(ctx, false)))
+					promTimerDiscordSend.Observe(float64(dd.discordSendSleepTick.SleepNextTarget(ctx, false)))
 				}
 
 				setSpeaking(false)
@@ -316,9 +276,21 @@ func (dd *DiscordDuplex) discordReceivePCM(ctx context.Context) {
 	lastReady := true
 
 	for {
+		select {
+		case <-ctx.Done():
+			dd.Bridge.Logger.Info("DISCORD_RECEIVE", "Stopping Discord receive PCM")
+
+			return
+		default:
+		}
+
 		connManager := dd.Bridge.DiscordVoiceConnectionManager
 		if connManager == nil {
-			time.Sleep(connectionCheckInterval * time.Millisecond)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(connectionCheckInterval * time.Millisecond):
+			}
 
 			continue
 		}
@@ -329,7 +301,12 @@ func (dd *DiscordDuplex) discordReceivePCM(ctx context.Context) {
 				dd.Bridge.Logger.Debug("DISCORD_RECEIVE", "Discord connection not ready for receiving")
 				lastReady = false
 			}
-			time.Sleep(connectionCheckInterval * time.Millisecond)
+
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(connectionCheckInterval * time.Millisecond):
+			}
 
 			continue
 		}
@@ -340,37 +317,37 @@ func (dd *DiscordDuplex) discordReceivePCM(ctx context.Context) {
 			lastReady = true
 		}
 
-		// Check context before blocking on receive
+		// ReceiveOpus blocks until a packet arrives, so run it in a
+		// goroutine and select against ctx so we can exit promptly.
+		type recvResult struct {
+			p   *discord.AudioPacket
+			err error
+		}
+		ch := make(chan recvResult, 1)
+		go func() {
+			p, err := voiceConn.ReceiveOpus()
+			ch <- recvResult{p, err}
+		}()
+
 		select {
 		case <-ctx.Done():
 			dd.Bridge.Logger.Info("DISCORD_RECEIVE", "Stopping Discord receive PCM")
 
 			return
-		default:
-		}
+		case res := <-ch:
+			if res.err != nil {
+				dd.Bridge.Logger.Debug("DISCORD_RECEIVE", fmt.Sprintf("Receive error: %v", res.err))
 
-		// ReceiveOpus blocks until a packet arrives (with short deadline)
-		p, recvErr := voiceConn.ReceiveOpus()
-		if recvErr != nil {
-			// Check context after error to exit promptly on shutdown
-			select {
-			case <-ctx.Done():
-				dd.Bridge.Logger.Info("DISCORD_RECEIVE", "Stopping Discord receive PCM")
-
-				return
-			default:
+				continue
 			}
-			dd.Bridge.Logger.Debug("DISCORD_RECEIVE", fmt.Sprintf("Receive error: %v", recvErr))
 
-			continue
+			if res.p == nil {
+				// Connection closing
+				continue
+			}
+
+			dd.processReceivedPacket(res.p)
 		}
-
-		if p == nil {
-			// Connection closing
-			continue
-		}
-
-		dd.processReceivedPacket(p)
 	}
 }
 
@@ -521,28 +498,9 @@ func (dd *DiscordDuplex) fromDiscordMixer(ctx context.Context, toMumble chan<- g
 	sendAudio := false
 	toMumbleStreaming := false
 
-	// Reusable timer for channel send timeout (avoids time.After allocation per send)
-	sendTimer := time.NewTimer(10 * time.Millisecond)
-	sendTimer.Stop()
-
-	mumbleTimeoutSend := func(outBuf []int16) {
-		sendTimer.Reset(10 * time.Millisecond)
-		select {
-		case toMumble <- outBuf:
-			if !sendTimer.Stop() {
-				<-sendTimer.C
-			}
-			promSentMumblePackets.Inc()
-		case <-sendTimer.C:
-			dd.Bridge.Logger.Debug("DISCORD_MIXER", "To Mumble timeout. Dropping packet")
-			promToMumbleDropped.Inc()
-		}
-	}
-
 	for {
 		select {
 		case <-ctx.Done():
-			sendTimer.Stop()
 			dd.Bridge.Logger.Info("DISCORD_MIXER", "Stopping from Discord mixer")
 
 			return
@@ -590,6 +548,16 @@ func (dd *DiscordDuplex) fromDiscordMixer(ctx context.Context, toMumble chan<- g
 
 		dd.discordMutex.Unlock()
 
+		mumbleTimeoutSend := func(outBuf []int16) {
+			select {
+			case toMumble <- outBuf:
+				promSentMumblePackets.Inc()
+			case <-time.After(10 * time.Millisecond):
+				dd.Bridge.Logger.Debug("DISCORD_MIXER", "To Mumble timeout. Dropping packet")
+				promToMumbleDropped.Inc()
+			}
+		}
+
 		if sendAudio {
 			// Regular send mixed audio
 			outBuf := make([]int16, pcmChunkSize)
@@ -603,6 +571,7 @@ func (dd *DiscordDuplex) fromDiscordMixer(ctx context.Context, toMumble chan<- g
 			mumbleTimeoutSend(outBuf)
 		} else if !sendAudio && toMumbleStreaming {
 			// Send opus silence to mumble
+			// See note above about jitter buffer warning
 			if time.Since(speakingStart).Milliseconds() < shortSpeakingThreshold {
 				dd.Bridge.Logger.Warn("DISCORD_MIXER", fmt.Sprintf("Short Discord to Mumble speaking cycle. Consider increasing the size of the to Mumble jitter buffer. Duration: %d ms", time.Since(speakingStart).Milliseconds()))
 			}

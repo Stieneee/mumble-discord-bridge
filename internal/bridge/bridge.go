@@ -26,7 +26,7 @@ type BridgeMode int //nolint:revive // API consistency: keeping Bridge prefix fo
 
 // define a String method for the BridgeMode type
 func (b BridgeMode) String() string {
-	return [...]string{"auto", "manual", "constant"}[b]
+	return [...]string{"auto", "manual", "constant", "mumble"}[b]
 }
 
 const (
@@ -36,6 +36,8 @@ const (
 	BridgeModeManual
 	// BridgeModeConstant keeps the bridge always running.
 	BridgeModeConstant
+	// BridgeModeMumble keeps a persistent Mumble connection and only joins Discord when Mumble users are present.
+	BridgeModeMumble
 )
 
 // BridgeConfig holds the configuration for a bridge instance.
@@ -181,6 +183,23 @@ type BridgeState struct { //nolint:revive // API consistency: keeping Bridge pre
 	connectionCtx    context.Context
 	connectionCancel context.CancelFunc
 	connectionWg     sync.WaitGroup
+
+	// Signal channel for mumble mode: updateUsers() notifies MumblePresenceBridge
+	// immediately when user count changes, instead of waiting for the next ticker.
+	MumbleUserChange chan struct{}
+
+	// Signal channel for mumble mode: OnVoiceStateUpdate notifies when Discord users change.
+	DiscordUserChange chan struct{}
+
+	// Tracks whether the audio pipeline is active (distinct from BridgeActive which
+	// tracks Discord voice presence). Protected by BridgeMutex.
+	AudioActive bool
+
+	// Audio pipeline lifecycle (protected by BridgeMutex for AudioActive flag)
+	audioCtx      context.Context
+	audioCancel   context.CancelFunc
+	audioWg       sync.WaitGroup
+	audioDetacher gumble.Detacher
 
 	// Reference to BridgeInstance for event forwarding (if available)
 	BridgeInstance interface {
@@ -406,22 +425,23 @@ func (b *BridgeState) handleDiscordConnectionEvent(event ConnectionEvent) {
 
 	if oldState != newState {
 		b.Logger.Info("BRIDGE", fmt.Sprintf("Discord connection state changed: %v -> %v", oldState, newState))
-
-		// When Discord connects, populate existing users in the voice channel
-		if newState && !oldState {
-			go b.populateExistingDiscordUsers()
-
-			// Force immediate Discord user count metric update
-			go func() {
-				b.DiscordUsersMutex.Lock()
-				userCount := len(b.DiscordUsers)
-				b.DiscordUsersMutex.Unlock()
-				promDiscordUsers.Set(float64(userCount))
-				b.Logger.Debug("BRIDGE", fmt.Sprintf("Forced Discord user count metric update: %d users", userCount))
-			}()
-		}
-
 		b.notifyMetricsChange()
+	}
+
+	// When Discord connects, populate existing users in the voice channel.
+	// Use event status directly — oldState may already be true due to the
+	// parallel EmitConnectionEvent path in SetStatus racing with this handler.
+	if event.Status == ConnectionConnected {
+		go b.populateExistingDiscordUsers()
+
+		// Force immediate Discord user count metric update
+		go func() {
+			b.DiscordUsersMutex.Lock()
+			userCount := len(b.DiscordUsers)
+			b.DiscordUsersMutex.Unlock()
+			promDiscordUsers.Set(float64(userCount))
+			b.Logger.Debug("BRIDGE", fmt.Sprintf("Forced Discord user count metric update: %d users", userCount))
+		}()
 	}
 
 	if event.Error != nil {
@@ -478,8 +498,9 @@ func (b *BridgeState) updateOverallConnectionState() {
 			oldConnected, b.Connected, b.DiscordConnected, b.MumbleConnected))
 	}
 
-	// Presence announcement: fire once when both sides are connected
-	if b.DiscordConnected && b.MumbleConnected && !b.presenceAnnounced {
+	// Presence announcement: fire once when both sides are connected.
+	// In mumble mode, defer until the audio pipeline starts (State 3).
+	if b.DiscordConnected && b.MumbleConnected && !b.presenceAnnounced && b.Mode != BridgeModeMumble {
 		b.presenceAnnounced = true
 		go b.sendPresenceAnnouncement()
 	}
@@ -497,7 +518,8 @@ func (b *BridgeState) UpdateOverallConnectionState() {
 // to handle the case where Discord users are populated asynchronously after DiscordConnected.
 func (b *BridgeState) tryPresenceAnnouncement() {
 	b.BridgeMutex.Lock()
-	if !b.DiscordConnected || !b.MumbleConnected || b.presenceAnnounced {
+	// In mumble mode, defer announcement until audio pipeline starts (startAudioPipeline calls this)
+	if !b.DiscordConnected || !b.MumbleConnected || b.presenceAnnounced || (b.Mode == BridgeModeMumble && !b.AudioActive) {
 		b.BridgeMutex.Unlock()
 
 		return
@@ -576,6 +598,43 @@ func (b *BridgeState) sendPresenceAnnouncement() {
 				b.Logger.Debug("BRIDGE", "Sent presence announcement to Mumble")
 			case <-time.After(2 * time.Second):
 				b.Logger.Warn("BRIDGE", "Timeout sending presence announcement to Mumble")
+			}
+		}
+	}
+}
+
+// sendDisconnectAnnouncement sends "Bridge disconnected." to both Discord and Mumble.
+// Called before teardown while connections are still active.
+func (b *BridgeState) sendDisconnectAnnouncement() {
+	b.discordSendMessage("Bridge disconnected.")
+
+	if !b.BridgeConfig.MumbleDisableText {
+		var client *gumble.Client
+		if b.MumbleConnectionManager != nil {
+			client = b.MumbleConnectionManager.GetClient()
+		}
+		if client != nil {
+			done := make(chan bool, 1)
+			go func() {
+				defer func() {
+					if r := recover(); r != nil {
+						b.Logger.Error("BRIDGE", fmt.Sprintf("Panic in disconnect announcement to Mumble: %v", r))
+					}
+					select {
+					case done <- true:
+					default:
+					}
+				}()
+				client.Do(func() {
+					client.Self.Channel.Send("Bridge disconnected.", false)
+				})
+			}()
+
+			select {
+			case <-done:
+				b.Logger.Debug("BRIDGE", "Sent disconnect announcement to Mumble")
+			case <-time.After(2 * time.Second):
+				b.Logger.Warn("BRIDGE", "Timeout sending disconnect announcement to Mumble")
 			}
 		}
 	}
@@ -882,29 +941,20 @@ func (b *BridgeState) StartBridge() {
 		det = b.BridgeConfig.MumbleConfig.AudioListeners.Attach(b.MumbleStream)
 	}
 
-	// Ensure proper cleanup order: detach audio listener before stopping connection managers
-	defer func() {
-		// First detach audio listener to prevent race with ongoing audio processing
+	// cleanupAudio detaches listeners and cleans up streams
+	cleanupAudio := func() {
 		if det != nil {
 			b.Logger.Debug("BRIDGE", "Detaching Mumble audio listener")
 			det.Detach()
-			// Small delay to allow any in-flight audio processing to complete
 			time.Sleep(50 * time.Millisecond)
 		}
-
-		// Stop Discord stream cleanup goroutine
 		if b.DiscordStream != nil {
 			b.DiscordStream.StopCleanup()
 		}
-
-		// Clean up any active audio streams
 		if b.MumbleStream != nil {
 			b.MumbleStream.CleanupStreams()
 		}
-
-		// Then stop connection managers
-		b.stopConnectionManagers()
-	}()
+	}
 
 	// Set up audio channels with proper lifecycle management
 	toMumbleInternal := make(chan gumble.AudioBuffer, 50)
@@ -933,19 +983,11 @@ func (b *BridgeState) StartBridge() {
 		b.MumbleStream.toMumbleSender(ctx, toMumbleInternal)
 	}()
 
-	// Mumble to Discord: mixer encodes Opus into jitter buffer, sender paces at 20ms
-	toDiscordOpusBuffer := make(chan []byte, toDiscordJitterBufferSize)
-
+	// Mumble to Discord: mixes Mumble streams inline, encodes Opus, sends to Discord
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		b.DiscordStream.toDiscordOpusMixer(ctx, toDiscordOpusBuffer)
-	}()
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		b.DiscordStream.toDiscordSender(ctx, toDiscordOpusBuffer)
+		b.DiscordStream.toDiscordSender(ctx)
 	}()
 
 	// Bridge health monitor - checks overall bridge state but doesn't kill on individual connection failures
@@ -993,12 +1035,21 @@ func (b *BridgeState) StartBridge() {
 		cancel()
 	}
 
+	// Send disconnect announcement while connections are still active
+	b.sendDisconnectAnnouncement()
+
 	b.BridgeMutex.Lock()
 	b.Connected = false
 	b.BridgeActive = false
 	b.BridgeMutex.Unlock()
 
 	b.notifyMetricsChange()
+
+	// Clean up audio, then stop connection managers to close the Discord UDP
+	// socket. This unblocks discordReceivePCM's blocking ReceiveOpus() call
+	// so wg.Wait() can complete.
+	cleanupAudio()
+	b.stopConnectionManagers()
 
 	wg.Wait()
 	b.Logger.Info("BRIDGE", "Terminating Bridge")
@@ -1263,6 +1314,472 @@ func (b *BridgeState) AutoBridge() {
 		b.MumbleUsersMutex.Unlock()
 		b.BridgeMutex.Unlock()
 	}
+}
+
+// MumblePresenceBridge maintains a persistent Mumble connection and starts/stops
+// the Discord side of the bridge based on Mumble user presence.
+func (b *BridgeState) MumblePresenceBridge() {
+	b.Logger.Info("BRIDGE", "Beginning mumble presence mode")
+
+	// Create TLS config for persistent Mumble connection
+	var tlsConfig tls.Config
+	if b.BridgeConfig.MumbleInsecure {
+		tlsConfig.InsecureSkipVerify = true // nolint: gosec // Intentionally insecure for testing
+	}
+	if b.BridgeConfig.MumbleCertificate != "" {
+		keyFile := b.BridgeConfig.MumbleCertificate
+		certificate, err := tls.LoadX509KeyPair(keyFile, keyFile)
+		if err != nil {
+			b.Logger.Error("BRIDGE", fmt.Sprintf("Failed to load Mumble client certificate %s: %v", keyFile, err))
+
+			return
+		}
+		tlsConfig.Certificates = append(tlsConfig.Certificates, certificate)
+	}
+
+	// Create and start persistent Mumble connection manager
+	b.MumbleConnectionManager = NewMumbleConnectionManager(
+		b.BridgeConfig.MumbleAddr,
+		b.BridgeConfig.MumbleConfig,
+		&tlsConfig,
+		b.Logger,
+		b,
+	)
+
+	mumbleCtx, mumbleCancel := context.WithCancel(context.Background())
+	defer mumbleCancel()
+
+	if err := b.MumbleConnectionManager.Start(mumbleCtx); err != nil {
+		b.Logger.Error("BRIDGE", fmt.Sprintf("Failed to start persistent Mumble connection: %v", err))
+
+		return
+	}
+
+	// Monitor Mumble connection events in background
+	go func() {
+		for {
+			select {
+			case <-mumbleCtx.Done():
+				return
+			case event, ok := <-b.MumbleConnectionManager.GetEventChannel():
+				if !ok {
+					return
+				}
+				b.handleMumbleConnectionEvent(event)
+			}
+		}
+	}()
+
+	// Create signal channel for immediate user change notifications
+	b.MumbleUserChange = make(chan struct{}, 1)
+
+	b.Logger.Info("BRIDGE", "Persistent Mumble connection started, monitoring user presence")
+
+	ticker := time.NewTicker(3 * time.Second)
+	defer ticker.Stop()
+
+	// Create signal channel for Discord user change notifications
+	b.DiscordUserChange = make(chan struct{}, 1)
+
+	// Delayed disconnect: when Mumble empties, wait before leaving Discord
+	const mumbleEmptyDelay = 2 * time.Minute
+	var disconnectTimer *time.Timer
+	var disconnectCh <-chan time.Time // nil when no timer is pending
+
+	// Delayed audio stop: when Discord empties, wait before stopping audio pipeline
+	const discordEmptyDelay = 2 * time.Minute
+	var audioStopTimer *time.Timer
+	var audioStopCh <-chan time.Time // nil when no timer is pending
+
+	checkMumbleUsers := func() {
+		b.BridgeMutex.Lock()
+		b.MumbleUsersMutex.Lock()
+		mumbleUserCount := len(b.MumbleUsers)
+		bridgeActive := b.BridgeActive
+		b.MumbleUsersMutex.Unlock()
+		b.BridgeMutex.Unlock()
+
+		if mumbleUserCount > 0 && !bridgeActive {
+			// Cancel pending disconnect if someone rejoined
+			if disconnectTimer != nil {
+				disconnectTimer.Stop()
+				disconnectTimer = nil
+				disconnectCh = nil
+				b.Logger.Info("BRIDGE", "Mumble user rejoined, canceled pending Discord disconnect")
+			}
+			b.Logger.Info("BRIDGE", fmt.Sprintf("Mumble users detected (%d), starting Discord presence", mumbleUserCount))
+			b.StartDiscordPresence()
+		}
+
+		if mumbleUserCount > 0 && bridgeActive {
+			// Cancel pending disconnect if someone rejoined while still connected
+			if disconnectTimer != nil {
+				disconnectTimer.Stop()
+				disconnectTimer = nil
+				disconnectCh = nil
+				b.Logger.Info("BRIDGE", "Mumble user rejoined, canceled pending Discord disconnect")
+			}
+		}
+
+		if mumbleUserCount == 0 && bridgeActive && disconnectTimer == nil {
+			b.Logger.Info("BRIDGE", fmt.Sprintf("No Mumble users, disconnecting from Discord in %v", mumbleEmptyDelay))
+			disconnectTimer = time.NewTimer(mumbleEmptyDelay)
+			disconnectCh = disconnectTimer.C
+		}
+	}
+
+	checkDiscordUsers := func() {
+		b.BridgeMutex.Lock()
+		bridgeActive := b.BridgeActive
+		audioActive := b.AudioActive
+		b.BridgeMutex.Unlock()
+
+		if !bridgeActive {
+			return
+		}
+
+		b.DiscordUsersMutex.Lock()
+		discordUserCount := len(b.DiscordUsers)
+		b.DiscordUsersMutex.Unlock()
+
+		if discordUserCount > 0 && !audioActive {
+			// Cancel pending audio stop if someone rejoined
+			if audioStopTimer != nil {
+				audioStopTimer.Stop()
+				audioStopTimer = nil
+				audioStopCh = nil
+				b.Logger.Info("BRIDGE", "Discord user rejoined, canceled pending audio pipeline stop")
+			}
+			b.Logger.Info("BRIDGE", fmt.Sprintf("Discord users detected (%d), starting audio pipeline", discordUserCount))
+			b.startAudioPipeline()
+		}
+
+		if discordUserCount > 0 && audioActive {
+			// Cancel pending audio stop if someone rejoined while still active
+			if audioStopTimer != nil {
+				audioStopTimer.Stop()
+				audioStopTimer = nil
+				audioStopCh = nil
+				b.Logger.Info("BRIDGE", "Discord user rejoined, canceled pending audio pipeline stop")
+			}
+		}
+
+		if discordUserCount == 0 && audioActive && audioStopTimer == nil {
+			b.Logger.Info("BRIDGE", fmt.Sprintf("No Discord users, stopping audio pipeline in %v", discordEmptyDelay))
+			audioStopTimer = time.NewTimer(discordEmptyDelay)
+			audioStopCh = audioStopTimer.C
+		}
+	}
+
+	for {
+		select {
+		case <-ticker.C:
+			checkMumbleUsers()
+			checkDiscordUsers()
+
+		case <-b.MumbleUserChange:
+			checkMumbleUsers()
+
+		case <-b.DiscordUserChange:
+			checkDiscordUsers()
+
+		case <-audioStopCh:
+			audioStopTimer = nil
+			audioStopCh = nil
+			b.Logger.Info("BRIDGE", "Discord empty timeout reached, stopping audio pipeline")
+			b.stopAudioPipeline()
+
+		case <-disconnectCh:
+			disconnectTimer = nil
+			disconnectCh = nil
+			b.Logger.Info("BRIDGE", "Mumble empty timeout reached, stopping Discord presence")
+			b.StopDiscordPresence()
+
+		case <-b.AutoChanDie:
+			b.Logger.Info("BRIDGE", "Ending mumble presence mode")
+
+			if audioStopTimer != nil {
+				audioStopTimer.Stop()
+			}
+			if disconnectTimer != nil {
+				disconnectTimer.Stop()
+			}
+
+			// Stop Discord presence if active
+			b.BridgeMutex.Lock()
+			bridgeActive := b.BridgeActive
+			b.BridgeMutex.Unlock()
+			if bridgeActive {
+				b.StopDiscordPresence()
+			}
+
+			// Stop persistent Mumble connection
+			mumbleCancel()
+			if err := b.MumbleConnectionManager.Stop(); err != nil {
+				b.Logger.Error("BRIDGE", fmt.Sprintf("Error stopping Mumble connection manager: %v", err))
+			}
+			time.Sleep(200 * time.Millisecond)
+
+			b.BridgeMutex.Lock()
+			b.MumbleConnected = false
+			b.Connected = false
+			b.BridgeMutex.Unlock()
+
+			return
+		}
+	}
+}
+
+// StartDiscordPresence joins the Discord voice channel for presence only (no audio).
+// Audio pipeline is started separately when Discord users join via startAudioPipeline.
+func (b *BridgeState) StartDiscordPresence() {
+	b.Logger.Debug("BRIDGE", "StartDiscordPresence called")
+
+	b.BridgeMutex.Lock()
+	if b.BridgeActive {
+		b.Logger.Info("BRIDGE", "Discord presence already active, aborting")
+		b.BridgeMutex.Unlock()
+
+		return
+	}
+	b.BridgeActive = true
+	b.StartTime = time.Now()
+	b.presenceAnnounced = false
+	b.BridgeMutex.Unlock()
+
+	b.Logger.Info("BRIDGE", "Starting Discord presence (voice only, no audio)")
+
+	// Initialize only the Discord connection manager (Mumble is already running)
+	b.connectionCtx, b.connectionCancel = context.WithCancel(context.Background())
+
+	if b.DiscordClient == nil || b.DiscordChannelID == "" {
+		b.Logger.Error("BRIDGE", "Discord client or channel ID not available")
+		b.BridgeMutex.Lock()
+		b.BridgeActive = false
+		b.BridgeMutex.Unlock()
+
+		return
+	}
+
+	b.DiscordVoiceConnectionManager = NewDiscordVoiceConnectionManager(
+		b.DiscordClient,
+		b.BridgeConfig.GID,
+		b.DiscordChannelID,
+		b.Logger,
+		b,
+	)
+
+	// Start Discord connection manager
+	if err := b.DiscordVoiceConnectionManager.Start(b.connectionCtx); err != nil {
+		b.Logger.Error("BRIDGE", fmt.Sprintf("Failed to start Discord connection manager: %v", err))
+		b.connectionCancel()
+		b.BridgeMutex.Lock()
+		b.BridgeActive = false
+		b.BridgeMutex.Unlock()
+
+		return
+	}
+
+	// Monitor Discord connection events
+	b.connectionWg.Add(1)
+	go func() {
+		defer b.connectionWg.Done()
+		for {
+			select {
+			case <-b.connectionCtx.Done():
+				return
+			case event, ok := <-b.DiscordVoiceConnectionManager.GetEventChannel():
+				if !ok {
+					return
+				}
+				b.handleDiscordConnectionEvent(event)
+			}
+		}
+	}()
+
+	// Start metrics updater
+	b.connectionWg.Add(1)
+	go func() {
+		defer b.connectionWg.Done()
+		b.updateConnectionMetrics()
+	}()
+
+	promBridgeStarts.Inc()
+	promBridgeStartTime.SetToCurrentTime()
+
+	b.Logger.Info("BRIDGE", "Discord presence started (voice only, no audio pipeline)")
+}
+
+// StopDiscordPresence stops the Discord voice presence, stopping audio if running.
+func (b *BridgeState) StopDiscordPresence() {
+	b.Logger.Info("BRIDGE", "StopDiscordPresence called")
+
+	// Stop audio pipeline if running
+	b.BridgeMutex.Lock()
+	audioActive := b.AudioActive
+	b.BridgeMutex.Unlock()
+	if audioActive {
+		b.stopAudioPipeline()
+	}
+
+	// Stop Discord connection manager
+	b.stopDiscordConnectionManager()
+
+	b.BridgeMutex.Lock()
+	b.BridgeActive = false
+	b.Connected = false
+	b.BridgeMutex.Unlock()
+
+	b.notifyMetricsChange()
+
+	// Clean up Discord users (Mumble users persist with persistent connection)
+	b.DiscordUsersMutex.Lock()
+	b.DiscordUsers = make(map[string]DiscordUser)
+	b.DiscordUsersMutex.Unlock()
+
+	b.Logger.Info("BRIDGE", "Discord presence stopped")
+}
+
+// startAudioPipeline starts the audio bridge goroutines (called when Discord users join).
+func (b *BridgeState) startAudioPipeline() {
+	b.BridgeMutex.Lock()
+	if b.AudioActive {
+		b.BridgeMutex.Unlock()
+
+		return
+	}
+	b.AudioActive = true
+	b.presenceAnnounced = false
+	b.BridgeMutex.Unlock()
+
+	b.Logger.Info("BRIDGE", "Starting audio pipeline")
+
+	// Create audio context for pipeline lifecycle
+	b.audioCtx, b.audioCancel = context.WithCancel(context.Background())
+
+	// Fresh WaitGroup for this pipeline session
+	b.audioWg = sync.WaitGroup{}
+
+	// Set up audio streams
+	b.MumbleStream = NewMumbleDuplex(b.Logger, b)
+	b.DiscordStream = NewDiscordDuplex(b)
+	b.DiscordStream.StartCleanup(b.audioCtx)
+
+	// Attach Mumble audio listener
+	if b.BridgeConfig.MumbleConfig != nil {
+		b.audioDetacher = b.BridgeConfig.MumbleConfig.AudioListeners.Attach(b.MumbleStream)
+	}
+
+	// Audio routing goroutines
+	toMumbleInternal := make(chan gumble.AudioBuffer, 50)
+
+	b.audioWg.Add(1)
+	go func() {
+		defer b.audioWg.Done()
+		b.DiscordStream.discordReceivePCM(b.audioCtx)
+	}()
+
+	b.audioWg.Add(1)
+	go func() {
+		defer b.audioWg.Done()
+		b.DiscordStream.fromDiscordMixer(b.audioCtx, toMumbleInternal)
+	}()
+
+	b.audioWg.Add(1)
+	go func() {
+		defer b.audioWg.Done()
+		b.MumbleStream.toMumbleSender(b.audioCtx, toMumbleInternal)
+	}()
+
+	b.audioWg.Add(1)
+	go func() {
+		defer b.audioWg.Done()
+		b.DiscordStream.toDiscordSender(b.audioCtx)
+	}()
+
+	// Close toMumbleInternal after pipeline stops — use a local ref
+	// to avoid racing with a future startAudioPipeline call.
+	wg := &b.audioWg
+	go func() {
+		wg.Wait()
+		close(toMumbleInternal)
+	}()
+
+	b.Logger.Info("BRIDGE", "Audio pipeline started")
+
+	// Fire presence announcement now that audio is active
+	b.tryPresenceAnnouncement()
+}
+
+// stopAudioPipeline stops the audio bridge goroutines (called when Discord users leave).
+func (b *BridgeState) stopAudioPipeline() {
+	b.BridgeMutex.Lock()
+	if !b.AudioActive {
+		b.BridgeMutex.Unlock()
+
+		return
+	}
+	b.AudioActive = false
+	b.BridgeMutex.Unlock()
+
+	// Send disconnect announcement while connections are still active
+	b.sendDisconnectAnnouncement()
+
+	b.Logger.Info("BRIDGE", "Stopping audio pipeline")
+
+	// Cancel audio context to stop goroutines
+	if b.audioCancel != nil {
+		b.audioCancel()
+	}
+
+	// Wait for audio goroutines to exit
+	b.audioWg.Wait()
+
+	// Detach Mumble audio listener
+	if b.audioDetacher != nil {
+		b.Logger.Debug("BRIDGE", "Detaching Mumble audio listener")
+		b.audioDetacher.Detach()
+		b.audioDetacher = nil
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	// Clean up streams
+	if b.DiscordStream != nil {
+		b.DiscordStream.StopCleanup()
+		b.DiscordStream = nil
+	}
+
+	if b.MumbleStream != nil {
+		b.MumbleStream.CleanupStreams()
+		b.MumbleStream = nil
+	}
+
+	b.Logger.Info("BRIDGE", "Audio pipeline stopped")
+}
+
+// stopDiscordConnectionManager stops only the Discord voice connection manager,
+// leaving the persistent Mumble connection intact.
+func (b *BridgeState) stopDiscordConnectionManager() {
+	b.Logger.Info("BRIDGE", "Stopping Discord connection manager only")
+
+	if b.connectionCancel != nil {
+		b.connectionCancel()
+	}
+
+	b.connectionWg.Wait()
+
+	if b.DiscordVoiceConnectionManager != nil {
+		if err := b.DiscordVoiceConnectionManager.Stop(); err != nil {
+			b.Logger.Error("BRIDGE", fmt.Sprintf("Error stopping Discord connection manager: %v", err))
+		}
+	}
+
+	b.BridgeMutex.Lock()
+	b.DiscordConnected = false
+	b.Connected = false
+	b.BridgeMutex.Unlock()
+
+	b.Logger.Info("BRIDGE", "Discord connection manager stopped")
 }
 
 // discordSendMessage sends messages based on the bridge configuration.
