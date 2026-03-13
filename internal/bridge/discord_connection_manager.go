@@ -105,7 +105,7 @@ func (d *DiscordVoiceConnectionManager) monitorConnection(ctx context.Context) {
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 
-	const safetyTimeout = 2 * time.Minute
+	const safetyTimeout = 30 * time.Second
 	var unhealthySince time.Time
 	wasHealthy := true
 
@@ -240,6 +240,9 @@ func (d *DiscordVoiceConnectionManager) disconnectInternal() {
 }
 
 // isConnectionHealthy checks if the voice connection is active.
+// Checks both local state (IsReady) and the actual voice gateway status
+// (IsGatewayReady) to detect stale sessions where the local state says
+// "ready" but the voice gateway is stuck in a reconnect loop.
 func (d *DiscordVoiceConnectionManager) isConnectionHealthy() bool {
 	d.connMutex.RLock()
 	defer d.connMutex.RUnlock()
@@ -248,7 +251,7 @@ func (d *DiscordVoiceConnectionManager) isConnectionHealthy() bool {
 		return false
 	}
 
-	return d.voiceConn.IsReady()
+	return d.voiceConn.IsReady() && d.voiceConn.IsGatewayReady()
 }
 
 // Stop gracefully stops the Discord connection manager

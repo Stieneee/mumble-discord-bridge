@@ -160,6 +160,23 @@ func (vc *DisgoVoiceConnection) IsReady() bool {
 	return vc.ready && !vc.closed && vc.conn != nil
 }
 
+// IsGatewayReady probes the actual voice gateway status. Returns true only
+// when the gateway websocket is fully connected (StatusReady). This detects
+// stale voice sessions where local flags say "ready" but the gateway is
+// stuck in a reconnect loop (e.g. cycling between "already connected" and
+// "session no longer valid").
+func (vc *DisgoVoiceConnection) IsGatewayReady() bool {
+	vc.mu.RLock()
+	conn := vc.conn
+	vc.mu.RUnlock()
+
+	if conn == nil {
+		return false
+	}
+
+	return conn.Gateway().Status() == voice.StatusReady
+}
+
 // UserIDBySSRC maps an SSRC to a user ID string.
 func (vc *DisgoVoiceConnection) UserIDBySSRC(ssrc uint32) string {
 	vc.mu.RLock()

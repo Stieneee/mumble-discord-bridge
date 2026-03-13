@@ -57,11 +57,12 @@ func (m *mockDiscordClientForConn) CreateVoiceConnection(_ string) (discord.Voic
 
 // mockVoiceConn implements discord.VoiceConnection for connection manager tests.
 type mockVoiceConn struct {
-	ready   bool
-	opened  bool
-	closed  bool
-	mu      sync.Mutex
-	openErr error
+	ready        bool
+	gatewayReady bool
+	opened       bool
+	closed       bool
+	mu           sync.Mutex
+	openErr      error
 }
 
 func (m *mockVoiceConn) Open(_ context.Context, _ string) error {
@@ -92,10 +93,23 @@ func (m *mockVoiceConn) IsReady() bool {
 	return m.ready
 }
 
+func (m *mockVoiceConn) IsGatewayReady() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.gatewayReady
+}
+
 func (m *mockVoiceConn) setReady(ready bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.ready = ready
+	m.gatewayReady = ready
+}
+
+func (m *mockVoiceConn) setGatewayReady(ready bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.gatewayReady = ready
 }
 
 func (m *mockVoiceConn) UserIDBySSRC(_ uint32) string { return "" }
@@ -390,7 +404,7 @@ func TestDiscord_IsConnectionHealthy_WithNotReady(t *testing.T) {
 // TestDiscord_IsConnectionHealthy_WithReady verifies isConnectionHealthy
 // returns true when voiceConn exists and IsReady() returns true.
 func TestDiscord_IsConnectionHealthy_WithReady(t *testing.T) {
-	vc := &mockVoiceConn{ready: true}
+	vc := &mockVoiceConn{ready: true, gatewayReady: true}
 	client := &mockDiscordClientForConn{
 		ready:     true,
 		voiceConn: vc,
@@ -409,6 +423,38 @@ func TestDiscord_IsConnectionHealthy_WithReady(t *testing.T) {
 
 	assert.True(t, mgr.isConnectionHealthy(),
 		"Expected true when voiceConn.IsReady() is true")
+
+	require.NoError(t, mgr.Stop())
+}
+
+// TestDiscord_IsConnectionHealthy_StaleGateway verifies that isConnectionHealthy
+// returns false when voiceConn.IsReady() is true but the voice gateway is not
+// ready (stale session — local state says "ready" but gateway is broken).
+func TestDiscord_IsConnectionHealthy_StaleGateway(t *testing.T) {
+	vc := &mockVoiceConn{ready: true, gatewayReady: false}
+	client := &mockDiscordClientForConn{
+		ready:     true,
+		voiceConn: vc,
+	}
+	mgr, _, _ := newTestDiscordManager(client)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	mgr.InitContext(ctx)
+
+	// Inject voice connection that thinks it's ready but has a broken gateway.
+	mgr.connMutex.Lock()
+	mgr.voiceConn = vc
+	mgr.connMutex.Unlock()
+
+	assert.False(t, mgr.isConnectionHealthy(),
+		"Expected unhealthy when gateway is not ready despite local ready=true")
+
+	// Now mark gateway as ready — health should recover.
+	vc.setGatewayReady(true)
+	assert.True(t, mgr.isConnectionHealthy(),
+		"Expected healthy after gateway becomes ready")
 
 	require.NoError(t, mgr.Stop())
 }
@@ -477,7 +523,7 @@ func TestDiscord_ConcurrentHealthChecks(t *testing.T) {
 // TestDiscord_DisconnectInternalClearsConnection verifies that calling
 // disconnectInternal() sets voiceConn to nil.
 func TestDiscord_DisconnectInternalClearsConnection(t *testing.T) {
-	vc := &mockVoiceConn{ready: true}
+	vc := &mockVoiceConn{ready: true, gatewayReady: true}
 	client := &mockDiscordClientForConn{
 		ready:     true,
 		voiceConn: vc,
@@ -599,7 +645,7 @@ func TestDiscord_EventEmission(t *testing.T) {
 // TestDiscord_MonitorConnection_ContextCancel verifies that monitorConnection
 // exits promptly when the context is canceled.
 func TestDiscord_MonitorConnection_ContextCancel(t *testing.T) {
-	vc := &mockVoiceConn{ready: true}
+	vc := &mockVoiceConn{ready: true, gatewayReady: true}
 	client := &mockDiscordClientForConn{
 		ready:     true,
 		voiceConn: vc,

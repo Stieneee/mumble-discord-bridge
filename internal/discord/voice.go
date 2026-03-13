@@ -17,6 +17,11 @@ type VoiceConnection interface {
 	SetSpeaking(ctx context.Context, speaking bool) error
 	// IsReady returns true if the voice connection is active and ready.
 	IsReady() bool
+	// IsGatewayReady returns true if the underlying voice gateway is connected
+	// and ready. Unlike IsReady (which checks local state flags), this probes
+	// the actual voice gateway status — detecting stale sessions where the
+	// local state says "ready" but the gateway is stuck reconnecting.
+	IsGatewayReady() bool
 	// UserIDBySSRC maps an SSRC to a user ID string.
 	UserIDBySSRC(ssrc uint32) string
 }
