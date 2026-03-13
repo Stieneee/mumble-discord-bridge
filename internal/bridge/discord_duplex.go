@@ -266,6 +266,14 @@ func (dd *DiscordDuplex) toDiscordSender(ctx context.Context) {
 				streaming = false
 				lastSilenceStart = time.Now()
 				noDataTicks = 0
+			} else if !streaming && noDataTicks%2 == 0 {
+				// Keep sending silence frames during gaps to advance disgo's
+				// monotonic RTP timestamp in sync with wall-clock time.
+				// Without this, the timestamp freezes during silence and
+				// Discord's jitter buffer accumulates latency across
+				// talk-spurt boundaries. Send every 2nd tick (20ms) to
+				// match the Opus frame rate.
+				internalSend(opusSilence)
 			}
 		}
 	}
