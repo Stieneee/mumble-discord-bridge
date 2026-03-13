@@ -15,14 +15,14 @@ import (
 
 // Constants for Discord audio handling
 const (
-	silenceFrameCount            = 3   // Number of silence frames to send after speaking
-	shortSpeakingThreshold       = 50  // Milliseconds - threshold for short speaking cycle warning
-	noDataGraceTicks             = 2   // Sender ticks (40ms at 20ms/tick) to wait before declaring end-of-speech
-	connectionCheckInterval      = 100 // Milliseconds - sleep time when connection not ready
-	maxPLCPackets                = 10  // Maximum PLC frames to generate (prevents runaway on major discontinuity)
-	opusFrameSize                = 960 // Standard opus frame size (20ms at 48kHz)
-	pcmChunkSize                 = 480 // PCM chunk size for 10ms at 48kHz sample rate
-	toDiscordJitterBufferSize    = 3   // Opus frames (60ms) - send-side jitter buffer between mixer and sender
+	silenceFrameCount         = 3   // Number of silence frames to send after speaking
+	shortSpeakingThreshold    = 50  // Milliseconds - threshold for short speaking cycle warning
+	noDataGraceTicks          = 2   // Sender ticks (40ms at 20ms/tick) to wait before declaring end-of-speech
+	connectionCheckInterval   = 100 // Milliseconds - sleep time when connection not ready
+	maxPLCPackets             = 10  // Maximum PLC frames to generate (prevents runaway on major discontinuity)
+	opusFrameSize             = 960 // Standard opus frame size (20ms at 48kHz)
+	pcmChunkSize              = 480 // PCM chunk size for 10ms at 48kHz sample rate
+	toDiscordJitterBufferSize = 3   // Opus frames (60ms) - send-side jitter buffer between mixer and sender
 )
 
 // sequenceGap calculates the number of lost packets between two sequence numbers,
@@ -356,6 +356,7 @@ func (dd *DiscordDuplex) discordReceivePCM(ctx context.Context) {
 			select {
 			case <-ctx.Done():
 				dd.Bridge.Logger.Info("DISCORD_RECEIVE", "Stopping Discord receive PCM")
+
 				return
 			default:
 			}
@@ -509,7 +510,7 @@ func (dd *DiscordDuplex) processReceivedPacket(p *discord.AudioPacket) {
 }
 
 func (dd *DiscordDuplex) fromDiscordMixer(ctx context.Context, toMumble chan<- gumble.AudioBuffer) {
-	mumbleSilence := gumble.AudioBuffer{}
+	mumbleSilence := make(gumble.AudioBuffer, 0, pcmChunkSize-3)
 	for i := 3; i < pcmChunkSize; i++ {
 		mumbleSilence = append(mumbleSilence, 0x00)
 	}

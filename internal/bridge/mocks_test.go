@@ -319,4 +319,3 @@ func (m *MockConnectionManager) statusToEventType(status ConnectionStatus) Conne
 		return EventDisconnected
 	}
 }
-

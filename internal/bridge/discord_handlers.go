@@ -433,6 +433,7 @@ func (l *DiscordListener) OnVoiceStateUpdate(state *discord.VoiceState) {
 		u, err := l.Bridge.DiscordClient.GetUser(uid)
 		if err != nil {
 			l.Bridge.Logger.Error("DISCORD_HANDLER", "Error looking up username")
+
 			continue
 		}
 

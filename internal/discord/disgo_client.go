@@ -221,6 +221,7 @@ func (dc *DisgoClient) AddEventHandler(handler EventHandler) func() {
 		for i, h := range dc.handlers {
 			if h == handler {
 				dc.handlers = append(dc.handlers[:i], dc.handlers[i+1:]...)
+
 				return
 			}
 		}
@@ -235,6 +236,7 @@ func (dc *DisgoClient) getHandlers() []EventHandler {
 	// Return a copy to avoid holding the lock during dispatch.
 	out := make([]EventHandler, len(dc.handlers))
 	copy(out, dc.handlers)
+
 	return out
 }
 

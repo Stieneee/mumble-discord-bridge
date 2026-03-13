@@ -109,7 +109,9 @@ func (vc *DisgoVoiceConnection) ReceiveOpus() (*AudioPacket, error) {
 
 	// Set a short read deadline so the goroutine can re-check state when no
 	// packets arrive. Timeout errors are returned as nil, nil to the caller.
-	_ = conn.UDP().SetReadDeadline(time.Now().Add(receiveDeadline))
+	if err := conn.UDP().SetReadDeadline(time.Now().Add(receiveDeadline)); err != nil {
+		return nil, fmt.Errorf("set read deadline: %w", err)
+	}
 
 	pkt, err := conn.UDP().ReadPacket()
 	if err != nil {
@@ -119,6 +121,7 @@ func (vc *DisgoVoiceConnection) ReceiveOpus() (*AudioPacket, error) {
 		if errors.As(err, &netErr) && netErr.Timeout() {
 			return nil, nil
 		}
+
 		return nil, err
 	}
 
