@@ -983,11 +983,19 @@ func (b *BridgeState) StartBridge() {
 		b.MumbleStream.toMumbleSender(ctx, toMumbleInternal)
 	}()
 
-	// Mumble to Discord: mixes Mumble streams inline, encodes Opus, sends to Discord
+	// Mumble to Discord: mixer encodes Opus into jitter buffer, sender paces at 20ms
+	toDiscordOpusBuffer := make(chan []byte, toDiscordJitterBufferSize)
+
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		b.DiscordStream.toDiscordSender(ctx)
+		b.DiscordStream.toDiscordOpusMixer(ctx, toDiscordOpusBuffer)
+	}()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		b.DiscordStream.toDiscordSender(ctx, toDiscordOpusBuffer)
 	}()
 
 	// Bridge health monitor - checks overall bridge state but doesn't kill on individual connection failures
@@ -1691,10 +1699,19 @@ func (b *BridgeState) startAudioPipeline() {
 		b.MumbleStream.toMumbleSender(b.audioCtx, toMumbleInternal)
 	}()
 
+	// Mumble to Discord: mixer encodes Opus into jitter buffer, sender paces at 20ms
+	toDiscordOpusBuffer := make(chan []byte, toDiscordJitterBufferSize)
+
 	b.audioWg.Add(1)
 	go func() {
 		defer b.audioWg.Done()
-		b.DiscordStream.toDiscordSender(b.audioCtx)
+		b.DiscordStream.toDiscordOpusMixer(b.audioCtx, toDiscordOpusBuffer)
+	}()
+
+	b.audioWg.Add(1)
+	go func() {
+		defer b.audioWg.Done()
+		b.DiscordStream.toDiscordSender(b.audioCtx, toDiscordOpusBuffer)
 	}()
 
 	// Close toMumbleInternal after pipeline stops — use a local ref
