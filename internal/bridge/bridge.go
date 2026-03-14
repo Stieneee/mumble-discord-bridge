@@ -533,6 +533,11 @@ func (b *BridgeState) tryPresenceAnnouncement() {
 // sendPresenceAnnouncement sends a one-time message to each side listing users on the other side.
 // Runs in its own goroutine. No locks held on entry.
 func (b *BridgeState) sendPresenceAnnouncement() {
+	// Wait for the Mumble server to send the full channel user list.
+	// After Move(), the server responds asynchronously, so the MumbleUsers
+	// map is often still empty when the connection state first becomes ready.
+	time.Sleep(3 * time.Second)
+
 	// Collect Mumble user names
 	b.MumbleUsersMutex.Lock()
 	mumbleNames := make([]string, 0, len(b.MumbleUsers))
