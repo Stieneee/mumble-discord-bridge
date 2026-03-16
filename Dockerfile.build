@@ -1,7 +1,7 @@
 # Dockerfile for building binaries - used by release workflow
 # Builds the binary natively for the target platform
 
-FROM golang:1.25.7 AS builder
+FROM golang:1.26.1 AS builder
 
 ARG VERSION=dev
 ARG COMMIT=unknown
