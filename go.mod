@@ -2,7 +2,13 @@ module github.com/stieneee/mumble-discord-bridge
 
 go 1.25.7
 
+// Temporary fork with fix for Discord voice close code 4022 (CallTerminated)
+// See: https://github.com/stieneee/mumble-discord-bridge/issues/110
+// TODO: Remove this replace directive once upstream PR is merged
+replace github.com/disgoorg/disgo => github.com/stieneee-bot/disgo v0.0.0-20260316092249-30d50560d27e
+
 require (
+	github.com/bwmarrin/discordgo v0.29.0
 	github.com/disgoorg/disgo v0.19.2
 	github.com/disgoorg/godave/golibdave v0.1.0
 	github.com/disgoorg/snowflake/v2 v2.0.3
