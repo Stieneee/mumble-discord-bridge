@@ -8,7 +8,7 @@ LDFLAGS=-s -w -X main.version=$(VERSION) -X main.commit=$(COMMIT) -X main.date=$
 # Clones godave and runs the install script, which downloads prebuilt binaries
 # or builds from source. Installs to ~/.local/lib and ~/.local/include.
 install-libdave:
-	@if pkg-config --exists dave 2>/dev/null; then \
+	@if pkg-config --exists dave 2>/dev/null && pkg-config --libs dave > /dev/null 2>&1; then \
 		echo "libdave already installed"; \
 	else \
 		echo "Installing libdave..."; \
