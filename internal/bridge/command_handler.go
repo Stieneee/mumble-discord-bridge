@@ -14,6 +14,8 @@ import (
 // - refresh
 // - status
 // - list
+//
+// Note: auto mode switching is handled via slash commands (see slash_commands.go)
 
 // HandleCommand processes bridge commands from users.
 func (b *BridgeState) HandleCommand(msg string, userResponse func(string)) {
