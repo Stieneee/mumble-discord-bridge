@@ -8,6 +8,8 @@ github.com/coreos/go-systemd/v22 v22.5.0/go.mod h1:Y58oyj3AT4RCenI/lSvhwexgC+NSV
 github.com/creack/pty v1.1.9/go.mod h1:oKZEueFk5CKHvIhNR5MUki03XCEU+Q6VDXinZuGJ33E=
 github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
+github.com/disgoorg/disgo v0.0.0-20260316195359-b45b6eb8dc6b h1:5NV2xZGU5WhCBjvGxuvXyyLo9oKhcTLUm/uhrYjbDVg=
+github.com/disgoorg/disgo v0.0.0-20260316195359-b45b6eb8dc6b/go.mod h1:NnV63iw4lJdF1fnV0gX27XR43ZgRGqnL122svRMTgTE=
 github.com/disgoorg/godave v0.1.0 h1:3g0Zqzz+zNaxQTVLfCnl5eZKGqZk6cM/JLLbMKCtZQQ=
 github.com/disgoorg/godave v0.1.0/go.mod h1:OreAC3hpabr39bMVA+jwOVDq1EUPXH5A0XUBiZaDI1Y=
 github.com/disgoorg/godave/golibdave v0.1.0 h1:ga70vTb2pCdFgu+Jq8KteE9qLhezG5dI4H0vB/+6vBQ=
@@ -61,8 +63,6 @@ github.com/rs/zerolog v1.34.0 h1:k43nTLIwcTVQAncfCw4KZ2VY6ukYoZaBPNOE8txlOeY=
 github.com/rs/zerolog v1.34.0/go.mod h1:bJsvje4Z08ROH4Nhs5iH600c3IkWhwp44iRc54W6wYQ=
 github.com/sasha-s/go-csync v0.0.0-20240107134140-fcbab37b09ad h1:qIQkSlF5vAUHxEmTbaqt1hkJ/t6skqEGYiMag343ucI=
 github.com/sasha-s/go-csync v0.0.0-20240107134140-fcbab37b09ad/go.mod h1:/pA7k3zsXKdjjAiUhB5CjuKib9KJGCaLvZwtxGC8U0s=
-github.com/stieneee-bot/disgo v0.0.0-20260316092249-30d50560d27e h1:miO+4qLiIYVKlPdWBIh7+7ieFNZPFh9kAHq6c66FdS8=
-github.com/stieneee-bot/disgo v0.0.0-20260316092249-30d50560d27e/go.mod h1:NnV63iw4lJdF1fnV0gX27XR43ZgRGqnL122svRMTgTE=
 github.com/stieneee/gopus v0.0.0-20210424193312-6d10f6090335 h1:yzwz6AqGKysli5du4CrQ48BMGUCSkrl7V7Kbo9VaG8w=
 github.com/stieneee/gopus v0.0.0-20210424193312-6d10f6090335/go.mod h1:tAKYr3fSBJGold7c9DMPlhupn9oy8hTgl3cZ0hoyRQs=
 github.com/stieneee/gumble v0.0.0-20240610021017-a3449ae7108c h1:xDFXk/q55qdUVEbIYDIxeorDOsgfQnuRaKsIf3WStgg=
