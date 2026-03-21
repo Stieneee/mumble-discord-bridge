@@ -170,7 +170,7 @@ docker stop mumble-discord-bridge && docker rm mumble-discord-bridge
 
 The following options can be set using environment variables or with command line options.
 
-Note boolean vales are flags when set via command line. example `-mumble-insecure -mumble-disable-text` not `-mumble-insecure true -mumble-disable-text true`.
+Note boolean values are flags when set via command line, example `-mumble-insecure -mumble-disable-text` not `-mumble-insecure true -mumble-disable-text true`.
 
 | Environment Variable       | CLI                         | Type   | Default          | Description                                                                                                                    |
 | -------------------------- | --------------------------- | ------ | ---------------- | ------------------------------------------------------------------------------------------------------------------------------ |
@@ -262,15 +262,10 @@ The endpoint exposes /live and /ready for use with Kubernetes.
 
 ## Known Issues
 
-Currently there is an issue opening the discord voice channel.
-It is a known issue with a dependency of this project.
-
-Audio leveling from Discord needs to be improved.
-
 Delays in connecting to Mumble (such as from external authentication plugins) may result in extra error messages on initial connection.
 
-There is an issue seen with Mumble-Server (murmur) 1.3.0 in which the bridge will loose the ability to send messages client after prolonged periods of connectivity.
-This issue has been appears to be resolved by murmur 1.3.4.
+There is an issue seen with Mumble-Server (murmur) 1.3.0 in which the bridge will lose the ability to send messages client after prolonged periods of connectivity.
+This issue appears to be resolved by murmur 1.3.4.
 
 ## Breaking Config Changes
 
