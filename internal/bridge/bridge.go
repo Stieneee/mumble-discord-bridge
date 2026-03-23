@@ -683,6 +683,33 @@ func (b *BridgeState) stopConnectionManagers() {
 	b.Logger.Info("BRIDGE", "Connection managers stopped")
 }
 
+// StopDiscordVoice stops the Discord voice connection independently, without
+// affecting the Mumble connection. This is used by constant mode between
+// reconnection cycles to ensure the old voice connection is fully cleaned up
+// before a new one is established. Without this, a stale voice websocket may
+// still be active and cause a visible "rejoin" when the new connection joins.
+func (b *BridgeState) StopDiscordVoice() {
+	b.Logger.Info("BRIDGE", "Stopping Discord voice connection")
+
+	if b.connectionCancel != nil {
+		b.connectionCancel()
+	}
+
+	// Wait for connection monitoring goroutines to exit before stopping the manager
+	b.connectionWg.Wait()
+
+	if b.DiscordVoiceConnectionManager != nil {
+		if err := b.DiscordVoiceConnectionManager.Stop(); err != nil {
+			b.Logger.Error("BRIDGE", fmt.Sprintf("Error stopping Discord connection manager: %v", err))
+		}
+	}
+
+	// Brief sleep to let voice websocket fully close before next connection
+	time.Sleep(200 * time.Millisecond)
+
+	b.Logger.Info("BRIDGE", "Discord voice connection stopped")
+}
+
 // populateExistingDiscordUsers populates the DiscordUsers map with users already in the voice channel
 func (b *BridgeState) populateExistingDiscordUsers() {
 	b.Logger.Debug("BRIDGE", "Populating existing Discord users")

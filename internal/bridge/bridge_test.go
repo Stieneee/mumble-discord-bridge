@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stieneee/mumble-discord-bridge/internal/discord"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -466,3 +467,70 @@ func TestBridge_DiscordUserStruct(t *testing.T) {
 	assert.True(t, user.seen)
 	assert.Empty(t, user.dmID)
 }
+
+// TestBridgeState_StopDiscordVoice tests that StopDiscordVoice properly cleans up
+// the Discord voice connection without affecting Mumble. This is critical for
+// constant mode reconnection cycles to prevent the old voice websocket from
+// causing a visible "rejoin" when a new connection is established.
+func TestBridgeState_StopDiscordVoice(t *testing.T) {
+	bridge := createTestBridgeState(nil)
+
+	// Create a context that can be canceled
+	ctx, cancel := context.WithCancel(context.Background())
+	bridge.connectionCtx = ctx
+	bridge.connectionCancel = cancel
+
+	// Create a sync point to verify goroutines have started before we cancel
+	var wg sync.WaitGroup
+	wg.Add(1)
+
+	// Simulate a connection monitoring goroutine that exits when context is canceled
+	monitorExited := atomic.Bool{}
+	go func() {
+		defer wg.Done()
+		<-bridge.connectionCtx.Done()
+		monitorExited.Store(true)
+	}()
+
+	// Create a mock voice connection manager
+	mockVoiceMgr := &MockDiscordVoiceConnectionManager{
+		stopCalled: false,
+		stopErr:    nil,
+	}
+	bridge.DiscordVoiceConnectionManager = mockVoiceMgr
+
+	// Call StopDiscordVoice
+	bridge.StopDiscordVoice()
+
+	// Verify Stop was called on the voice manager
+	assert.True(t, mockVoiceMgr.stopCalled, "Stop() should be called on DiscordVoiceConnectionManager")
+
+	// Verify context was canceled
+	select {
+	case <-bridge.connectionCtx.Done():
+		// Expected
+	default:
+		t.Fatal("connectionCtx should be canceled")
+	}
+
+	// Wait for the monitoring goroutine to exit
+	wg.Wait()
+	assert.True(t, monitorExited.Load(), "monitoring goroutine should have exited")
+}
+
+// MockDiscordVoiceConnectionManager is a mock for DiscordVoiceConnectionManager
+type MockDiscordVoiceConnectionManager struct {
+	stopCalled bool
+	stopErr    error
+}
+
+func (m *MockDiscordVoiceConnectionManager) StartBridge(targetChannelID string, wg *sync.WaitGroup) {}
+func (m *MockDiscordVoiceConnectionManager) Stop() error {
+	m.stopCalled = true
+	return m.stopErr
+}
+func (m *MockDiscordVoiceConnectionManager) IsBridgeActive() bool                                          { return false }
+func (m *MockDiscordVoiceConnectionManager) GetVoiceConnection() discord.VoiceConnection                   { return nil }
+func (m *MockDiscordVoiceConnectionManager) UpdateAllowedUsers(ctx context.Context)                          {}
+func (m *MockDiscordVoiceConnectionManager) GetAllowedUsers() []string                                        { return nil }
+func (m *MockDiscordVoiceConnectionManager) CloseDiscordVoiceConnection() error                               { return nil }

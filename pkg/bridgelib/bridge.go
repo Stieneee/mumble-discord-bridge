@@ -309,6 +309,9 @@ func (b *BridgeInstance) Start() error {
 					b.State.DiscordChannelID = b.config.DiscordCID
 					b.logger.Debug("BRIDGE_MODE", fmt.Sprintf("Set DiscordChannelID to %s", b.config.DiscordCID))
 
+					b.logger.Debug("BRIDGE_START", "Stopping any existing Discord voice connection before reconnection")
+					b.State.StopDiscordVoice()
+
 					b.logger.Debug("BRIDGE_START", "Calling State.StartBridge()")
 
 					// Start the bridge and verify it connected successfully
