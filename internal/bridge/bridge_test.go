@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stieneee/mumble-discord-bridge/internal/discord"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -479,22 +480,30 @@ func TestBridgeState_StopDiscordVoice(t *testing.T) {
 	bridge.connectionCtx = ctx
 	bridge.connectionCancel = cancel
 
+	// Create a sync point to verify goroutines have started before we cancel
+	var wg sync.WaitGroup
+	wg.Add(1)
+
 	// Simulate a connection monitoring goroutine that exits when context is canceled
 	monitorExited := atomic.Bool{}
-	bridge.connectionWg.Add(1)
 	go func() {
-		defer bridge.connectionWg.Done()
+		defer wg.Done()
 		<-bridge.connectionCtx.Done()
 		monitorExited.Store(true)
 	}()
 
-	// Create a real DiscordVoiceConnectionManager (nil client is fine for Stop)
-	bridge.DiscordVoiceConnectionManager = NewDiscordVoiceConnectionManager(
-		nil, "test-guild", "test-channel", bridge.Logger, nil,
-	)
+	// Create a mock voice connection manager
+	mockVoiceMgr := &MockDiscordVoiceConnectionManager{
+		stopCalled: false,
+		stopErr:    nil,
+	}
+	bridge.DiscordVoiceConnectionManager = mockVoiceMgr
 
 	// Call StopDiscordVoice
 	bridge.StopDiscordVoice()
+
+	// Verify Stop was called on the voice manager
+	assert.True(t, mockVoiceMgr.stopCalled, "Stop() should be called on DiscordVoiceConnectionManager")
 
 	// Verify context was canceled
 	select {
@@ -504,6 +513,24 @@ func TestBridgeState_StopDiscordVoice(t *testing.T) {
 		t.Fatal("connectionCtx should be canceled")
 	}
 
-	// Verify the monitoring goroutine exited
+	// Wait for the monitoring goroutine to exit
+	wg.Wait()
 	assert.True(t, monitorExited.Load(), "monitoring goroutine should have exited")
 }
+
+// MockDiscordVoiceConnectionManager is a mock for DiscordVoiceConnectionManager
+type MockDiscordVoiceConnectionManager struct {
+	stopCalled bool
+	stopErr    error
+}
+
+func (m *MockDiscordVoiceConnectionManager) StartBridge(targetChannelID string, wg *sync.WaitGroup) {}
+func (m *MockDiscordVoiceConnectionManager) Stop() error {
+	m.stopCalled = true
+	return m.stopErr
+}
+func (m *MockDiscordVoiceConnectionManager) IsBridgeActive() bool                                          { return false }
+func (m *MockDiscordVoiceConnectionManager) GetVoiceConnection() discord.VoiceConnection                   { return nil }
+func (m *MockDiscordVoiceConnectionManager) UpdateAllowedUsers(ctx context.Context)                          {}
+func (m *MockDiscordVoiceConnectionManager) GetAllowedUsers() []string                                        { return nil }
+func (m *MockDiscordVoiceConnectionManager) CloseDiscordVoiceConnection() error                               { return nil }
