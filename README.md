@@ -46,9 +46,29 @@ The bridge can be run with the follow modes:
        The bridge starts up and immediately connects to both Discord and Mumble voice channels. It can not be controlled in this mode and quits when the program is stopped
 ```
 
-In "auto" or "manual" modes, the bridge can be controlled in Discord with the following commands.
+In "auto" or "manual" modes, the bridge can be controlled using slash commands or text commands.
 
-**Important:** Discord commands only work when sent from the configured channel (DISCORD_CID). Commands from other channels are ignored. This ensures proper isolation in multi-bridge deployments.
+**Important:** Discord text commands and the `/connect` slash command only work when sent from the configured channel (DISCORD_CID). The `/disconnect`, `/mode`, and `/users` slash commands work from any channel in the guild. This ensures proper isolation in multi-bridge deployments.
+
+### Slash Commands
+
+```text
+/connect
+ Join Discord voice and Mumble. Requires the user to be in the configured voice channel (DISCORD_CID).
+
+/disconnect
+ Leave Discord voice and Mumble.
+
+/mode [auto|manual|constant]
+ View or change the bridge mode.
+
+/users
+ List all connected users in both Mumble and Discord.
+```
+
+### Text Commands
+
+Text commands work in the configured Discord channel and in Mumble:
 
 ```text
 !COMMAND link
