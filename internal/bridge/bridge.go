@@ -94,7 +94,7 @@ type BridgeConfig struct { //nolint:revive // API consistency: keeping Bridge pr
 	Version string
 }
 
-// BridgeState manages dynamic information about the bridge during runtime
+// BridgeState manages dynamic information about the bridge during runtime.
 //
 // CONCURRENCY NOTES:
 //   - BridgeMutex protects: Connected, DiscordConnected, MumbleConnected, Mode,
@@ -103,7 +103,6 @@ type BridgeConfig struct { //nolint:revive // API consistency: keeping Bridge pr
 //   - MumbleUsersMutex protects: MumbleUsers map, MumbleUserCount
 //   - Lock order: BridgeMutex -> MumbleUsersMutex -> DiscordUsersMutex
 //
-// BridgeState manages dynamic information about the bridge during runtime.
 type BridgeState struct { //nolint:revive // API consistency: keeping Bridge prefix for public types
 	// The configuration data for this bridge
 	BridgeConfig *BridgeConfig
