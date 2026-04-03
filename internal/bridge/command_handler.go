@@ -12,6 +12,7 @@ import (
 // - link
 // - unlink
 // - refresh
+// Supported commands:
 // - status
 // - list
 //
