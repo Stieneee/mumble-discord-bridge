@@ -4,7 +4,6 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"math"
 	"os"
 	"os/signal"
 	"runtime/pprof"
@@ -157,10 +156,10 @@ func main() {
 
 	log.Printf("Final chat bridge status: %v", *chatBridge)
 
-	discordStartStreamingCount := int(math.Round(float64(*discordSendBuffer) / 10.0))
+	discordStartStreamingCount := *discordSendBuffer / 10
 	log.Println("To Discord Jitter Buffer: ", discordStartStreamingCount*10, " ms")
 
-	mumbleStartStreamCount := int(math.Round(float64(*mumbleSendBuffer) / 10.0))
+	mumbleStartStreamCount := *mumbleSendBuffer / 10
 	log.Println("To Mumble Jitter Buffer: ", mumbleStartStreamCount*10, " ms")
 
 	// create a command flag for each command mode
