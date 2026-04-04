@@ -9,14 +9,11 @@ import (
 // the command handler should be able to handle the following commands:
 // - help
 // - version
-// - link
-// - unlink
-// - refresh
-// Supported commands:
+// - restart
 // - status
 // - list
 //
-// Note: auto mode switching is handled via slash commands (see slash_commands.go)
+// Note: link, unlink, refresh are slash commands only (see slash_commands.go).
 
 // HandleCommand processes bridge commands from users.
 func (b *BridgeState) HandleCommand(msg string, userResponse func(string)) {
