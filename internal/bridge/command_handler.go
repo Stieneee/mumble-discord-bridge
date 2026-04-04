@@ -12,7 +12,6 @@ import (
 // - link
 // - unlink
 // - refresh
-// - auto
 // - status
 // - list
 
@@ -22,7 +21,6 @@ func (b *BridgeState) HandleCommand(msg string, userResponse func(string)) {
 
 	prefix := "!" + b.BridgeConfig.Command
 
-	// TODO auto - toggle between auto and manual mode
 	if strings.HasPrefix(msg, prefix+" help") {
 		b.Logger.Debug("COMMAND_HANDLER", "Sending help message")
 		userResponse(`Commands:
@@ -43,27 +41,6 @@ func (b *BridgeState) HandleCommand(msg string, userResponse func(string)) {
 
 		return
 	}
-
-	// TODO - rethink the mode switching commands
-	// if strings.HasPrefix(msg, prefix+" auto") {
-	// 	if b.Mode == BridgeModeConstant && strings.HasPrefix(msg, prefix) {
-	// 		userResponse("Constant mode enabled, auto/manual commands can not be entered")
-	// 		return
-	// 	}
-
-	// 	if b.Mode != BridgeModeAuto {
-	// 		userResponse("Auto mode enabled")
-	// 		b.Mode = BridgeModeAuto
-	// 		b.DiscordChannelID = b.BridgeConfig.CID
-	// 		b.AutoChanDie = make(chan bool)
-	// 		go b.AutoBridge()
-	// 	} else {
-	// 		userResponse("Auto mode disabled")
-	// 		b.AutoChanDie <- true
-	// 		b.Mode = BridgeModeManual
-	// 	}
-	// 	return
-	// }
 
 	if strings.HasPrefix(msg, prefix+" restart") {
 		userResponse("Restarting bridge")
