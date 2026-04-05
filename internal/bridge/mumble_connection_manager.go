@@ -268,35 +268,6 @@ func (m *MumbleConnectionManager) OnDisconnect(e *gumble.DisconnectEvent) {
 	}
 }
 
-// Required EventListener interface methods (unused for connection management)
-
-// OnTextMessage implements gumble.EventListener interface (unused)
-func (m *MumbleConnectionManager) OnTextMessage(_ *gumble.TextMessageEvent) {}
-
-// OnUserChange implements gumble.EventListener interface (unused)
-func (m *MumbleConnectionManager) OnUserChange(_ *gumble.UserChangeEvent) {}
-
-// OnChannelChange implements gumble.EventListener interface (unused)
-func (m *MumbleConnectionManager) OnChannelChange(_ *gumble.ChannelChangeEvent) {}
-
-// OnPermissionDenied implements gumble.EventListener interface (unused)
-func (m *MumbleConnectionManager) OnPermissionDenied(_ *gumble.PermissionDeniedEvent) {}
-
-// OnUserList implements gumble.EventListener interface (unused)
-func (m *MumbleConnectionManager) OnUserList(_ *gumble.UserListEvent) {}
-
-// OnACL implements gumble.EventListener interface (unused)
-func (m *MumbleConnectionManager) OnACL(_ *gumble.ACLEvent) {}
-
-// OnBanList implements gumble.EventListener interface (unused)
-func (m *MumbleConnectionManager) OnBanList(_ *gumble.BanListEvent) {}
-
-// OnContextActionChange implements gumble.EventListener interface (unused)
-func (m *MumbleConnectionManager) OnContextActionChange(_ *gumble.ContextActionChangeEvent) {}
-
-// OnServerConfig implements gumble.EventListener interface (unused)
-func (m *MumbleConnectionManager) OnServerConfig(_ *gumble.ServerConfigEvent) {}
-
 // GetAudioOutgoing returns the cached audio outgoing channel for the current client.
 // Returns nil when disconnected. The channel pointer changes on each reconnection,
 // so callers can detect reconnections by comparing pointers.
