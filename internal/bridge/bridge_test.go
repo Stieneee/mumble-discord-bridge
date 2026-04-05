@@ -466,3 +466,44 @@ func TestBridge_DiscordUserStruct(t *testing.T) {
 	assert.True(t, user.seen)
 	assert.Empty(t, user.dmID)
 }
+
+// TestBridgeState_StopDiscordVoice tests that StopDiscordVoice properly cleans up
+// the Discord voice connection without affecting Mumble. This is critical for
+// constant mode reconnection cycles to prevent the old voice websocket from
+// causing a visible "rejoin" when a new connection is established.
+func TestBridgeState_StopDiscordVoice(t *testing.T) {
+	bridge := createTestBridgeState(nil)
+
+	// Create a context that can be canceled
+	ctx, cancel := context.WithCancel(context.Background())
+	bridge.connectionCtx = ctx
+	bridge.connectionCancel = cancel
+
+	// Simulate a connection monitoring goroutine that exits when context is canceled
+	monitorExited := atomic.Bool{}
+	bridge.connectionWg.Add(1)
+	go func() {
+		defer bridge.connectionWg.Done()
+		<-bridge.connectionCtx.Done()
+		monitorExited.Store(true)
+	}()
+
+	// Create a real DiscordVoiceConnectionManager (nil client is fine for Stop)
+	bridge.DiscordVoiceConnectionManager = NewDiscordVoiceConnectionManager(
+		nil, "test-guild", "test-channel", bridge.Logger, nil,
+	)
+
+	// Call StopDiscordVoice
+	bridge.StopDiscordVoice()
+
+	// Verify context was canceled
+	select {
+	case <-bridge.connectionCtx.Done():
+		// Expected
+	default:
+		t.Fatal("connectionCtx should be canceled")
+	}
+
+	// Verify the monitoring goroutine exited
+	assert.True(t, monitorExited.Load(), "monitoring goroutine should have exited")
+}
