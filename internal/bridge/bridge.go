@@ -95,7 +95,7 @@ type BridgeConfig struct { //nolint:revive // API consistency: keeping Bridge pr
 }
 
 // BridgeState manages dynamic information about the bridge during runtime.
-//
+
 // CONCURRENCY NOTES:
 //   - BridgeMutex protects: Connected, DiscordConnected, MumbleConnected, Mode,
 //     DiscordClient, StartTime
