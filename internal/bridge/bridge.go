@@ -102,7 +102,6 @@ type BridgeConfig struct { //nolint:revive // API consistency: keeping Bridge pr
 //   - DiscordUsersMutex protects: DiscordUsers map
 //   - MumbleUsersMutex protects: MumbleUsers map, MumbleUserCount
 //   - Lock order: BridgeMutex -> MumbleUsersMutex -> DiscordUsersMutex
-//
 type BridgeState struct { //nolint:revive // API consistency: keeping Bridge prefix for public types
 	// The configuration data for this bridge
 	BridgeConfig *BridgeConfig
