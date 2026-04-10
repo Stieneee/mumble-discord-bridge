@@ -12,7 +12,6 @@ import (
 // - restart
 // - status
 // - list
-//
 // Note: link, unlink, refresh are slash commands only (see slash_commands.go).
 
 // HandleCommand processes bridge commands from users.
