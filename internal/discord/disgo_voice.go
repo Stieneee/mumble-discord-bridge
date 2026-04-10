@@ -72,7 +72,6 @@ func (vc *DisgoVoiceConnection) Close(ctx context.Context) error {
 }
 
 // SendOpus sends an opus-encoded audio frame via UDP.
-//
 // RTP framing is handled by disgo's UDPConn.Write: each call increments the
 // RTP sequence number by 1 and the timestamp by 960 (one 20ms Opus frame).
 // The caller (toDiscordSender) is responsible for sending at 20ms intervals
