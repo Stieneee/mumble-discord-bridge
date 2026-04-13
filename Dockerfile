@@ -1,4 +1,4 @@
-FROM golang:1.26.1 AS builder
+FROM golang:1.26.2 AS builder
 
 RUN apt-get update && apt-get install -y \
     cmake g++ pkg-config git unzip \
