@@ -310,13 +310,4 @@ type ConnectionManagerConfig struct {
 	HealthCheckInterval time.Duration `json:"healthCheckInterval"`
 }
 
-// DefaultConnectionManagerConfig returns default configuration
-func DefaultConnectionManagerConfig() *ConnectionManagerConfig {
-	return &ConnectionManagerConfig{
-		MaxRetries:          5,
-		BaseRetryDelay:      time.Second * 2,
-		MaxRetryDelay:       time.Minute * 2,
-		RetryMultiplier:     2.0,
-		HealthCheckInterval: time.Second * 30,
-	}
-}
+
