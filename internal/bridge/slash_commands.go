@@ -88,13 +88,8 @@ func (b *BridgeState) IsUserAdmin(userID, username string) bool {
 	return false
 }
 
-// HandleSlashCommand processes slash command interactions
-func (b *BridgeState) HandleSlashCommand(s *discordgo.Session, i *discordgo.InteractionCreate) {
-	b.Logger.Debug("SLASH_COMMAND", fmt.Sprintf("Received interaction: %s", i.ApplicationCommandData().Name))
-
-	// Get the user who triggered the command
-	userID := ""
-	username := ""
+// interactionUser extracts the user ID and display name from an interaction.
+func interactionUser(i *discordgo.InteractionCreate) (userID, username string) {
 	if i.Member != nil && i.Member.User != nil {
 		userID = i.Member.User.ID
 		username = i.Member.Nick
@@ -105,7 +100,14 @@ func (b *BridgeState) HandleSlashCommand(s *discordgo.Session, i *discordgo.Inte
 		userID = i.User.ID
 		username = i.User.Username
 	}
+	return
+}
 
+// HandleSlashCommand processes slash command interactions
+func (b *BridgeState) HandleSlashCommand(s *discordgo.Session, i *discordgo.InteractionCreate) {
+	b.Logger.Debug("SLASH_COMMAND", fmt.Sprintf("Received interaction: %s", i.ApplicationCommandData().Name))
+
+	userID, username := interactionUser(i)
 	b.Logger.Debug("SLASH_COMMAND", fmt.Sprintf("User: %s (ID: %s)", username, userID))
 
 	// Route to appropriate command handler
@@ -125,18 +127,7 @@ func (b *BridgeState) HandleSlashCommand(s *discordgo.Session, i *discordgo.Inte
 
 // handleSlashConnect handles the /connect command
 func (b *BridgeState) handleSlashConnect(s *discordgo.Session, i *discordgo.InteractionCreate) {
-	userID := ""
-	username := "unknown"
-	if i.Member != nil && i.Member.User != nil {
-		userID = i.Member.User.ID
-		username = i.Member.Nick
-		if username == "" {
-			username = i.Member.User.Username
-		}
-	} else if i.User != nil {
-		userID = i.User.ID
-		username = i.User.Username
-	}
+	userID, username := interactionUser(i)
 
 	// Check admin permission
 	if !b.IsUserAdmin(userID, username) {
@@ -197,18 +188,7 @@ func (b *BridgeState) handleSlashConnect(s *discordgo.Session, i *discordgo.Inte
 
 // handleSlashDisconnect handles the /disconnect command
 func (b *BridgeState) handleSlashDisconnect(s *discordgo.Session, i *discordgo.InteractionCreate) {
-	userID := ""
-	username := "unknown"
-	if i.Member != nil && i.Member.User != nil {
-		userID = i.Member.User.ID
-		username = i.Member.Nick
-		if username == "" {
-			username = i.Member.User.Username
-		}
-	} else if i.User != nil {
-		userID = i.User.ID
-		username = i.User.Username
-	}
+	userID, username := interactionUser(i)
 
 	// Check admin permission
 	if !b.IsUserAdmin(userID, username) {
@@ -269,18 +249,7 @@ func (b *BridgeState) handleSlashDisconnect(s *discordgo.Session, i *discordgo.I
 
 // handleSlashMode handles the /mode command
 func (b *BridgeState) handleSlashMode(s *discordgo.Session, i *discordgo.InteractionCreate) {
-	userID := ""
-	username := "unknown"
-	if i.Member != nil && i.Member.User != nil {
-		userID = i.Member.User.ID
-		username = i.Member.Nick
-		if username == "" {
-			username = i.Member.User.Username
-		}
-	} else if i.User != nil {
-		userID = i.User.ID
-		username = i.User.Username
-	}
+	userID, username := interactionUser(i)
 
 	// Check admin permission
 	if !b.IsUserAdmin(userID, username) {
