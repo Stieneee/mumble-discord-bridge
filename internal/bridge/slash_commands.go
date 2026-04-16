@@ -88,6 +88,29 @@ func (b *BridgeState) IsUserAdmin(userID, username string) bool {
 	return false
 }
 
+// respondEphemeral sends an ephemeral interaction response and logs any error.
+func respondEphemeral(s *discordgo.Session, i *discordgo.InteractionCreate, content string) {
+	resp := &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseChannelMessageWithSource,
+		Data: &discordgo.InteractionResponseData{
+			Content: content,
+			Flags:   discordgo.MessageFlagsEphemeral,
+		},
+	}
+	_ = s.InteractionRespond(i, resp)
+}
+
+// respond sends a public interaction response and logs any error.
+func respond(s *discordgo.Session, i *discordgo.InteractionCreate, content string) {
+	resp := &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseChannelMessageWithSource,
+		Data: &discordgo.InteractionResponseData{
+			Content: content,
+		},
+	}
+	_ = s.InteractionRespond(i, resp)
+}
+
 // interactionUser extracts the user ID and display name from an interaction.
 func interactionUser(i *discordgo.InteractionCreate) (userID, username string) {
 	if i.Member != nil && i.Member.User != nil {
@@ -132,27 +155,13 @@ func (b *BridgeState) handleSlashConnect(s *discordgo.Session, i *discordgo.Inte
 	// Check admin permission
 	if !b.IsUserAdmin(userID, username) {
 		b.Logger.Info("SLASH_COMMAND", fmt.Sprintf("User %s attempted /connect without admin permissions", username))
-		resp := &discordgo.InteractionResponse{
-			Type: discordgo.InteractionResponseChannelMessageWithSource,
-			Data: &discordgo.InteractionResponseData{
-				Content: "You don't have permission to use this command.",
-				Flags:   discordgo.MessageFlagsEphemeral,
-			},
-		}
-		_ = s.InteractionRespond(i, resp)
+		respondEphemeral(s, i, "You don't have permission to use this command.")
 		return
 	}
 
 	// Check mode
 	if b.Mode == BridgeModeConstant {
-		resp := &discordgo.InteractionResponse{
-			Type: discordgo.InteractionResponseChannelMessageWithSource,
-			Data: &discordgo.InteractionResponseData{
-				Content: "Constant mode enabled, connect command not available.",
-				Flags:   discordgo.MessageFlagsEphemeral,
-			},
-		}
-		_ = s.InteractionRespond(i, resp)
+		respondEphemeral(s, i, "Constant mode enabled, connect command not available.")
 		return
 	}
 
@@ -162,14 +171,7 @@ func (b *BridgeState) handleSlashConnect(s *discordgo.Session, i *discordgo.Inte
 	b.BridgeMutex.Unlock()
 
 	if connected {
-		resp := &discordgo.InteractionResponse{
-			Type: discordgo.InteractionResponseChannelMessageWithSource,
-			Data: &discordgo.InteractionResponseData{
-				Content: "Bridge already running.",
-				Flags:   discordgo.MessageFlagsEphemeral,
-			},
-		}
-		_ = s.InteractionRespond(i, resp)
+		respondEphemeral(s, i, "Bridge already running.")
 		return
 	}
 
@@ -177,13 +179,7 @@ func (b *BridgeState) handleSlashConnect(s *discordgo.Session, i *discordgo.Inte
 	b.Logger.Info("SLASH_COMMAND", fmt.Sprintf("User %s triggering bridge connect", username))
 	go b.StartBridge()
 
-	resp := &discordgo.InteractionResponse{
-		Type: discordgo.InteractionResponseChannelMessageWithSource,
-		Data: &discordgo.InteractionResponseData{
-			Content: "Bridge connecting...",
-		},
-	}
-	_ = s.InteractionRespond(i, resp)
+	respond(s, i, "Bridge connecting...")
 }
 
 // handleSlashDisconnect handles the /disconnect command
@@ -193,27 +189,13 @@ func (b *BridgeState) handleSlashDisconnect(s *discordgo.Session, i *discordgo.I
 	// Check admin permission
 	if !b.IsUserAdmin(userID, username) {
 		b.Logger.Info("SLASH_COMMAND", fmt.Sprintf("User %s attempted /disconnect without admin permissions", username))
-		resp := &discordgo.InteractionResponse{
-			Type: discordgo.InteractionResponseChannelMessageWithSource,
-			Data: &discordgo.InteractionResponseData{
-				Content: "You don't have permission to use this command.",
-				Flags:   discordgo.MessageFlagsEphemeral,
-			},
-		}
-		_ = s.InteractionRespond(i, resp)
+		respondEphemeral(s, i, "You don't have permission to use this command.")
 		return
 	}
 
 	// Check mode
 	if b.Mode == BridgeModeConstant {
-		resp := &discordgo.InteractionResponse{
-			Type: discordgo.InteractionResponseChannelMessageWithSource,
-			Data: &discordgo.InteractionResponseData{
-				Content: "Constant mode enabled, disconnect command not available.",
-				Flags:   discordgo.MessageFlagsEphemeral,
-			},
-		}
-		_ = s.InteractionRespond(i, resp)
+		respondEphemeral(s, i, "Constant mode enabled, disconnect command not available.")
 		return
 	}
 
@@ -223,14 +205,7 @@ func (b *BridgeState) handleSlashDisconnect(s *discordgo.Session, i *discordgo.I
 	b.BridgeMutex.Unlock()
 
 	if !connected {
-		resp := &discordgo.InteractionResponse{
-			Type: discordgo.InteractionResponseChannelMessageWithSource,
-			Data: &discordgo.InteractionResponseData{
-				Content: "Bridge is not running.",
-				Flags:   discordgo.MessageFlagsEphemeral,
-			},
-		}
-		_ = s.InteractionRespond(i, resp)
+		respondEphemeral(s, i, "Bridge is not running.")
 		return
 	}
 
@@ -238,13 +213,7 @@ func (b *BridgeState) handleSlashDisconnect(s *discordgo.Session, i *discordgo.I
 	b.Logger.Info("SLASH_COMMAND", fmt.Sprintf("User %s triggering bridge disconnect", username))
 	go b.StopBridge()
 
-	resp := &discordgo.InteractionResponse{
-		Type: discordgo.InteractionResponseChannelMessageWithSource,
-		Data: &discordgo.InteractionResponseData{
-			Content: "Bridge disconnecting...",
-		},
-	}
-	_ = s.InteractionRespond(i, resp)
+	respond(s, i, "Bridge disconnecting...")
 }
 
 // handleSlashMode handles the /mode command
@@ -254,14 +223,7 @@ func (b *BridgeState) handleSlashMode(s *discordgo.Session, i *discordgo.Interac
 	// Check admin permission
 	if !b.IsUserAdmin(userID, username) {
 		b.Logger.Info("SLASH_COMMAND", fmt.Sprintf("User %s attempted /mode without admin permissions", username))
-		resp := &discordgo.InteractionResponse{
-			Type: discordgo.InteractionResponseChannelMessageWithSource,
-			Data: &discordgo.InteractionResponseData{
-				Content: "You don't have permission to use this command.",
-				Flags:   discordgo.MessageFlagsEphemeral,
-			},
-		}
-		_ = s.InteractionRespond(i, resp)
+		respondEphemeral(s, i, "You don't have permission to use this command.")
 		return
 	}
 
@@ -276,14 +238,7 @@ func (b *BridgeState) handleSlashMode(s *discordgo.Session, i *discordgo.Interac
 	}
 
 	if modeOption == "" {
-		resp := &discordgo.InteractionResponse{
-			Type: discordgo.InteractionResponseChannelMessageWithSource,
-			Data: &discordgo.InteractionResponseData{
-				Content: "Invalid mode specified.",
-				Flags:   discordgo.MessageFlagsEphemeral,
-			},
-		}
-		_ = s.InteractionRespond(i, resp)
+		respondEphemeral(s, i, "Invalid mode specified.")
 		return
 	}
 
@@ -297,26 +252,13 @@ func (b *BridgeState) handleSlashMode(s *discordgo.Session, i *discordgo.Interac
 	case "constant":
 		b.Mode = BridgeModeConstant
 	default:
-		resp := &discordgo.InteractionResponse{
-			Type: discordgo.InteractionResponseChannelMessageWithSource,
-			Data: &discordgo.InteractionResponseData{
-				Content: "Invalid mode. Use auto, manual, or constant.",
-				Flags:   discordgo.MessageFlagsEphemeral,
-			},
-		}
-		_ = s.InteractionRespond(i, resp)
+		respondEphemeral(s, i, "Invalid mode. Use auto, manual, or constant.")
 		return
 	}
 
 	b.Logger.Info("SLASH_COMMAND", fmt.Sprintf("User %s changed mode from %s to %s", username, oldMode, b.Mode.String()))
 
-	resp := &discordgo.InteractionResponse{
-		Type: discordgo.InteractionResponseChannelMessageWithSource,
-		Data: &discordgo.InteractionResponseData{
-			Content: fmt.Sprintf("Bridge mode changed from %s to %s", oldMode, b.Mode.String()),
-		},
-	}
-	_ = s.InteractionRespond(i, resp)
+	respond(s, i, fmt.Sprintf("Bridge mode changed from %s to %s", oldMode, b.Mode.String()))
 }
 
 // handleSlashUsers handles the /users command (no admin required)
@@ -348,13 +290,5 @@ func (b *BridgeState) handleSlashUsers(s *discordgo.Session, i *discordgo.Intera
 		mumbleList = strings.Join(mumbleUsers, ", ")
 	}
 
-	content := fmt.Sprintf("**Discord users:** %s\n**Mumble users:** %s", discordList, mumbleList)
-
-	resp := &discordgo.InteractionResponse{
-		Type: discordgo.InteractionResponseChannelMessageWithSource,
-		Data: &discordgo.InteractionResponseData{
-			Content: content,
-		},
-	}
-	_ = s.InteractionRespond(i, resp)
+	respond(s, i, content)
 }
