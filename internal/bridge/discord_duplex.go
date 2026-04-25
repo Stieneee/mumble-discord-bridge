@@ -2,8 +2,10 @@ package bridge
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -208,6 +210,16 @@ func (dd *DiscordDuplex) toDiscordSender(ctx context.Context, opusBuffer <-chan 
 
 		err := voiceConn.SendOpus(opus)
 		if err != nil {
+			// DAVE E2EE: when a user leaves, the key ratchet is invalidated.
+			// Sink packets and suppress log spam until the ratchet is re-established.
+			if strings.Contains(err.Error(), "missing key ratchet") {
+				if lastReady {
+					dd.Bridge.Logger.Warn("DISCORD_SEND", "DAVE key ratchet missing, sinking packets until re-established")
+					lastReady = false
+				}
+				promPacketsSunk.WithLabelValues("discord", "outbound").Inc()
+				return
+			}
 			dd.Bridge.Logger.Debug("DISCORD_SEND", fmt.Sprintf("Error sending opus: %v", err))
 
 			return
