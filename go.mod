@@ -8,7 +8,7 @@ require (
 	github.com/disgoorg/snowflake/v2 v2.0.3
 	github.com/joho/godotenv v1.5.1
 	github.com/prometheus/client_golang v1.23.0
-	github.com/rs/zerolog v1.35.0
+	github.com/rs/zerolog v1.35.1
 	github.com/stieneee/gopus v0.0.0-20210424193312-6d10f6090335
 	github.com/stieneee/gumble v0.0.0-20240610021017-a3449ae7108c
 	github.com/stretchr/testify v1.11.1
