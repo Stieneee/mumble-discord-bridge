@@ -148,14 +148,21 @@ func (b *BridgeState) HandleSlashCommand(s *discordgo.Session, i *discordgo.Inte
 	}
 }
 
+// requireAdmin checks if the interaction user has admin permissions.
+// If not, it responds with an ephemeral permission denied message and returns false.
+func (b *BridgeState) requireAdmin(s *discordgo.Session, i *discordgo.InteractionCreate, command string) bool {
+	userID, username := interactionUser(i)
+	if !b.IsUserAdmin(userID, username) {
+		b.Logger.Info("SLASH_COMMAND", fmt.Sprintf("User %s attempted /%s without admin permissions", username, command))
+		respondEphemeral(s, i, "You don't have permission to use this command.")
+		return false
+	}
+	return true
+}
+
 // handleSlashConnect handles the /connect command
 func (b *BridgeState) handleSlashConnect(s *discordgo.Session, i *discordgo.InteractionCreate) {
-	userID, username := interactionUser(i)
-
-	// Check admin permission
-	if !b.IsUserAdmin(userID, username) {
-		b.Logger.Info("SLASH_COMMAND", fmt.Sprintf("User %s attempted /connect without admin permissions", username))
-		respondEphemeral(s, i, "You don't have permission to use this command.")
+	if !b.requireAdmin(s, i, "connect") {
 		return
 	}
 
@@ -176,6 +183,7 @@ func (b *BridgeState) handleSlashConnect(s *discordgo.Session, i *discordgo.Inte
 	}
 
 	// Start bridge
+	_, username := interactionUser(i)
 	b.Logger.Info("SLASH_COMMAND", fmt.Sprintf("User %s triggering bridge connect", username))
 	go b.StartBridge()
 
@@ -184,12 +192,7 @@ func (b *BridgeState) handleSlashConnect(s *discordgo.Session, i *discordgo.Inte
 
 // handleSlashDisconnect handles the /disconnect command
 func (b *BridgeState) handleSlashDisconnect(s *discordgo.Session, i *discordgo.InteractionCreate) {
-	userID, username := interactionUser(i)
-
-	// Check admin permission
-	if !b.IsUserAdmin(userID, username) {
-		b.Logger.Info("SLASH_COMMAND", fmt.Sprintf("User %s attempted /disconnect without admin permissions", username))
-		respondEphemeral(s, i, "You don't have permission to use this command.")
+	if !b.requireAdmin(s, i, "disconnect") {
 		return
 	}
 
@@ -210,6 +213,7 @@ func (b *BridgeState) handleSlashDisconnect(s *discordgo.Session, i *discordgo.I
 	}
 
 	// Stop bridge
+	_, username := interactionUser(i)
 	b.Logger.Info("SLASH_COMMAND", fmt.Sprintf("User %s triggering bridge disconnect", username))
 	go b.StopBridge()
 
@@ -218,12 +222,7 @@ func (b *BridgeState) handleSlashDisconnect(s *discordgo.Session, i *discordgo.I
 
 // handleSlashMode handles the /mode command
 func (b *BridgeState) handleSlashMode(s *discordgo.Session, i *discordgo.InteractionCreate) {
-	userID, username := interactionUser(i)
-
-	// Check admin permission
-	if !b.IsUserAdmin(userID, username) {
-		b.Logger.Info("SLASH_COMMAND", fmt.Sprintf("User %s attempted /mode without admin permissions", username))
-		respondEphemeral(s, i, "You don't have permission to use this command.")
+	if !b.requireAdmin(s, i, "mode") {
 		return
 	}
 
@@ -256,6 +255,7 @@ func (b *BridgeState) handleSlashMode(s *discordgo.Session, i *discordgo.Interac
 		return
 	}
 
+	_, username := interactionUser(i)
 	b.Logger.Info("SLASH_COMMAND", fmt.Sprintf("User %s changed mode from %s to %s", username, oldMode, b.Mode.String()))
 
 	respond(s, i, fmt.Sprintf("Bridge mode changed from %s to %s", oldMode, b.Mode.String()))
