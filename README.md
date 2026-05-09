@@ -44,6 +44,8 @@ The bridge can be run with the follow modes:
        The bot starts up but does not connect immediately. It will join the voice channels when issued the link command via chat and will leave with the unlink command
    constant (default)
        The bridge starts up and immediately connects to both Discord and Mumble voice channels. It can not be controlled in this mode and quits when the program is stopped
+   mumble
+       The bridge starts up but does not connect audio channels immediately. It will join the voice channels when there's at least one person on the Mumble side, and leave when no one is on either end. Similar to auto but only triggers on Mumble presence.
 ```
 
 In "auto" or "manual" modes, the bridge can be controlled using slash commands or text commands.
@@ -202,7 +204,7 @@ Note boolean values are flags when set via command line, example `-mumble-insecu
 | DISCORD_TEXT_MODE          | -discord-text-mode          | string | "channel"        | disable sending direct messages to discord                                                                                     |
 | DISCORD_GID                | -discord-gid                | string | ""               | discord gid, required                                                                                                          |
 | DISCORD_TOKEN              | -discord-token              | string | ""               | discord bot token, required                                                                                                    |
-| MODE                       | -mode                       | string | "constant"       | [constant, manual, auto] determine which mode the bridge starts in                                                             |
+| MODE                       | -mode                       | string | "constant"       | [constant, manual, auto, mumble] determine which mode the bridge starts in                                                      |
 | MUMBLE_ADDRESS             | -mumble-address             | string | ""               | mumble server address, example example.com, required                                                                           |
 | MUMBLE_CERTIFICATE         | -mumble-certificate         | string | ""               | client certificate to use when connecting to the Mumble server                                                                 |
 | MUMBLE_CHANNEL             | -mumble-channel             | string | ""               | mumble channel to start in, using '/' to separate nested channels, optional                                                    |
@@ -212,6 +214,7 @@ Note boolean values are flags when set via command line, example `-mumble-insecu
 | MUMBLE_PORT                | -mumble-port                | int    | 64738            | mumble port                                                                                                                    |
 | MUMBLE_USERNAME            | -mumble-username            | string | "Discord"        | mumble username                                                                                                                |
 | MUMBLE_BOT                 | -mumble-bot                 | flag   | false            | exclude bot from mumble user count, optional, requires mumble v1.5 or later                                                    |
+| NICE                       | -nice                       | flag   | false            | automatically try to 'nice' the process for better scheduling                                  |
 | PROMETHEUS_ENABLE          | -prometheus-enable          | flag   | false            | enable prometheus metrics                                                                                                      |
 | PROMETHEUS_PORT            | -prometheus-port            | int    | 9559             | prometheus metrics port                                                                                                        |
 | TO_DISCORD_BUFFER          | -to-discord-buffer          | int    | 50               | jitter buffer from Mumble to Discord to absorb timing issues related to network, OS and hardware quality. (Increments of 10ms) |
