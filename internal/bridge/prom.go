@@ -55,16 +55,16 @@ var (
 		Help: "The buffer size for packets to Mumble",
 	})
 
-	// promToMumbleDropped is kept for backward compatibility with existing dashboards.
-	// promMumbleSendTimeouts tracks the same timeout events with clearer naming.
+	// promToMumbleDropped counts packets dropped when sending to Mumble times out.
+	// Incremented in both discord_duplex (Discord-to-Mumble) and mumble_duplex (Mumble send timeout).
 	promToMumbleDropped = promauto.NewCounter(prometheus.CounterOpts{
 		Name: "mdb_to_mumble_dropped",
-		Help: "The number of packets timeouts to mumble",
+		Help: "Number of packets dropped due to send timeout on the Mumble path",
 	})
 
 	promMumbleSendTimeouts = promauto.NewCounter(prometheus.CounterOpts{
 		Name: "mdb_mumble_send_timeouts_total",
-		Help: "Number of timeouts when sending to gumble channel (packets dropped)",
+		Help: "Number of send timeouts on the Mumble audio channel (packets dropped)",
 	})
 
 	promMumbleArraySize = promauto.NewGauge(prometheus.GaugeOpts{
