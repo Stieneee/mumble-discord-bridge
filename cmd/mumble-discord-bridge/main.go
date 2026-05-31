@@ -12,6 +12,7 @@ import (
 	"github.com/joho/godotenv"
 	"github.com/stieneee/mumble-discord-bridge/internal/bridge"
 	"github.com/stieneee/mumble-discord-bridge/pkg/bridgelib"
+	"github.com/stieneee/mumble-discord-bridge/pkg/logger"
 )
 
 var (
@@ -54,6 +55,7 @@ func main() {
 	discordCID := flag.String("discord-cid", lookupEnvOrString("DISCORD_CID", ""), "DISCORD_CID, discord cid, required")
 	discordSendBuffer := flag.Int("to-discord-buffer", lookupEnvOrInt("TO_DISCORD_BUFFER", 50), "TO_DISCORD_BUFFER, Jitter buffer from Mumble to Discord to absorb timing issues related to network, OS and hardware quality, increments of 10ms")
 	discordTextMode := flag.String("discord-text-mode", lookupEnvOrString("DISCORD_TEXT_MODE", "channel"), "DISCORD_TEXT_MODE, [channel, user, disabled] determine where discord text messages are sent")
+	debugLevel := flag.Int("debug-level", lookupEnvOrInt("DEBUG_LEVEL", 3), "DEBUG_LEVEL, [0=error, 1=warn, 2=info, 3=debug] set the minimum log level")
 	chatBridge := flag.Bool("chat-bridge", lookupEnvOrBool("CHAT_BRIDGE", false), "CHAT_BRIDGE, enable chat bridge")
 	command := flag.String("command", lookupEnvOrString("COMMAND", "mumble-discord"), "COMMAND, command phrase '!mumble-discord help' to control the bridge via text channels")
 	commandMode := flag.String("command-mode", lookupEnvOrString("COMMAND_MODE", "both"), "COMMAND_MODE, [both, mumble, discord, none] determine which side of the bridge will respond to commands")
@@ -65,6 +67,10 @@ func main() {
 	cpuprofile := flag.String("cpuprofile", "", "write cpu profile to `file`")
 
 	flag.Parse()
+
+	// Set global log level based on DEBUG_LEVEL config
+	logger.SetGlobalLevel(*debugLevel)
+
 	log.Printf("app.config %v\n", getConfig(flag.CommandLine))
 
 	if *mumbleAddr == "" {
