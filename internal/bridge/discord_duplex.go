@@ -2,9 +2,7 @@ package bridge
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"log"
 	"strings"
 	"sync"
 	"time"
@@ -71,17 +69,14 @@ func NewDiscordDuplex(b *BridgeState) *DiscordDuplex {
 	}
 }
 
-// OnError gets called by dgvoice when an error is encountered.
-// By default logs to STDERR
-var OnError = func(str string, err error) {
-	// OnError function still uses log for compatibility
-	// but individual bridge instances will use their own logger
-	prefix := "dgVoice: " + str
-
+// onError logs an error using the bridge's structured logger instead of the
+// standard log package, keeping diagnostic output consistent with the rest of
+// the bridge package.
+func (dd *DiscordDuplex) onError(str string, err error) {
 	if err != nil {
-		log.Println(prefix + ": " + err.Error())
+		dd.Bridge.Logger.Error("DISCORD_DUPLEX", fmt.Sprintf("%s: %v", str, err))
 	} else {
-		log.Println(prefix)
+		dd.Bridge.Logger.Error("DISCORD_DUPLEX", str)
 	}
 }
 
@@ -96,7 +91,7 @@ func (dd *DiscordDuplex) toDiscordOpusMixer(ctx context.Context, opusBuffer chan
 
 	opusEncoder, err := gopus.NewEncoder(frameRate, channels, gopus.Audio)
 	if err != nil {
-		OnError("NewEncoder Error", err)
+		dd.onError("NewEncoder Error", err)
 		panic(err)
 	}
 
@@ -134,7 +129,7 @@ func (dd *DiscordDuplex) toDiscordOpusMixer(ctx context.Context, opusBuffer chan
 			pendingChunk = nil
 
 			if err != nil {
-				OnError("Encoding Error", err)
+				dd.onError("Encoding Error", err)
 
 				continue
 			}
@@ -153,7 +148,7 @@ func (dd *DiscordDuplex) toDiscordOpusMixer(ctx context.Context, opusBuffer chan
 				pendingChunk = nil
 
 				if err != nil {
-					OnError("Encoding Error", err)
+					dd.onError("Encoding Error", err)
 				} else {
 					select {
 					case opusBuffer <- opus:
@@ -417,7 +412,7 @@ func (dd *DiscordDuplex) processReceivedPacket(p *discord.AudioPacket) {
 		var err error
 		newStream.decoder, err = gopus.NewDecoder(48000, 1) // Decode into mono
 		if err != nil {
-			OnError("error creating opus decoder", err)
+			dd.onError("error creating opus decoder", err)
 			dd.discordMutex.Unlock()
 
 			return

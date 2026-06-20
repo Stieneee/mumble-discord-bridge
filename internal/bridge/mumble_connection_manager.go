@@ -323,6 +323,36 @@ func (m *MumbleConnectionManager) GetChannelUsers() []*gumble.User {
 	return usersCopy
 }
 
+// The following EventListener methods are no-ops — the connection manager only
+// needs Connect/Disconnect events. The stubs satisfy the gumble.EventListener interface.
+
+// OnTextMessage is a no-op (text bridging handled by DiscordListener).
+func (m *MumbleConnectionManager) OnTextMessage(_ *gumble.TextMessageEvent) {}
+
+// OnUserChange is a no-op (user tracking handled elsewhere).
+func (m *MumbleConnectionManager) OnUserChange(_ *gumble.UserChangeEvent) {}
+
+// OnChannelChange is a no-op.
+func (m *MumbleConnectionManager) OnChannelChange(_ *gumble.ChannelChangeEvent) {}
+
+// OnPermissionDenied is a no-op.
+func (m *MumbleConnectionManager) OnPermissionDenied(_ *gumble.PermissionDeniedEvent) {}
+
+// OnUserList is a no-op.
+func (m *MumbleConnectionManager) OnUserList(_ *gumble.UserListEvent) {}
+
+// OnACL is a no-op.
+func (m *MumbleConnectionManager) OnACL(_ *gumble.ACLEvent) {}
+
+// OnBanList is a no-op.
+func (m *MumbleConnectionManager) OnBanList(_ *gumble.BanListEvent) {}
+
+// OnContextActionChange is a no-op.
+func (m *MumbleConnectionManager) OnContextActionChange(_ *gumble.ContextActionChangeEvent) {}
+
+// OnServerConfig is a no-op.
+func (m *MumbleConnectionManager) OnServerConfig(_ *gumble.ServerConfigEvent) {}
+
 // Note: Audio listeners should be attached to the config before connection,
 // not to the connection manager, to ensure they're active when client connects
 
