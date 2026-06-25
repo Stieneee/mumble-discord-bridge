@@ -52,7 +52,7 @@ type ConnectionEvent struct {
 	Type     ConnectionEventType
 	Status   ConnectionStatus
 	Error    error
-	Metadata map[string]interface{}
+	Metadata map[string]any
 }
 
 // ConnectionEventType represents the type of connection event
