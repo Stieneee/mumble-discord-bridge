@@ -2,8 +2,11 @@ package bridge
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
+	"net"
+	"strings"
 	"sync"
 	"time"
 
@@ -177,6 +180,7 @@ func (dd *DiscordDuplex) toDiscordSender(ctx context.Context, opusBuffer <-chan 
 
 	streaming := false
 	lastReady := true
+	closedNotified := false // tracks whether we've logged the closed-connection message
 	var speakingStart time.Time
 	var noDataTicks int // Consecutive sender ticks with no data from buffer
 
@@ -204,10 +208,36 @@ func (dd *DiscordDuplex) toDiscordSender(ctx context.Context, opusBuffer <-chan 
 		if !lastReady {
 			dd.Bridge.Logger.Info("DISCORD_SEND", "Discord ready to send opus packets")
 			lastReady = true
+			closedNotified = false // reset for next connection cycle
 		}
 
 		err := voiceConn.SendOpus(opus)
 		if err != nil {
+			// DAVE E2EE: when a user leaves, the key ratchet is invalidated.
+			// Sink packets and suppress log spam until the ratchet is re-established.
+			if strings.Contains(err.Error(), "missing key ratchet") {
+				if lastReady {
+					dd.Bridge.Logger.Warn("DISCORD_SEND", "DAVE key ratchet missing, sinking packets until re-established")
+					lastReady = false
+				}
+				promPacketsSunk.WithLabelValues("discord", "outbound").Inc()
+				return
+			}
+			// net.ErrClosed means the underlying UDP socket is closed (e.g.
+			// voice server dropped the connection). Sink packets silently and
+			// wait for the connection manager to provide a new connection.
+			// Without this, every 20ms tick produces another debug log line,
+			// flooding logs during reconnect (issue #52).
+			if errors.Is(err, net.ErrClosed) {
+				if !closedNotified {
+					dd.Bridge.Logger.Debug("DISCORD_SEND", "Voice connection closed, sinking packets until reconnection")
+					closedNotified = true
+				}
+				promPacketsSunk.WithLabelValues("discord", "outbound").Inc()
+
+				return
+			}
+
 			dd.Bridge.Logger.Debug("DISCORD_SEND", fmt.Sprintf("Error sending opus: %v", err))
 
 			return
@@ -314,6 +344,7 @@ func (dd *DiscordDuplex) toDiscordSender(ctx context.Context, opusBuffer <-chan 
 // discordReceivePCM receives opus packets from Discord, decodes to PCM.
 func (dd *DiscordDuplex) discordReceivePCM(ctx context.Context) {
 	lastReady := true
+	closedNotified := false // tracks whether we've logged the closed-connection message
 
 	for {
 		select {
@@ -341,6 +372,7 @@ func (dd *DiscordDuplex) discordReceivePCM(ctx context.Context) {
 				dd.Bridge.Logger.Debug("DISCORD_RECEIVE", "Discord connection not ready for receiving")
 				lastReady = false
 			}
+			closedNotified = false // reset for next connection
 
 			select {
 			case <-ctx.Done():
@@ -376,6 +408,27 @@ func (dd *DiscordDuplex) discordReceivePCM(ctx context.Context) {
 			return
 		case res := <-ch:
 			if res.err != nil {
+				if errors.Is(res.err, net.ErrClosed) {
+					// The underlying UDP socket is closed (e.g. voice server
+					// dropped the connection). Stop calling ReceiveOpus on
+					// this dead connection and back off until the connection
+					// manager provides a new one. Without this, ReceiveOpus
+					// returns immediately with "use of closed network connection"
+					// on every iteration, creating a tight busy-loop that
+					// floods logs (issue #52).
+					if !closedNotified {
+						dd.Bridge.Logger.Debug("DISCORD_RECEIVE", "Voice connection closed, waiting for reconnection")
+						closedNotified = true
+					}
+
+					select {
+					case <-ctx.Done():
+						return
+					case <-time.After(connectionCheckInterval * time.Millisecond):
+					}
+
+					continue
+				}
 				dd.Bridge.Logger.Debug("DISCORD_RECEIVE", fmt.Sprintf("Receive error: %v", res.err))
 
 				continue
