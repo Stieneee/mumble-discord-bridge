@@ -44,11 +44,33 @@ The bridge can be run with the follow modes:
        The bot starts up but does not connect immediately. It will join the voice channels when issued the link command via chat and will leave with the unlink command
    constant (default)
        The bridge starts up and immediately connects to both Discord and Mumble voice channels. It can not be controlled in this mode and quits when the program is stopped
+   mumble
+       The bridge starts up but does not connect audio channels immediately. It will join the voice channels when there's at least one person on the Mumble side, and leave when no one is on either end. Similar to auto but only triggers on Mumble presence.
 ```
 
-In "auto" or "manual" modes, the bridge can be controlled in Discord with the following commands.
+In "auto" or "manual" modes, the bridge can be controlled using slash commands or text commands.
 
-**Important:** Discord commands only work when sent from the configured channel (DISCORD_CID). Commands from other channels are ignored. This ensures proper isolation in multi-bridge deployments.
+**Important:** Discord text commands and the `/connect` slash command only work when sent from the configured channel (DISCORD_CID). The `/disconnect`, `/mode`, and `/users` slash commands work from any channel in the guild. This ensures proper isolation in multi-bridge deployments.
+
+### Slash Commands
+
+```text
+/connect
+ Join Discord voice and Mumble. Requires the user to be in the configured voice channel (DISCORD_CID).
+
+/disconnect
+ Leave Discord voice and Mumble.
+
+/mode [auto|manual|constant]
+ View or change the bridge mode.
+
+/users
+ List all connected users in both Mumble and Discord.
+```
+
+### Text Commands
+
+Text commands work in the configured Discord channel and in Mumble:
 
 ```text
 !COMMAND link
@@ -157,10 +179,10 @@ Replace the environment variables with variable for the desired mumble server, d
 
 ```bash
 # Sample for testing
-docker docker run -e MUMBLE_ADDRESS=example.com -e MUMBLE_PASSWORD=optional -e DISCORD_TOKEN=TOKEN -e DISCORD_GID=GID -e DISCORD_CID=CID stieneee/mumble-discord-bridge
+docker run -e MUMBLE_ADDRESS=example.com -e MUMBLE_PASSWORD=optional -e DISCORD_TOKEN=TOKEN -e DISCORD_GID=GID -e DISCORD_CID=CID stieneee/mumble-discord-bridge
 
 # Run as a service
-docker docker run -e MUMBLE_ADDRESS=example.com -e MUMBLE_PASSWORD=optional -e DISCORD_TOKEN=TOKEN -e DISCORD_GID=GID -e DISCORD_CID=CID --restart=always --name=mumble-discord-bridge -d stieneee/mumble-discord-bridge
+docker run -e MUMBLE_ADDRESS=example.com -e MUMBLE_PASSWORD=optional -e DISCORD_TOKEN=TOKEN -e DISCORD_GID=GID -e DISCORD_CID=CID --restart=always --name=mumble-discord-bridge -d stieneee/mumble-discord-bridge
 
 # Stop the service
 docker stop mumble-discord-bridge && docker rm mumble-discord-bridge
@@ -177,12 +199,12 @@ Note boolean values are flags when set via command line, example `-mumble-insecu
 | CHAT_BRIDGE                | -chat-bridge                | flag   | false            | enable text chat bridge                                                                                                        |
 | COMMAND                    | -command                    | string | "mumble-discord" | command phrase '!mumble-discord help' to control the bridge via text channels                                                  |
 | COMMAND_MODE               | -command-mode               | string | "both"           | [both, mumble, discord, none] determine which side of the bridge will respond to commands                                      |
-| DEBUG_LEVEL                | -debug-level                | int    | 1                | discord debug level                                                                                                            |
+| DEBUG_LEVEL                | -debug-level                | int    | 3                | minimum global log level: 0=error, 1=warn, 2=info, 3=debug                                                                 |
 | DISCORD_CID                | -discord-cid                | string | ""               | discord cid, required                                                                                                          |
-| DISCORD_TEXT_MODE          | -discord-text-mode          | string | "channel"        | disable sending direct messages to discord                                                                                     |
+| DISCORD_TEXT_MODE          | -discord-text-mode          | string | "channel"        | [channel, user, disabled] determine where discord text messages are sent                                                       |
 | DISCORD_GID                | -discord-gid                | string | ""               | discord gid, required                                                                                                          |
 | DISCORD_TOKEN              | -discord-token              | string | ""               | discord bot token, required                                                                                                    |
-| MODE                       | -mode                       | string | "constant"       | [constant, manual, auto] determine which mode the bridge starts in                                                             |
+| MODE                       | -mode                       | string | "constant"       | [constant, manual, auto, mumble] determine which mode the bridge starts in                                                      |
 | MUMBLE_ADDRESS             | -mumble-address             | string | ""               | mumble server address, example example.com, required                                                                           |
 | MUMBLE_CERTIFICATE         | -mumble-certificate         | string | ""               | client certificate to use when connecting to the Mumble server                                                                 |
 | MUMBLE_CHANNEL             | -mumble-channel             | string | ""               | mumble channel to start in, using '/' to separate nested channels, optional                                                    |
@@ -192,6 +214,7 @@ Note boolean values are flags when set via command line, example `-mumble-insecu
 | MUMBLE_PORT                | -mumble-port                | int    | 64738            | mumble port                                                                                                                    |
 | MUMBLE_USERNAME            | -mumble-username            | string | "Discord"        | mumble username                                                                                                                |
 | MUMBLE_BOT                 | -mumble-bot                 | flag   | false            | exclude bot from mumble user count, optional, requires mumble v1.5 or later                                                    |
+| NICE                       | -nice                       | flag   | false            | automatically try to 'nice' the process for better scheduling |
 | PROMETHEUS_ENABLE          | -prometheus-enable          | flag   | false            | enable prometheus metrics                                                                                                      |
 | PROMETHEUS_PORT            | -prometheus-port            | int    | 9559             | prometheus metrics port                                                                                                        |
 | TO_DISCORD_BUFFER          | -to-discord-buffer          | int    | 50               | jitter buffer from Mumble to Discord to absorb timing issues related to network, OS and hardware quality. (Increments of 10ms) |

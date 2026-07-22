@@ -263,7 +263,7 @@ func (b *BridgeInstance) Start() error {
 
 	// Emit bridge starting event
 	if b.eventDispatcher != nil {
-		b.eventDispatcher.EmitEvent(EventBridgeStarting, map[string]interface{}{
+		b.eventDispatcher.EmitEvent(EventBridgeStarting, map[string]any{
 			"discord_gid":    b.config.DiscordGID,
 			"discord_cid":    b.config.DiscordCID,
 			"mumble_address": b.config.MumbleAddress,
@@ -379,7 +379,7 @@ func (b *BridgeInstance) Start() error {
 
 	// Emit bridge started event
 	if b.eventDispatcher != nil {
-		b.eventDispatcher.EmitEvent(EventBridgeStarted, map[string]interface{}{
+		b.eventDispatcher.EmitEvent(EventBridgeStarted, map[string]any{
 			"mode": b.config.Mode,
 		}, nil)
 	}
@@ -405,7 +405,7 @@ func (b *BridgeInstance) Stop() error {
 
 	// Emit bridge stopping event
 	if b.eventDispatcher != nil {
-		b.eventDispatcher.EmitEventSync(EventBridgeStopping, map[string]interface{}{}, nil)
+		b.eventDispatcher.EmitEventSync(EventBridgeStopping, map[string]any{}, nil)
 	}
 
 	b.logger.Debug("BRIDGE_STOP", "Canceling context")
@@ -454,7 +454,7 @@ func (b *BridgeInstance) Stop() error {
 
 	// Emit bridge stopped event and stop event dispatcher
 	if b.eventDispatcher != nil {
-		b.eventDispatcher.EmitEventSync(EventBridgeStopped, map[string]interface{}{}, nil)
+		b.eventDispatcher.EmitEventSync(EventBridgeStopped, map[string]any{}, nil)
 		b.eventDispatcher.Stop()
 		b.logger.Debug("BRIDGE_STOP", "Event dispatcher stopped")
 	}
@@ -466,18 +466,18 @@ func (b *BridgeInstance) Stop() error {
 
 // BridgeStatus represents comprehensive bridge status information
 type BridgeStatus struct {
-	ID               string                 `json:"id"`
-	State            string                 `json:"state"`
-	DiscordConnected bool                   `json:"discord_connected"`
-	MumbleConnected  bool                   `json:"mumble_connected"`
-	DiscordUsers     int                    `json:"discord_users"`
-	MumbleUsers      int                    `json:"mumble_users"`
-	Uptime           time.Duration          `json:"uptime"`
-	Config           map[string]interface{} `json:"config"`
+	ID               string         `json:"id"`
+	State            string         `json:"state"`
+	DiscordConnected bool           `json:"discord_connected"`
+	MumbleConnected  bool           `json:"mumble_connected"`
+	DiscordUsers     int            `json:"discord_users"`
+	MumbleUsers      int            `json:"mumble_users"`
+	Uptime           time.Duration  `json:"uptime"`
+	Config           map[string]any `json:"config"`
 }
 
 // GetStatus returns the basic status of the bridge (legacy method)
-func (b *BridgeInstance) GetStatus() map[string]interface{} {
+func (b *BridgeInstance) GetStatus() map[string]any {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -500,7 +500,7 @@ func (b *BridgeInstance) GetStatus() map[string]interface{} {
 		uptime = time.Since(startTime).Milliseconds()
 	}
 
-	return map[string]interface{}{
+	return map[string]any{
 		"id":            b.ID,
 		"connected":     connected,
 		"mode":          b.State.Mode.String(),
@@ -522,7 +522,7 @@ func (b *BridgeInstance) GetDetailedStatus() BridgeStatus {
 
 	status := BridgeStatus{
 		ID:     b.ID,
-		Config: make(map[string]interface{}),
+		Config: make(map[string]any),
 	}
 
 	// Get all state values with proper lock ordering: BridgeMutex -> MumbleUsersMutex -> DiscordUsersMutex
@@ -643,7 +643,7 @@ func (b *BridgeInstance) EmitConnectionEvent(service string, eventTypeInt int, c
 	}
 
 	// Emit event
-	b.eventDispatcher.EmitEvent(eventType, map[string]interface{}{
+	b.eventDispatcher.EmitEvent(eventType, map[string]any{
 		"service":   service,
 		"connected": connected,
 	}, err)
@@ -681,7 +681,7 @@ func (b *BridgeInstance) EmitUserEvent(service string, eventTypeInt int, usernam
 	}
 
 	// Emit event
-	b.eventDispatcher.EmitEvent(eventType, map[string]interface{}{
+	b.eventDispatcher.EmitEvent(eventType, map[string]any{
 		"service":  service,
 		"username": username,
 	}, err)

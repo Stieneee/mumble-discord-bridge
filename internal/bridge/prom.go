@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/stieneee/mumble-discord-bridge/pkg/logger"
+
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -55,16 +57,16 @@ var (
 		Help: "The buffer size for packets to Mumble",
 	})
 
-	// promToMumbleDropped is kept for backward compatibility with existing dashboards.
-	// promMumbleSendTimeouts tracks the same timeout events with clearer naming.
+	// promToMumbleDropped counts packets dropped when sending to Mumble times out.
+	// Incremented in both discord_duplex (Discord-to-Mumble) and mumble_duplex (Mumble send timeout).
 	promToMumbleDropped = promauto.NewCounter(prometheus.CounterOpts{
 		Name: "mdb_to_mumble_dropped",
-		Help: "The number of packets timeouts to mumble",
+		Help: "Number of packets dropped due to send timeout on the Mumble path",
 	})
 
 	promMumbleSendTimeouts = promauto.NewCounter(prometheus.CounterOpts{
 		Name: "mdb_mumble_send_timeouts_total",
-		Help: "Number of timeouts when sending to gumble channel (packets dropped)",
+		Help: "Number of send timeouts on the Mumble audio channel (packets dropped)",
 	})
 
 	promMumbleArraySize = promauto.NewGauge(prometheus.GaugeOpts{
@@ -197,15 +199,20 @@ var (
 	}, []string{"service", "direction"})
 )
 
+// writeResponse writes a status code and body, logging any write error.
+func writeResponse(w http.ResponseWriter, status int, body string, log logger.Logger) {
+	w.WriteHeader(status)
+	if _, err := w.Write([]byte(body)); err != nil {
+		log.Error("METRICS_SERVER", fmt.Sprintf("Error writing response: %v", err))
+	}
+}
+
 // StartPromServer starts the Prometheus metrics HTTP server.
 func StartPromServer(port int, b *BridgeState) {
 	b.Logger.Info("METRICS_SERVER", "Starting Metrics Server")
 	http.Handle("/metrics", promhttp.Handler())
 	http.HandleFunc("/live", func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		if _, err := w.Write([]byte("OK")); err != nil {
-			b.Logger.Error("METRICS_SERVER", fmt.Sprintf("Error writing response: %v", err))
-		}
+		writeResponse(w, http.StatusOK, "OK", b.Logger)
 	})
 	http.HandleFunc("/ready", func(w http.ResponseWriter, _ *http.Request) {
 		b.BridgeMutex.Lock()
@@ -213,15 +220,9 @@ func StartPromServer(port int, b *BridgeState) {
 		b.BridgeMutex.Unlock()
 
 		if connected {
-			w.WriteHeader(http.StatusOK)
-			if _, err := w.Write([]byte("OK")); err != nil {
-				b.Logger.Error("METRICS_SERVER", fmt.Sprintf("Error writing response: %v", err))
-			}
+			writeResponse(w, http.StatusOK, "OK", b.Logger)
 		} else {
-			w.WriteHeader(http.StatusServiceUnavailable)
-			if _, err := w.Write([]byte("Disconnected")); err != nil {
-				b.Logger.Error("METRICS_SERVER", fmt.Sprintf("Error writing response: %v", err))
-			}
+			writeResponse(w, http.StatusServiceUnavailable, "Disconnected", b.Logger)
 		}
 	})
 	if err := http.ListenAndServe(":"+strconv.Itoa(port), nil); err != nil {

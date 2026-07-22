@@ -72,7 +72,7 @@ func TestEventDispatcher_StopDrainsEvents(t *testing.T) {
 	// Queue 100 events
 	eventCount := 100
 	wg.Add(eventCount)
-	for i := 0; i < eventCount; i++ {
+	for range eventCount {
 		ed.EmitEvent(EventDiscordConnected, nil, nil)
 	}
 
@@ -106,7 +106,7 @@ func TestEventDispatcher_RegisterDuringStop(_ *testing.T) {
 	// Start concurrent registrations
 	done := make(chan struct{})
 	go func() {
-		for i := 0; i < 100; i++ {
+		for i := range 100 {
 			ed.RegisterHandler(BridgeEventType(i%20), func(_ BridgeEvent) {})
 			ed.RegisterGlobalHandler(func(_ BridgeEvent) {})
 		}
@@ -145,7 +145,7 @@ func TestEventDispatcher_HighThroughput(t *testing.T) {
 	// Send 1000 events rapidly
 	eventCount := 1000
 	wg.Add(eventCount)
-	for i := 0; i < eventCount; i++ {
+	for range eventCount {
 		ed.EmitEvent(EventBridgeStarted, nil, nil)
 	}
 
@@ -262,7 +262,7 @@ func TestEventDispatcher_ConcurrentEmitAndStop(_ *testing.T) {
 	// Start emitting in background
 	done := make(chan struct{})
 	go func() {
-		for i := 0; i < 1000; i++ {
+		for range 1000 {
 			ed.EmitEvent(EventDiscordConnected, nil, nil)
 		}
 		close(done)
@@ -344,7 +344,7 @@ func TestEventDispatcher_EventData(t *testing.T) {
 
 	ed.Start()
 
-	testData := map[string]interface{}{
+	testData := map[string]any{
 		"key1": "value1",
 		"key2": 42,
 	}
@@ -380,7 +380,7 @@ func TestEventDispatcher_DropOldest(_ *testing.T) {
 	ed.Start()
 
 	// Emit many events quickly to fill buffer
-	for i := 0; i < 100; i++ {
+	for range 100 {
 		ed.EmitEvent(EventDiscordConnected, nil, nil)
 	}
 
@@ -405,7 +405,7 @@ func TestEventDispatcher_DropOldest(_ *testing.T) {
 func TestEventDispatcher_StartStopCycle(t *testing.T) {
 	logger := &MockTestLogger{}
 
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		ed := NewEventDispatcher("test-bridge", 100, logger)
 
 		var called int32
@@ -457,7 +457,7 @@ func TestEventDispatcher_ConcurrentAccess(_ *testing.T) {
 	var wg sync.WaitGroup
 
 	// Concurrent registrations
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
@@ -467,7 +467,7 @@ func TestEventDispatcher_ConcurrentAccess(_ *testing.T) {
 	}
 
 	// Concurrent emissions
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
@@ -476,7 +476,7 @@ func TestEventDispatcher_ConcurrentAccess(_ *testing.T) {
 	}
 
 	// Concurrent reads
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()

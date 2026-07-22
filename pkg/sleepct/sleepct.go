@@ -56,17 +56,14 @@ func (s *SleepCT) SleepNextTarget(ctx context.Context, pause bool) int64 {
 	s.wake = time.Now()
 	s.drift = s.wake.Sub(s.t).Microseconds()
 
-	// fmt.Println(s.t.UnixMilli(), d.Milliseconds(), wake.UnixMilli(), drift, pause, len(s.resume))
-
 	// external pause control
 	if pause {
 		// don't pause if the notification channel has something
 		if len(s.resume) == 0 {
-			// fmt.Println("pause")
 			select {
 			case <-s.resume:
 			case <-ctx.Done():
-				// fmt.Println("sleepct ctx exit")
+
 			}
 			// if we did pause set the last sleep target to now
 			s.t = time.Now()

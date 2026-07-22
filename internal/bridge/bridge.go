@@ -95,7 +95,7 @@ type BridgeConfig struct { //nolint:revive // API consistency: keeping Bridge pr
 }
 
 // BridgeState manages dynamic information about the bridge during runtime.
-//
+
 // CONCURRENCY NOTES:
 //   - BridgeMutex protects: Connected, DiscordConnected, MumbleConnected, Mode,
 //     DiscordClient, StartTime
@@ -212,6 +212,24 @@ func (b *BridgeState) notifyMetricsChange() {
 		// Run callback in a goroutine to avoid blocking the event handler
 		go b.MetricsChangeCallback()
 	}
+}
+
+// lookupDiscordUser fetches a Discord user by ID and creates a DM channel.
+// Returns the username and DM channel ID. DM creation failure is logged but not fatal (dmID will be empty).
+// A getUser failure is logged and returns the error.
+func (b *BridgeState) lookupDiscordUser(userID, location string) (username, dmID string, err error) {
+	u, err := b.DiscordClient.GetUser(userID)
+	if err != nil {
+		b.Logger.Error(location, fmt.Sprintf("Error looking up username for %s: %v", userID, err))
+		return "", "", err
+	}
+
+	dmID, dmErr := b.DiscordClient.CreateDM(u.ID)
+	if dmErr != nil {
+		b.Logger.Error(location, fmt.Sprintf("Error creating DM channel for %s: %v", u.Username, dmErr))
+	}
+
+	return u.Username, dmID, nil
 }
 
 // EmitConnectionEvent implements BridgeEventEmitter interface
@@ -331,18 +349,10 @@ func (b *BridgeState) startConnectionManagers() error {
 	}
 
 	// Start connection event monitoring
-	b.connectionWg.Add(1)
-	go func() {
-		defer b.connectionWg.Done()
-		b.monitorConnectionEvents()
-	}()
+	b.connectionWg.Go(b.monitorConnectionEvents)
 
 	// Start metrics updater for connection uptimes
-	b.connectionWg.Add(1)
-	go func() {
-		defer b.connectionWg.Done()
-		b.updateConnectionMetrics()
-	}()
+	b.connectionWg.Go(b.updateConnectionMetrics)
 
 	b.Logger.Info("BRIDGE", "Connection managers started successfully")
 
@@ -358,12 +368,10 @@ func (b *BridgeState) monitorConnectionEvents() {
 			b.Logger.Error("BRIDGE", fmt.Sprintf("Connection event monitoring panic recovered: %v", r))
 			// Restart monitoring after a brief delay if context is still active
 			if b.connectionCtx.Err() == nil {
-				b.connectionWg.Add(1)
-				go func() {
-					defer b.connectionWg.Done()
+				b.connectionWg.Go(func() {
 					time.Sleep(5 * time.Second)
 					b.monitorConnectionEvents()
-				}()
+				})
 			}
 		}
 	}()
@@ -758,29 +766,21 @@ func (b *BridgeState) populateExistingDiscordUsers() {
 				continue
 			}
 
-			// Get user information
-			user, err := b.DiscordClient.GetUser(vs.UserID)
+			// Get user info and create DM channel
+			username, dmID, err := b.lookupDiscordUser(vs.UserID, "BRIDGE")
 			if err != nil {
-				b.Logger.Error("BRIDGE", fmt.Sprintf("Error looking up username for %s: %v", vs.UserID, err))
-
 				continue
-			}
-
-			// Create DM channel
-			dmID, err := b.DiscordClient.CreateDM(user.ID)
-			if err != nil {
-				b.Logger.Error("BRIDGE", fmt.Sprintf("Error creating DM channel for %s: %v", user.Username, err))
 			}
 
 			// Store for later addition
 			newUsers = append(newUsers, newUser{
 				userID:   vs.UserID,
-				username: user.Username,
+				username: username,
 				dmID:     dmID,
 			})
 
-			b.Logger.Info("BRIDGE", fmt.Sprintf("Found existing Discord user: %s", user.Username))
-			notifications = append(notifications, user.Username)
+			b.Logger.Info("BRIDGE", fmt.Sprintf("Found existing Discord user: %s", username))
+			notifications = append(notifications, username)
 		}
 	}
 
@@ -993,45 +993,33 @@ func (b *BridgeState) StartBridge() {
 	// Audio routing goroutines
 
 	// Discord receive PCM
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		b.DiscordStream.discordReceivePCM(ctx)
-	}()
+	})
 
 	// From Discord to Mumble (via internal channel)
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		b.DiscordStream.fromDiscordMixer(ctx, toMumbleInternal)
-	}()
+	})
 
 	// Mumble audio sender - sends audio to Mumble channel
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		b.MumbleStream.toMumbleSender(ctx, toMumbleInternal)
-	}()
+	})
 
 	// Mumble to Discord: mixer encodes Opus into jitter buffer, sender paces at 20ms
 	toDiscordOpusBuffer := make(chan []byte, toDiscordJitterBufferSize)
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		b.DiscordStream.toDiscordOpusMixer(ctx, toDiscordOpusBuffer)
-	}()
+	})
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		b.DiscordStream.toDiscordSender(ctx, toDiscordOpusBuffer)
-	}()
+	})
 
 	// Bridge health monitor - checks overall bridge state but doesn't kill on individual connection failures
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		ticker := time.NewTicker(5 * time.Second)
 		defer ticker.Stop()
 
@@ -1058,7 +1046,7 @@ func (b *BridgeState) StartBridge() {
 				return
 			}
 		}
-	}()
+	})
 
 	// Connected will be set to true by updateOverallConnectionState() once both
 	// Discord and Mumble report connected via their connection event handlers.
@@ -1216,24 +1204,18 @@ func (b *BridgeState) PopulateExistingDiscordUsers() {
 	// Pass 2: look up users via API (without lock)
 	count := 0
 	for _, userID := range newUserIDs {
-		u, err := b.DiscordClient.GetUser(userID)
+		username, dmID, err := b.lookupDiscordUser(userID, "BRIDGE")
 		if err != nil {
-			b.Logger.Error("BRIDGE", fmt.Sprintf("Error looking up user %s: %v", userID, err))
-
 			continue
 		}
 
-		b.Logger.Info("BRIDGE", fmt.Sprintf("Found existing Discord user: %s", u.Username))
-		dmID, err := b.DiscordClient.CreateDM(u.ID)
-		if err != nil {
-			b.Logger.Error("BRIDGE", fmt.Sprintf("Error creating DM channel for %s: %v", u.Username, err))
-		}
+		b.Logger.Info("BRIDGE", fmt.Sprintf("Found existing Discord user: %s", username))
 
 		// Pass 3: insert under lock (re-check to avoid race)
 		b.DiscordUsersMutex.Lock()
 		if _, exists := b.DiscordUsers[userID]; !exists {
 			b.DiscordUsers[userID] = DiscordUser{
-				username: u.Username,
+				username: username,
 				seen:     true,
 				dmID:     dmID,
 			}
@@ -1281,16 +1263,12 @@ func (b *BridgeState) refreshDiscordVoiceUsers() {
 	}
 	var newUsers []newUser
 	for _, uid := range newUserIDs {
-		u, err := b.DiscordClient.GetUser(uid)
+		username, dmID, err := b.lookupDiscordUser(uid, "BRIDGE")
 		if err != nil {
 			continue
 		}
-		b.Logger.Info("BRIDGE", fmt.Sprintf("Auto mode detected Discord user: %s", u.Username))
-		dmID, err := b.DiscordClient.CreateDM(u.ID)
-		if err != nil {
-			b.Logger.Error("BRIDGE", fmt.Sprintf("Error creating DM channel for user %s: %v", u.Username, err))
-		}
-		newUsers = append(newUsers, newUser{userID: uid, username: u.Username, dmID: dmID})
+		b.Logger.Info("BRIDGE", fmt.Sprintf("Auto mode detected Discord user: %s", username))
+		newUsers = append(newUsers, newUser{userID: uid, username: username, dmID: dmID})
 	}
 
 	// Pass 3: re-acquire lock to insert.
@@ -1619,9 +1597,7 @@ func (b *BridgeState) StartDiscordPresence() {
 	}
 
 	// Monitor Discord connection events
-	b.connectionWg.Add(1)
-	go func() {
-		defer b.connectionWg.Done()
+	b.connectionWg.Go(func() {
 		for {
 			select {
 			case <-b.connectionCtx.Done():
@@ -1633,14 +1609,10 @@ func (b *BridgeState) StartDiscordPresence() {
 				b.handleDiscordConnectionEvent(event)
 			}
 		}
-	}()
+	})
 
 	// Start metrics updater
-	b.connectionWg.Add(1)
-	go func() {
-		defer b.connectionWg.Done()
-		b.updateConnectionMetrics()
-	}()
+	b.connectionWg.Go(b.updateConnectionMetrics)
 
 	promBridgeStarts.Inc()
 	promBridgeStartTime.SetToCurrentTime()
@@ -1711,38 +1683,28 @@ func (b *BridgeState) startAudioPipeline() {
 	// Audio routing goroutines
 	toMumbleInternal := make(chan gumble.AudioBuffer, 50)
 
-	b.audioWg.Add(1)
-	go func() {
-		defer b.audioWg.Done()
+	b.audioWg.Go(func() {
 		b.DiscordStream.discordReceivePCM(b.audioCtx)
-	}()
+	})
 
-	b.audioWg.Add(1)
-	go func() {
-		defer b.audioWg.Done()
+	b.audioWg.Go(func() {
 		b.DiscordStream.fromDiscordMixer(b.audioCtx, toMumbleInternal)
-	}()
+	})
 
-	b.audioWg.Add(1)
-	go func() {
-		defer b.audioWg.Done()
+	b.audioWg.Go(func() {
 		b.MumbleStream.toMumbleSender(b.audioCtx, toMumbleInternal)
-	}()
+	})
 
 	// Mumble to Discord: mixer encodes Opus into jitter buffer, sender paces at 20ms
 	toDiscordOpusBuffer := make(chan []byte, toDiscordJitterBufferSize)
 
-	b.audioWg.Add(1)
-	go func() {
-		defer b.audioWg.Done()
+	b.audioWg.Go(func() {
 		b.DiscordStream.toDiscordOpusMixer(b.audioCtx, toDiscordOpusBuffer)
-	}()
+	})
 
-	b.audioWg.Add(1)
-	go func() {
-		defer b.audioWg.Done()
+	b.audioWg.Go(func() {
 		b.DiscordStream.toDiscordSender(b.audioCtx, toDiscordOpusBuffer)
-	}()
+	})
 
 	// Close toMumbleInternal after pipeline stops — use a local ref
 	// to avoid racing with a future startAudioPipeline call.
