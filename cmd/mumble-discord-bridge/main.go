@@ -112,6 +112,7 @@ func main() {
 	}
 
 	// Optional CPU Profiling
+	var cpuProf *os.File
 	if *cpuprofile != "" {
 		f, err := os.Create(*cpuprofile)
 		if err != nil {
@@ -123,12 +124,24 @@ func main() {
 			}
 			log.Fatal("could not start CPU profile: ", err)
 		}
+		cpuProf = f
 		defer func() {
-			if err := f.Close(); err != nil {
+			pprof.StopCPUProfile()
+			if err := cpuProf.Close(); err != nil {
 				log.Println("could not close CPU profile: ", err)
 			}
 		}()
-		defer pprof.StopCPUProfile()
+	}
+
+	// stopCPUProfileIfActive is a no-op when CPU profiling was not enabled.
+	// Use before any log.Fatalln that would skip the deferred stop+close above.
+	stopCPUProfileIfActive := func() {
+		if cpuProf != nil {
+			pprof.StopCPUProfile()
+			if err := cpuProf.Close(); err != nil {
+				log.Printf("Error closing CPU profile file: %v", err)
+			}
+		}
 	}
 
 	// Buffer Math
@@ -192,18 +205,14 @@ func main() {
 	// Create shared Discord client
 	discordClient, err := bridgelib.NewSharedDiscordClient(*discordToken, nil)
 	if err != nil {
-		if *cpuprofile != "" {
-			pprof.StopCPUProfile()
-		}
-		log.Fatalln("Failed to create Discord client:", err) //nolint:gocritic // exitAfterDefer: StopCPUProfile is called manually before exit
+		stopCPUProfileIfActive()
+		log.Fatalln("Failed to create Discord client:", err) //nolint:gocritic // exitAfterDefer: CPU profile stop/close is called manually
 	}
 
 	// Connect to Discord
 	err = discordClient.Connect()
 	if err != nil {
-		if *cpuprofile != "" {
-			pprof.StopCPUProfile()
-		}
+		stopCPUProfileIfActive()
 		log.Fatalln("Failed to connect to Discord:", err)
 	}
 	defer func() {
@@ -239,9 +248,7 @@ func main() {
 	// Create and start bridge instance
 	bridgeInstance, err := bridgelib.NewBridgeInstance("default", config, discordClient)
 	if err != nil {
-		if *cpuprofile != "" {
-			pprof.StopCPUProfile()
-		}
+		stopCPUProfileIfActive()
 		log.Fatalln("Failed to create bridge instance:", err)
 	}
 
@@ -255,9 +262,7 @@ func main() {
 
 	// Start the bridge
 	if err := bridgeInstance.Start(); err != nil {
-		if *cpuprofile != "" {
-			pprof.StopCPUProfile()
-		}
+		stopCPUProfileIfActive()
 		log.Fatalln("Failed to start bridge:", err)
 	}
 
