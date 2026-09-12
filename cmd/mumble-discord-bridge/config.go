@@ -50,7 +50,11 @@ func lookupEnvOrBool(key string, defaultVal bool) bool {
 func getConfig(fs *flag.FlagSet) []string {
 	cfg := make([]string, 0, 10)
 	fs.VisitAll(func(f *flag.Flag) {
-		cfg = append(cfg, fmt.Sprintf("%s:%q", f.Name, f.Value.String()))
+		value := f.Value.String()
+		if value != "" && (f.Name == "discord-token" || f.Name == "mumble-password") {
+			value = "[REDACTED]"
+		}
+		cfg = append(cfg, fmt.Sprintf("%s:%q", f.Name, value))
 	})
 
 	return cfg
