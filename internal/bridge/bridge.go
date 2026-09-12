@@ -203,6 +203,7 @@ type BridgeState struct { //nolint:revive // API consistency: keeping Bridge pre
 	BridgeInstance interface {
 		EmitConnectionEvent(service string, eventType int, connected bool, err error)
 		EmitUserEvent(service string, eventType int, username string, err error)
+		EmitPresenceEvent(mumbleUsers, discordUsers []string)
 	}
 }
 
@@ -551,6 +552,11 @@ func (b *BridgeState) sendPresenceAnnouncement() {
 		discordNames = append(discordNames, u.username)
 	}
 	b.DiscordUsersMutex.Unlock()
+
+	// Publish the rosters for consumers that need identity (e.g. multi-bridge's event log).
+	if b.BridgeInstance != nil {
+		b.BridgeInstance.EmitPresenceEvent(mumbleNames, discordNames)
+	}
 
 	b.Logger.Info("BRIDGE", fmt.Sprintf("Sending presence announcement (Mumble users: %d, Discord users: %d)",
 		len(mumbleNames), len(discordNames)))
