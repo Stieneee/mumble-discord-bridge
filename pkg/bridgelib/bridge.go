@@ -687,6 +687,19 @@ func (b *BridgeInstance) EmitUserEvent(service string, eventTypeInt int, usernam
 	}, err)
 }
 
+// EmitPresenceEvent publishes the current user rosters (implements the BridgeInstance
+// interface used by the bridge state). Emitted once per connection from the presence
+// announcement, after the Mumble server has delivered the channel user list.
+func (b *BridgeInstance) EmitPresenceEvent(mumbleUsers, discordUsers []string) {
+	if b.eventDispatcher == nil {
+		return
+	}
+	b.eventDispatcher.EmitEvent(EventPresenceAnnounced, map[string]interface{}{
+		"mumble_users":  mumbleUsers,
+		"discord_users": discordUsers,
+	}, nil)
+}
+
 // Helper function to split the channel string into a slice of strings
 func splitChannel(channel string) []string {
 	if channel == "" {

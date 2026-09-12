@@ -59,6 +59,11 @@ const (
 	EventConfigChanged
 	// EventConfigUpdateRequired indicates configuration needs to be updated.
 	EventConfigUpdateRequired
+
+	// EventPresenceAnnounced carries the user rosters on both sides once the bridge is
+	// connected and has waited for the server to send the channel user list. Data keys:
+	// "mumble_users" and "discord_users", both []string, excluding the bridge's own client.
+	EventPresenceAnnounced
 )
 
 // String returns a string representation of the event type
@@ -106,6 +111,8 @@ func (e BridgeEventType) String() string {
 		return "ConfigChanged"
 	case EventConfigUpdateRequired:
 		return "ConfigUpdateRequired"
+	case EventPresenceAnnounced:
+		return "PresenceAnnounced"
 	default:
 		return "Unknown"
 	}
