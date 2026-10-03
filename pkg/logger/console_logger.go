@@ -8,6 +8,23 @@ import (
 	"github.com/rs/zerolog"
 )
 
+var globalLevel = zerolog.DebugLevel
+
+// SetGlobalLevel sets the minimum log level for all new ConsoleLoggers.
+// Levels: 0=error, 1=warn, 2=info, 3=debug.
+func SetGlobalLevel(level int) {
+	switch {
+	case level <= 0:
+		globalLevel = zerolog.ErrorLevel
+	case level == 1:
+		globalLevel = zerolog.WarnLevel
+	case level == 2:
+		globalLevel = zerolog.InfoLevel
+	default:
+		globalLevel = zerolog.DebugLevel
+	}
+}
+
 // ConsoleLogger is a zerolog-based logger implementation that logs to console
 // This is the default logger implementation for standalone usage
 type ConsoleLogger struct {
@@ -23,7 +40,7 @@ func NewConsoleLogger() Logger {
 		TimeFormat: time.RFC3339,
 	}
 
-	logger := zerolog.New(output).With().Timestamp().Logger()
+	logger := zerolog.New(output).Level(globalLevel).With().Timestamp().Logger()
 
 	return &ConsoleLogger{
 		logger: logger,

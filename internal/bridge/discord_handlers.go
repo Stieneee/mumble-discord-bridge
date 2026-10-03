@@ -36,21 +36,14 @@ func (l *DiscordListener) OnGuildCreate(guild *discord.Guild) {
 				continue
 			}
 
-			u, err := l.Bridge.DiscordClient.GetUser(vs.UserID)
+			username, dmID, err := l.Bridge.lookupDiscordUser(vs.UserID, "DISCORD_HANDLER")
 			if err != nil {
-				l.Bridge.Logger.Error("DISCORD_HANDLER", "Error looking up username")
-
 				continue
-			}
-
-			dmID, err := l.Bridge.DiscordClient.CreateDM(u.ID)
-			if err != nil {
-				l.Bridge.Logger.Error("DISCORD_HANDLER", fmt.Sprintf("Error creating private channel for %s", u.Username))
 			}
 
 			l.Bridge.DiscordUsersMutex.Lock()
 			l.Bridge.DiscordUsers[vs.UserID] = DiscordUser{
-				username: u.Username,
+				username: username,
 				seen:     true,
 				dmID:     dmID,
 			}
@@ -68,7 +61,6 @@ func (l *DiscordListener) OnGuildCreate(guild *discord.Guild) {
 			l.Bridge.BridgeMutex.Unlock()
 
 			if connected && !disableText && mumbleClient != nil {
-				username := u.Username
 				mumbleClient.Do(func() {
 					if mumbleClient.Self != nil && mumbleClient.Self.Channel != nil {
 						mumbleClient.Self.Channel.Send(fmt.Sprintf("%v has joined\n", username), false)
@@ -395,28 +387,22 @@ func (l *DiscordListener) OnVoiceStateUpdate(state *discord.VoiceState) {
 				}
 
 				if _, ok := l.Bridge.DiscordUsers[vs.UserID]; !ok {
-					u, err := l.Bridge.DiscordClient.GetUser(vs.UserID)
+					username, dmID, err := l.Bridge.lookupDiscordUser(vs.UserID, "DISCORD_HANDLER")
 					if err != nil {
-						l.Bridge.Logger.Error("DISCORD_HANDLER", "Error looking up username")
-
 						continue
 					}
 
-					l.Bridge.Logger.Info("DISCORD_HANDLER", fmt.Sprintf("User joined Discord: %s", u.Username))
-					l.Bridge.EmitUserEvent("discord", 0, u.Username, nil)
+					l.Bridge.Logger.Info("DISCORD_HANDLER", fmt.Sprintf("User joined Discord: %s", username))
+					l.Bridge.EmitUserEvent("discord", 0, username, nil)
 
-					dmID, err := l.Bridge.DiscordClient.CreateDM(u.ID)
-					if err != nil {
-						l.Bridge.Logger.Error("DISCORD_HANDLER", fmt.Sprintf("Error creating private channel for %s", u.Username))
-					}
 					l.Bridge.DiscordUsers[vs.UserID] = DiscordUser{
-						username: u.Username,
+						username: username,
 						seen:     true,
 						dmID:     dmID,
 					}
 					usersToAdd = append(usersToAdd, userToAdd{
 						userID:   vs.UserID,
-						username: u.Username,
+						username: username,
 						dmID:     dmID,
 					})
 				} else {
@@ -444,25 +430,21 @@ func (l *DiscordListener) OnVoiceStateUpdate(state *discord.VoiceState) {
 		if state.ChannelID == l.Bridge.DiscordChannelID {
 			// User joined or is in our channel
 			if _, ok := l.Bridge.DiscordUsers[state.UserID]; !ok {
-				u, err := l.Bridge.DiscordClient.GetUser(state.UserID)
+				username, dmID, err := l.Bridge.lookupDiscordUser(state.UserID, "DISCORD_HANDLER")
 				if err != nil {
-					l.Bridge.Logger.Error("DISCORD_HANDLER", "Error looking up username")
+					// lookupDiscordUser already logged the error
 				} else {
-					l.Bridge.Logger.Info("DISCORD_HANDLER", fmt.Sprintf("User joined Discord: %s", u.Username))
-					l.Bridge.EmitUserEvent("discord", 0, u.Username, nil)
+					l.Bridge.Logger.Info("DISCORD_HANDLER", fmt.Sprintf("User joined Discord: %s", username))
+					l.Bridge.EmitUserEvent("discord", 0, username, nil)
 
-					dmID, err := l.Bridge.DiscordClient.CreateDM(u.ID)
-					if err != nil {
-						l.Bridge.Logger.Error("DISCORD_HANDLER", fmt.Sprintf("Error creating private channel for %s", u.Username))
-					}
 					l.Bridge.DiscordUsers[state.UserID] = DiscordUser{
-						username: u.Username,
+						username: username,
 						seen:     true,
 						dmID:     dmID,
 					}
 					usersToAdd = append(usersToAdd, userToAdd{
 						userID:   state.UserID,
-						username: u.Username,
+						username: username,
 						dmID:     dmID,
 					})
 				}

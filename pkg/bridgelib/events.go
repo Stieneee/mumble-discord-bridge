@@ -120,11 +120,11 @@ func (e BridgeEventType) String() string {
 
 // BridgeEvent represents an event that occurred in the bridge
 type BridgeEvent struct {
-	Type      BridgeEventType        `json:"type"`
-	Timestamp time.Time              `json:"timestamp"`
-	BridgeID  string                 `json:"bridge_id"`
-	Data      map[string]interface{} `json:"data"`
-	Error     error                  `json:"error,omitempty"`
+	Type      BridgeEventType `json:"type"`
+	Timestamp time.Time       `json:"timestamp"`
+	BridgeID  string          `json:"bridge_id"`
+	Data      map[string]any  `json:"data"`
+	Error     error           `json:"error,omitempty"`
 }
 
 // BridgeEventHandler defines the signature for event handlers
@@ -193,7 +193,7 @@ func (ed *EventDispatcher) RegisterGlobalHandler(handler BridgeEventHandler) {
 }
 
 // EmitEvent emits an event (non-blocking)
-func (ed *EventDispatcher) EmitEvent(eventType BridgeEventType, data map[string]interface{}, err error) {
+func (ed *EventDispatcher) EmitEvent(eventType BridgeEventType, data map[string]any, err error) {
 	event := BridgeEvent{
 		Type:      eventType,
 		Timestamp: time.Now(),
@@ -234,7 +234,7 @@ func (ed *EventDispatcher) EmitEvent(eventType BridgeEventType, data map[string]
 }
 
 // EmitEventSync emits an event synchronously (blocking until handlers complete)
-func (ed *EventDispatcher) EmitEventSync(eventType BridgeEventType, data map[string]interface{}, err error) {
+func (ed *EventDispatcher) EmitEventSync(eventType BridgeEventType, data map[string]any, err error) {
 	event := BridgeEvent{
 		Type:      eventType,
 		Timestamp: time.Now(),

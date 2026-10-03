@@ -389,18 +389,11 @@ func TestMumble_EventListenerMethods(t *testing.T) {
 
 	manager := NewMumbleConnectionManager("localhost:64738", config, nil, logger, emitter)
 
-	// All these methods should not panic when called
+	// Only OnConnect and OnDisconnect are registered with the gumble client;
+	// the other EventListener methods are not implemented (unused interface stubs)
 	assert.NotPanics(t, func() {
 		manager.OnConnect(&gumble.ConnectEvent{})
-		manager.OnTextMessage(&gumble.TextMessageEvent{})
-		manager.OnUserChange(&gumble.UserChangeEvent{})
-		manager.OnChannelChange(&gumble.ChannelChangeEvent{})
-		manager.OnPermissionDenied(&gumble.PermissionDeniedEvent{})
-		manager.OnUserList(&gumble.UserListEvent{})
-		manager.OnACL(&gumble.ACLEvent{})
-		manager.OnBanList(&gumble.BanListEvent{})
-		manager.OnContextActionChange(&gumble.ContextActionChangeEvent{})
-		manager.OnServerConfig(&gumble.ServerConfigEvent{})
+		manager.OnDisconnect(&gumble.DisconnectEvent{})
 	})
 }
 

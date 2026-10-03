@@ -5,16 +5,6 @@ import (
 	"time"
 )
 
-// write a command handler that accepts a text command and a callback function
-// the command handler should be able to handle the following commands:
-// - help
-// - version
-// - link
-// - unlink
-// - refresh
-// - status
-// - list
-
 // HandleCommand processes bridge commands from users.
 func (b *BridgeState) HandleCommand(msg string, userResponse func(string)) {
 	b.Logger.Debug("COMMAND_HANDLER", "Handling command: "+msg)
@@ -67,8 +57,6 @@ func (b *BridgeState) HandleCommand(msg string, userResponse func(string)) {
 	}
 
 	if strings.HasPrefix(msg, prefix+" list") {
-		// create a string of the connected users from the map
-		// and send it to the user
 		var discordUsers []string
 		b.DiscordUsersMutex.Lock()
 		for user := range b.DiscordUsers {
@@ -76,7 +64,6 @@ func (b *BridgeState) HandleCommand(msg string, userResponse func(string)) {
 		}
 		b.DiscordUsersMutex.Unlock()
 
-		// mumble users
 		b.MumbleUsersMutex.Lock()
 		var mumbleUsers []string
 		for user := range b.MumbleUsers {

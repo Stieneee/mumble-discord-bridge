@@ -49,10 +49,9 @@ func (c ConnectionStatus) String() string {
 
 // ConnectionEvent represents a connection state change event
 type ConnectionEvent struct {
-	Type     ConnectionEventType
-	Status   ConnectionStatus
-	Error    error
-	Metadata map[string]interface{}
+	Type   ConnectionEventType
+	Status ConnectionStatus
+	Error  error
 }
 
 // ConnectionEventType represents the type of connection event
@@ -296,27 +295,5 @@ func (b *BaseConnectionManager) statusToEventType(status ConnectionStatus) Conne
 		return EventFailed
 	default:
 		return EventDisconnected
-	}
-}
-
-// Note: DiscordVoiceConnectionManager and MumbleConnectionManager are defined in their respective files
-
-// ConnectionManagerConfig holds configuration for connection managers
-type ConnectionManagerConfig struct {
-	MaxRetries          int           `json:"maxRetries"`
-	BaseRetryDelay      time.Duration `json:"baseRetryDelay"`
-	MaxRetryDelay       time.Duration `json:"maxRetryDelay"`
-	RetryMultiplier     float64       `json:"retryMultiplier"`
-	HealthCheckInterval time.Duration `json:"healthCheckInterval"`
-}
-
-// DefaultConnectionManagerConfig returns default configuration
-func DefaultConnectionManagerConfig() *ConnectionManagerConfig {
-	return &ConnectionManagerConfig{
-		MaxRetries:          5,
-		BaseRetryDelay:      time.Second * 2,
-		MaxRetryDelay:       time.Minute * 2,
-		RetryMultiplier:     2.0,
-		HealthCheckInterval: time.Second * 30,
 	}
 }

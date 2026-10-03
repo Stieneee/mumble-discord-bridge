@@ -12,6 +12,7 @@ import (
 	"github.com/joho/godotenv"
 	"github.com/stieneee/mumble-discord-bridge/internal/bridge"
 	"github.com/stieneee/mumble-discord-bridge/pkg/bridgelib"
+	"github.com/stieneee/mumble-discord-bridge/pkg/logger"
 )
 
 var (
@@ -54,6 +55,7 @@ func main() {
 	discordCID := flag.String("discord-cid", lookupEnvOrString("DISCORD_CID", ""), "DISCORD_CID, discord cid, required")
 	discordSendBuffer := flag.Int("to-discord-buffer", lookupEnvOrInt("TO_DISCORD_BUFFER", 50), "TO_DISCORD_BUFFER, Jitter buffer from Mumble to Discord to absorb timing issues related to network, OS and hardware quality, increments of 10ms")
 	discordTextMode := flag.String("discord-text-mode", lookupEnvOrString("DISCORD_TEXT_MODE", "channel"), "DISCORD_TEXT_MODE, [channel, user, disabled] determine where discord text messages are sent")
+	debugLevel := flag.Int("debug-level", lookupEnvOrInt("DEBUG_LEVEL", 3), "DEBUG_LEVEL, [0=error, 1=warn, 2=info, 3=debug] set the minimum log level")
 	chatBridge := flag.Bool("chat-bridge", lookupEnvOrBool("CHAT_BRIDGE", false), "CHAT_BRIDGE, enable chat bridge")
 	command := flag.String("command", lookupEnvOrString("COMMAND", "mumble-discord"), "COMMAND, command phrase '!mumble-discord help' to control the bridge via text channels")
 	commandMode := flag.String("command-mode", lookupEnvOrString("COMMAND_MODE", "both"), "COMMAND_MODE, [both, mumble, discord, none] determine which side of the bridge will respond to commands")
@@ -65,6 +67,10 @@ func main() {
 	cpuprofile := flag.String("cpuprofile", "", "write cpu profile to `file`")
 
 	flag.Parse()
+
+	// Set global log level based on DEBUG_LEVEL config
+	logger.SetGlobalLevel(*debugLevel)
+
 	log.Printf("app.config %v\n", getConfig(flag.CommandLine))
 
 	if *mumbleAddr == "" {
@@ -106,6 +112,7 @@ func main() {
 	}
 
 	// Optional CPU Profiling
+	var cpuProf *os.File
 	if *cpuprofile != "" {
 		f, err := os.Create(*cpuprofile)
 		if err != nil {
@@ -117,12 +124,24 @@ func main() {
 			}
 			log.Fatal("could not start CPU profile: ", err)
 		}
+		cpuProf = f
 		defer func() {
-			if err := f.Close(); err != nil {
+			pprof.StopCPUProfile()
+			if err := cpuProf.Close(); err != nil {
 				log.Println("could not close CPU profile: ", err)
 			}
 		}()
-		defer pprof.StopCPUProfile()
+	}
+
+	// stopCPUProfileIfActive is a no-op when CPU profiling was not enabled.
+	// Use before any log.Fatalln that would skip the deferred stop+close above.
+	stopCPUProfileIfActive := func() {
+		if cpuProf != nil {
+			pprof.StopCPUProfile()
+			if err := cpuProf.Close(); err != nil {
+				log.Printf("Error closing CPU profile file: %v", err)
+			}
+		}
 	}
 
 	// Buffer Math
@@ -186,18 +205,14 @@ func main() {
 	// Create shared Discord client
 	discordClient, err := bridgelib.NewSharedDiscordClient(*discordToken, nil)
 	if err != nil {
-		if *cpuprofile != "" {
-			pprof.StopCPUProfile()
-		}
-		log.Fatalln("Failed to create Discord client:", err) //nolint:gocritic // exitAfterDefer: StopCPUProfile is called manually before exit
+		stopCPUProfileIfActive()
+		log.Fatalln("Failed to create Discord client:", err) //nolint:gocritic // exitAfterDefer: CPU profile stop/close is called manually
 	}
 
 	// Connect to Discord
 	err = discordClient.Connect()
 	if err != nil {
-		if *cpuprofile != "" {
-			pprof.StopCPUProfile()
-		}
+		stopCPUProfileIfActive()
 		log.Fatalln("Failed to connect to Discord:", err)
 	}
 	defer func() {
@@ -233,9 +248,7 @@ func main() {
 	// Create and start bridge instance
 	bridgeInstance, err := bridgelib.NewBridgeInstance("default", config, discordClient)
 	if err != nil {
-		if *cpuprofile != "" {
-			pprof.StopCPUProfile()
-		}
+		stopCPUProfileIfActive()
 		log.Fatalln("Failed to create bridge instance:", err)
 	}
 
@@ -249,9 +262,7 @@ func main() {
 
 	// Start the bridge
 	if err := bridgeInstance.Start(); err != nil {
-		if *cpuprofile != "" {
-			pprof.StopCPUProfile()
-		}
+		stopCPUProfileIfActive()
 		log.Fatalln("Failed to start bridge:", err)
 	}
 
