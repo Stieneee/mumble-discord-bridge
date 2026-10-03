@@ -30,7 +30,7 @@ RUN go build -tags=netgo \
 RUN go install github.com/google/go-licenses@latest && \
     go-licenses save ./cmd/mumble-discord-bridge --force --save_path="/LICENSES"
 
-FROM ubuntu:24.04
+FROM ubuntu:26.04
 
 WORKDIR /opt/
 RUN apt-get update && \
