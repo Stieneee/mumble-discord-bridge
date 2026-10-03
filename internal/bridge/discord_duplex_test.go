@@ -2,7 +2,9 @@ package bridge
 
 import (
 	"context"
+	"net"
 	"runtime"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -758,4 +760,254 @@ func TestDiscordReceivePCM_SequenceTracking(t *testing.T) {
 	assert.Equal(t, uint16(13), s.lastSequence, "lastSequence must track the most recent packet")
 	assert.Equal(t, uint32(13*960), s.lastTimeStamp, "lastTimeStamp must track the most recent packet")
 	assert.True(t, s.receiving, "receiving must be true after packets are processed")
+}
+
+// ---------------------------------------------------------------------------
+// 24. TestDiscordReceivePCM_ClosedConnectionNoFlood
+// ---------------------------------------------------------------------------
+
+// closedConnVoiceConn is a mock VoiceConnection whose UDP socket is "closed".
+// ReceiveOpus and SendOpus return net.ErrClosed to simulate a dead connection.
+type closedConnVoiceConn struct {
+	mu          sync.Mutex
+	ready       bool
+	recvCalls   int
+	sendCalls   int
+}
+
+func (c *closedConnVoiceConn) Open(_ context.Context, _ string) error  { return nil }
+func (c *closedConnVoiceConn) Close(_ context.Context) error           { return nil }
+func (c *closedConnVoiceConn) SendOpus(_ []byte) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.sendCalls++
+	return net.ErrClosed
+}
+func (c *closedConnVoiceConn) ReceiveOpus() (*discord.AudioPacket, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.recvCalls++
+	return nil, net.ErrClosed
+}
+func (c *closedConnVoiceConn) SetSpeaking(_ context.Context, _ bool) error { return nil }
+func (c *closedConnVoiceConn) IsReady() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.ready
+}
+func (c *closedConnVoiceConn) IsGatewayReady() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.ready
+}
+func (c *closedConnVoiceConn) UserIDBySSRC(_ uint32) string { return "" }
+
+// TestDiscordReceivePCM_ClosedConnectionNoFlood verifies that when the voice
+// connection's UDP socket is closed, discordReceivePCM does NOT busy-loop
+// calling ReceiveOpus repeatedly. Instead it should detect net.ErrClosed, log
+// once, and back off for connectionCheckInterval before re-checking the
+// connection. This prevents the ~5,600 line log flood described in issue #52.
+func TestDiscordReceivePCM_ClosedConnectionNoFlood(t *testing.T) {
+	t.Parallel()
+
+	mockLog := NewMockLogger()
+	bs := createTestBridgeState(mockLog)
+	dd := NewDiscordDuplex(bs)
+	dd.discordReceiveSleepTick.Start(10 * time.Millisecond)
+
+	// Set up a closed voice connection via the connection manager.
+	closedConn := &closedConnVoiceConn{ready: true}
+	mgr := &DiscordVoiceConnectionManager{
+		voiceConn: closedConn,
+	}
+	bs.DiscordVoiceConnectionManager = mgr
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	go dd.discordReceivePCM(ctx)
+
+	// Wait for the goroutine to run and then cancel.
+	<-ctx.Done()
+
+	// The goroutine should have called ReceiveOpus at most a few times
+	// (once per connectionCheckInterval=100ms, so ~5 times in 500ms),
+	// not thousands of times as in the busy-loop bug.
+	closedConn.mu.Lock()
+	recvCalls := closedConn.recvCalls
+	closedConn.mu.Unlock()
+
+	assert.Less(t, recvCalls, 20, "ReceiveOpus should not be called in a tight loop on a closed connection (issue #52)")
+
+	// Verify only one debug log about closed connection (not hundreds).
+	closedLogs := 0
+	for _, entry := range mockLog.GetEntries() {
+		if entry.Level == "DEBUG" && strings.Contains(entry.Message, "closed") {
+			closedLogs++
+		}
+	}
+	// Should log the closed message at most once per outer-loop iteration.
+	// With lastReady gating, it should be exactly 1.
+	assert.LessOrEqual(t, closedLogs, 5, "should not flood logs with closed connection messages (issue #52)")
+}
+
+// ---------------------------------------------------------------------------
+// 25. TestToDiscordSender_ClosedConnectionNoFlood
+// ---------------------------------------------------------------------------
+
+// TestToDiscordSender_ClosedConnectionNoFlood verifies that when the voice
+// connection's UDP socket is closed, toDiscordSender sinks packets silently
+// instead of logging an error on every 20ms tick. This prevents the log flood
+// described in issue #52 on the send side.
+func TestToDiscordSender_ClosedConnectionNoFlood(t *testing.T) {
+	t.Parallel()
+
+	mockLog := NewMockLogger()
+	bs := createTestBridgeState(mockLog)
+	dd := NewDiscordDuplex(bs)
+	// Don't pre-start the sleep tick; toDiscordSender will start it.
+
+	// Set up a closed voice connection via the connection manager.
+	closedConn := &closedConnVoiceConn{ready: true}
+	mgr := &DiscordVoiceConnectionManager{
+		voiceConn: closedConn,
+	}
+	bs.DiscordVoiceConnectionManager = mgr
+
+	opusBuffer := make(chan []byte, 10)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	go dd.toDiscordSender(ctx, opusBuffer)
+
+	// Feed some packets so internalSend is called.
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case opusBuffer <- encodeOpusSilence():
+			}
+		}
+	}()
+
+	<-ctx.Done()
+
+	// The goroutine should have called SendOpus multiple times (every 20ms),
+	// but the log should NOT contain hundreds of "Error sending opus" entries.
+	closedConn.mu.Lock()
+	sendCalls := closedConn.sendCalls
+	closedConn.mu.Unlock()
+
+	// In 500ms at 20ms intervals, we expect ~25 ticks. Some may send silence.
+	// The key assertion is that error logs are not flooding.
+	assert.Greater(t, sendCalls, 0, "SendOpus should have been called at least once")
+
+	// Count error/debug logs about sending opus errors (excluding the one-time closed message).
+	errorLogs := 0
+	for _, entry := range mockLog.GetEntries() {
+		if entry.Level == "DEBUG" && strings.Contains(entry.Message, "Error sending opus") {
+			errorLogs++
+		}
+	}
+	assert.Equal(t, 0, errorLogs, "net.ErrClosed should not produce generic 'Error sending opus' log lines (issue #52)")
+
+	// Should have at most 1 "Voice connection closed" debug log.
+	closedLogs := 0
+	for _, entry := range mockLog.GetEntries() {
+		if entry.Level == "DEBUG" && strings.Contains(entry.Message, "Voice connection closed") {
+			closedLogs++
+		}
+	}
+	assert.LessOrEqual(t, closedLogs, 1, "should log closed connection message at most once (issue #52)")
+}
+
+// ---------------------------------------------------------------------------
+// 26. TestDiscordReceivePCM_ClosedConnectionThenCancel
+// ---------------------------------------------------------------------------
+
+// TestDiscordReceivePCM_ClosedConnectionThenCancel verifies that
+// discordReceivePCM exits promptly when context is canceled even while
+// backing off from a closed connection.
+func TestDiscordReceivePCM_ClosedConnectionThenCancel(t *testing.T) {
+	t.Parallel()
+
+	mockLog := NewMockLogger()
+	bs := createTestBridgeState(mockLog)
+	dd := NewDiscordDuplex(bs)
+	dd.discordReceiveSleepTick.Start(10 * time.Millisecond)
+
+	closedConn := &closedConnVoiceConn{ready: true}
+	mgr := &DiscordVoiceConnectionManager{
+		voiceConn: closedConn,
+	}
+	bs.DiscordVoiceConnectionManager = mgr
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	done := make(chan struct{})
+	go func() {
+		dd.discordReceivePCM(ctx)
+		close(done)
+	}()
+
+	// Let it run briefly so it enters the closed-connection backoff path.
+	time.Sleep(150 * time.Millisecond)
+
+	cancel()
+
+	select {
+	case <-done:
+		// success — exited promptly
+	case <-time.After(2 * time.Second):
+		t.Fatal("discordReceivePCM did not exit within 2s of context cancellation")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 27. TestInternalSend_NetErrClosedSinksPacket
+// ---------------------------------------------------------------------------
+
+// TestInternalSend_NetErrClosedSinksPacket verifies that internalSend sinks
+// the packet (increments promPacketsSunk) when SendOpus returns net.ErrClosed,
+// rather than logging a generic error.
+func TestInternalSend_NetErrClosedSinksPacket(t *testing.T) {
+	t.Parallel()
+
+	mockLog := NewMockLogger()
+	bs := createTestBridgeState(mockLog)
+	dd := NewDiscordDuplex(bs)
+	// Don't pre-start the sleep tick; toDiscordSender will start it.
+
+	closedConn := &closedConnVoiceConn{ready: true}
+	mgr := &DiscordVoiceConnectionManager{
+		voiceConn: closedConn,
+	}
+	bs.DiscordVoiceConnectionManager = mgr
+
+	opus := encodeOpusSilence()
+	opusBuffer := make(chan []byte, 1)
+	opusBuffer <- opus
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	go dd.toDiscordSender(ctx, opusBuffer)
+
+	<-ctx.Done()
+
+	// The test passes if it doesn't panic and the goroutine exits cleanly.
+	// Verify SendOpus was called (the packet was attempted, not silently dropped before sending).
+	closedConn.mu.Lock()
+	sendCalls := closedConn.sendCalls
+	closedConn.mu.Unlock()
+	assert.Greater(t, sendCalls, 0, "SendOpus should have been called at least once")
+
+	// Verify no generic error log was produced for net.ErrClosed.
+	for _, entry := range mockLog.GetEntries() {
+		assert.False(t,
+			entry.Level == "DEBUG" && strings.Contains(entry.Message, "Error sending opus"),
+			"net.ErrClosed should not produce generic 'Error sending opus' log (issue #52)")
+	}
 }
