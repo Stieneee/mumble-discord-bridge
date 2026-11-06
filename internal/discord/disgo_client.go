@@ -48,13 +48,11 @@ func NewDisgoClient(token string) (*DisgoClient, error) {
 		bot.WithCacheConfigOpts(
 			cache.WithCaches(cache.FlagGuilds, cache.FlagVoiceStates, cache.FlagChannels),
 		),
+		// disgo always resumes the voice gateway itself, and falls back to a
+		// fresh voice session if resuming fails. DiscordVoiceConnectionManager
+		// only steps in after its safety timeout.
 		bot.WithVoiceManagerConfigOpts(
 			voice.WithDaveSessionCreateFunc(golibdave.NewSession),
-			voice.WithConnConfigOpts(
-				voice.WithConnGatewayConfigOpts(
-					voice.WithGatewayAutoReconnect(false),
-				),
-			),
 		),
 		bot.WithEventListenerFunc(dc.onReady),
 		bot.WithEventListenerFunc(dc.onGuildAvailable),
@@ -273,7 +271,9 @@ func (dc *DisgoClient) onGuildAvailable(e *events.GuildAvailable) {
 		Name: e.Guild.Name,
 	}
 
-	for _, vs := range e.Guild.VoiceStates {
+	// GuildAvailable no longer carries the gateway voice states; disgo adds
+	// them to the cache before dispatching the event.
+	for vs := range e.Client().Caches.VoiceStates(e.GuildID) {
 		channelID := ""
 		if vs.ChannelID != nil {
 			channelID = vs.ChannelID.String()
