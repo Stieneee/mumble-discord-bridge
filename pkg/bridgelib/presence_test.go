@@ -30,8 +30,14 @@ func TestEmitPresenceEventDispatchesRosters(t *testing.T) {
 	if e.Type != EventPresenceAnnounced {
 		t.Fatalf("type = %v", e.Type)
 	}
-	m, _ := e.Data["mumble_users"].([]string)
-	d, _ := e.Data["discord_users"].([]string)
+	m, ok := e.Data["mumble_users"].([]string)
+	if !ok {
+		t.Fatalf("mumble_users is %T, want []string", e.Data["mumble_users"])
+	}
+	d, ok := e.Data["discord_users"].([]string)
+	if !ok {
+		t.Fatalf("discord_users is %T, want []string", e.Data["discord_users"])
+	}
 	if len(m) != 2 || m[0] != "alice" || len(d) != 1 || d[0] != "Mumble-Bridge" {
 		t.Fatalf("rosters = %v / %v", m, d)
 	}

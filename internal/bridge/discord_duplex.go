@@ -604,7 +604,7 @@ func (dd *DiscordDuplex) fromDiscordMixer(ctx context.Context, toMumble chan<- g
 
 			for j := 0; j < len(internalMixerArr); j++ {
 				for i := 0; i < len(internalMixerArr[j]); i++ {
-					outBuf[i] += (internalMixerArr[j])[i]
+					outBuf[i] += internalMixerArr[j][i]
 				}
 			}
 

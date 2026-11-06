@@ -187,7 +187,9 @@ formatters:
 
   settings:
     gofumpt:
-      extra-rules: true
+      extra:
+        group-params: true
+        clothe-returns: true
 
 issues:
   max-issues-per-linter: 0

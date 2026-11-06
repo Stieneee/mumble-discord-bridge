@@ -21,6 +21,14 @@ const (
 	// Service names
 	serviceDiscord = "discord"
 	serviceMumble  = "mumble"
+
+	// keyMode is the event data and status key that carries the bridge mode
+	keyMode = "mode"
+
+	// BridgeStatus.State values
+	stateStopped  = "stopped"
+	stateRunning  = "running"
+	stateStarting = "starting"
 )
 
 // DiscordProvider is an interface for providing Discord functionality
@@ -268,7 +276,7 @@ func (b *BridgeInstance) Start() error {
 			"discord_cid":    b.config.DiscordCID,
 			"mumble_address": b.config.MumbleAddress,
 			"mumble_port":    b.config.MumblePort,
-			"mode":           b.config.Mode,
+			keyMode:          b.config.Mode,
 		}, nil)
 	}
 
@@ -380,7 +388,7 @@ func (b *BridgeInstance) Start() error {
 	// Emit bridge started event
 	if b.eventDispatcher != nil {
 		b.eventDispatcher.EmitEvent(EventBridgeStarted, map[string]interface{}{
-			"mode": b.config.Mode,
+			keyMode: b.config.Mode,
 		}, nil)
 	}
 
@@ -503,7 +511,7 @@ func (b *BridgeInstance) GetStatus() map[string]interface{} {
 	return map[string]interface{}{
 		"id":            b.ID,
 		"connected":     connected,
-		"mode":          b.State.Mode.String(),
+		keyMode:         b.State.Mode.String(),
 		"mumbleUsers":   len(b.State.MumbleUsers),
 		"discordUsers":  len(b.State.DiscordUsers),
 		"uptime":        uptime,
@@ -545,11 +553,11 @@ func (b *BridgeInstance) GetDetailedStatus() BridgeStatus {
 		// Determine state
 		switch {
 		case b.stopped:
-			status.State = "stopped"
+			status.State = stateStopped
 		case connected:
-			status.State = "running"
+			status.State = stateRunning
 		default:
-			status.State = "starting"
+			status.State = stateStarting
 		}
 
 		// Calculate uptime
@@ -558,9 +566,9 @@ func (b *BridgeInstance) GetDetailedStatus() BridgeStatus {
 		}
 	} else {
 		if b.stopped {
-			status.State = "stopped"
+			status.State = stateStopped
 		} else {
-			status.State = "starting"
+			status.State = stateStarting
 		}
 	}
 
@@ -569,7 +577,7 @@ func (b *BridgeInstance) GetDetailedStatus() BridgeStatus {
 	status.Config["mumble_port"] = b.config.MumblePort
 	status.Config["discord_gid"] = b.config.DiscordGID
 	status.Config["discord_cid"] = b.config.DiscordCID
-	status.Config["mode"] = b.config.Mode
+	status.Config[keyMode] = b.config.Mode
 
 	return status
 }
