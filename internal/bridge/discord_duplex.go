@@ -2,8 +2,10 @@ package bridge
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
+	"net"
 	"sync"
 	"time"
 
@@ -377,6 +379,16 @@ func (dd *DiscordDuplex) discordReceivePCM(ctx context.Context) {
 		case res := <-ch:
 			if res.err != nil {
 				dd.Bridge.Logger.Debug("DISCORD_RECEIVE", fmt.Sprintf("Receive error: %v", res.err))
+
+				// A voice reconnect leaves the socket closed for up to 30s while
+				// the connection still reports ready, so reads fail instantly.
+				if errors.Is(res.err, net.ErrClosed) {
+					select {
+					case <-ctx.Done():
+						return
+					case <-time.After(connectionCheckInterval * time.Millisecond):
+					}
+				}
 
 				continue
 			}
