@@ -16,7 +16,7 @@ install-libdave:
 		git clone https://github.com/disgoorg/godave "$$GODAVE_DIR" && \
 		cd "$$GODAVE_DIR" && \
 		chmod +x scripts/libdave_install.sh && \
-		NON_INTERACTIVE=1 SHELL=/bin/bash ./scripts/libdave_install.sh v1.1.1 && \
+		NON_INTERACTIVE=1 SHELL=/bin/bash ./scripts/libdave_install.sh v1.2.2 && \
 		rm -rf "$$GODAVE_DIR"; \
 	fi
 

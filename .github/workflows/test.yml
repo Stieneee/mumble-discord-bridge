@@ -17,10 +17,10 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@v7
         with:
           go-version-file: "go.mod"
 
@@ -34,7 +34,7 @@ jobs:
           git clone https://github.com/disgoorg/godave /tmp/godave
           cd /tmp/godave
           chmod +x scripts/libdave_install.sh
-          SHELL=/bin/bash ./scripts/libdave_install.sh v1.1.1
+          SHELL=/bin/bash ./scripts/libdave_install.sh v1.2.2
 
       - name: Tidy and download Go modules
         run: go mod tidy
@@ -65,10 +65,10 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@v7
         with:
           go-version-file: "go.mod"
 
@@ -82,7 +82,7 @@ jobs:
           git clone https://github.com/disgoorg/godave /tmp/godave
           cd /tmp/godave
           chmod +x scripts/libdave_install.sh
-          SHELL=/bin/bash ./scripts/libdave_install.sh v1.1.1
+          SHELL=/bin/bash ./scripts/libdave_install.sh v1.2.2
 
       - name: Tidy and download Go modules
         run: go mod tidy
@@ -99,10 +99,10 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@v7
         with:
           go-version-file: "go.mod"
 
@@ -116,7 +116,7 @@ jobs:
           git clone https://github.com/disgoorg/godave /tmp/godave
           cd /tmp/godave
           chmod +x scripts/libdave_install.sh
-          SHELL=/bin/bash ./scripts/libdave_install.sh v1.1.1
+          SHELL=/bin/bash ./scripts/libdave_install.sh v1.2.2
 
       - name: Tidy modules
         run: go mod tidy
@@ -124,5 +124,5 @@ jobs:
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v9
         with:
-          version: v2.8.0
+          version: v2.15.0
           args: --timeout=5m

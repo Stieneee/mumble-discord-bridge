@@ -1,4 +1,4 @@
-FROM golang:1.26.1 AS builder
+FROM golang:1.27.3 AS builder
 
 RUN apt-get update && apt-get install -y \
     cmake g++ pkg-config git unzip \
@@ -8,7 +8,7 @@ RUN apt-get update && apt-get install -y \
 RUN git clone https://github.com/disgoorg/godave /tmp/godave && \
     cd /tmp/godave && \
     chmod +x scripts/libdave_install.sh && \
-    SHELL=/bin/bash ./scripts/libdave_install.sh v1.1.1
+    SHELL=/bin/bash ./scripts/libdave_install.sh v1.2.2
 
 ENV CGO_ENABLED=1
 ENV PKG_CONFIG_PATH=/root/.local/lib/pkgconfig
@@ -30,7 +30,7 @@ RUN go build -tags=netgo \
 RUN go install github.com/google/go-licenses@latest && \
     go-licenses save ./cmd/mumble-discord-bridge --force --save_path="/LICENSES"
 
-FROM ubuntu:24.04
+FROM ubuntu:26.04
 
 WORKDIR /opt/
 RUN apt-get update && \

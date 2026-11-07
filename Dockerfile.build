@@ -1,7 +1,7 @@
 # Dockerfile for building binaries - used by release workflow
 # Builds the binary natively for the target platform
 
-FROM golang:1.26.1 AS builder
+FROM golang:1.27.3 AS builder
 
 ARG VERSION=dev
 ARG COMMIT=unknown
@@ -16,7 +16,7 @@ RUN apt update && apt install -y libopus-dev cmake g++ unzip
 RUN git clone https://github.com/disgoorg/godave /tmp/godave && \
     cd /tmp/godave && \
     chmod +x scripts/libdave_install.sh && \
-    SHELL=/bin/bash ./scripts/libdave_install.sh v1.1.1
+    SHELL=/bin/bash ./scripts/libdave_install.sh v1.2.2
 
 ENV PKG_CONFIG_PATH=/root/.local/lib/pkgconfig
 
